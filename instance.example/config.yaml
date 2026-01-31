@@ -1,0 +1,19 @@
+# Kōan Configuration
+
+# Paths
+project_path: "/path/to/anantys-back"  # Target project to analyze
+pilot_repo: "/path/to/koan"            # This repo
+
+# Budget & Scheduling
+max_runs_per_day: 20
+interval_seconds: 300  # 5 minutes between runs
+
+# Telegram
+telegram:
+  bot_token: "YOUR_BOT_TOKEN"  # From @BotFather
+  chat_id: "YOUR_CHAT_ID"     # From first message to bot
+
+# Usage thresholds
+budget:
+  warn_at_percent: 70   # Send warning via Telegram
+  stop_at_percent: 85   # Stop running
