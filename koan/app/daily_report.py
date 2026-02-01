@@ -64,23 +64,8 @@ def should_send_report() -> Optional[str]:
 
 def _read_journal(target_date: date) -> str:
     """Read all journal entries for a given date across all project subdirs."""
-    journal_dir = INSTANCE_DIR / "journal" / target_date.strftime("%Y-%m-%d")
-    if not journal_dir.exists():
-        return ""
-
-    parts = []
-    # Check for flat file (legacy)
-    flat = journal_dir.parent / f"{target_date.strftime('%Y-%m-%d')}.md"
-    if flat.is_file():
-        parts.append(flat.read_text())
-
-    # Check nested per-project files
-    if journal_dir.is_dir():
-        for f in sorted(journal_dir.iterdir()):
-            if f.suffix == ".md":
-                parts.append(f"[{f.stem}]\n{f.read_text()}")
-
-    return "\n\n---\n\n".join(parts)
+    from app.utils import read_all_journals
+    return read_all_journals(INSTANCE_DIR, target_date)
 
 
 def _parse_completed_missions() -> List[str]:

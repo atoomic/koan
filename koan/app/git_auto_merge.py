@@ -223,18 +223,10 @@ def write_merge_success_to_journal(instance_dir: str, project_name: str, branch:
         base_branch: Target branch merged into
         strategy: Merge strategy used
     """
-    journal_dir = Path(instance_dir) / "journal" / datetime.now().strftime("%Y-%m-%d")
-    journal_file = journal_dir / f"{project_name}.md"
-    journal_dir.mkdir(parents=True, exist_ok=True)
-
+    from app.utils import append_to_journal
     timestamp = datetime.now().strftime("%H:%M")
     entry = f"\n## Auto-Merge — {timestamp}\n\n✓ Merged `{branch}` into `{base_branch}` ({strategy})\n"
-
-    # Append to journal with file locking
-    with open(journal_file, "a", encoding="utf-8") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.write(entry)
-        fcntl.flock(f, fcntl.LOCK_UN)
+    append_to_journal(Path(instance_dir), project_name, entry)
 
 
 def write_merge_failure_to_journal(instance_dir: str, project_name: str, branch: str, error: str):
@@ -246,18 +238,10 @@ def write_merge_failure_to_journal(instance_dir: str, project_name: str, branch:
         branch: Source branch that failed to merge
         error: Error message
     """
-    journal_dir = Path(instance_dir) / "journal" / datetime.now().strftime("%Y-%m-%d")
-    journal_file = journal_dir / f"{project_name}.md"
-    journal_dir.mkdir(parents=True, exist_ok=True)
-
+    from app.utils import append_to_journal
     timestamp = datetime.now().strftime("%H:%M")
     entry = f"\n## Auto-Merge Failed — {timestamp}\n\n✗ Failed to merge `{branch}`: {error}\nManual intervention required.\n"
-
-    # Append to journal with file locking
-    with open(journal_file, "a", encoding="utf-8") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.write(entry)
-        fcntl.flock(f, fcntl.LOCK_UN)
+    append_to_journal(Path(instance_dir), project_name, entry)
 
 
 def auto_merge_branch(instance_dir: str, project_name: str, project_path: str, branch: str) -> int:

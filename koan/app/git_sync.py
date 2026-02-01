@@ -123,16 +123,9 @@ def build_sync_report(project_path: str) -> str:
 
 def write_sync_to_journal(instance_dir: str, project_name: str, report: str):
     """Append git sync report to today's journal."""
-    journal_dir = Path(instance_dir) / "journal" / date.today().strftime("%Y-%m-%d")
-    journal_dir.mkdir(parents=True, exist_ok=True)
-    journal_file = journal_dir / f"{project_name}.md"
-
+    from app.utils import append_to_journal
     entry = f"\n## Git Sync — {datetime.now().strftime('%H:%M')}\n\n{report}\n"
-
-    with open(journal_file, "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.write(entry)
-        fcntl.flock(f, fcntl.LOCK_UN)
+    append_to_journal(Path(instance_dir), project_name, entry)
 
 
 if __name__ == "__main__":

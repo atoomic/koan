@@ -66,14 +66,10 @@ def summarize_section(section: str, max_chars: int = 400) -> str:
 
 def get_mission_summary(instance_dir: str, project_name: str, max_chars: int = 400) -> str:
     """Get a summary of the latest journal entry for a project."""
+    from app.utils import get_journal_file
     instance = Path(instance_dir)
-    today = date.today().strftime("%Y-%m-%d")
 
-    # Try nested journal structure first
-    journal_file = instance / "journal" / today / f"{project_name}.md"
-    if not journal_file.exists():
-        # Try flat structure
-        journal_file = instance / "journal" / f"{today}.md"
+    journal_file = get_journal_file(instance, date.today(), project_name)
     if not journal_file.exists():
         return ""
 

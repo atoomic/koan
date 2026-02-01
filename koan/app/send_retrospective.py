@@ -17,31 +17,10 @@ from pathlib import Path
 def get_todays_journal(instance_dir: Path, project_name: str) -> Path:
     """Find today's journal file for the given project.
 
-    Supports both nested (journal/YYYY-MM-DD/project.md) and
-    flat (journal/YYYY-MM-DD.md) structures.
-
-    Args:
-        instance_dir: Path to instance directory
-        project_name: Name of the project
-
-    Returns:
-        Path to journal file (may not exist)
+    Delegates to utils.get_journal_file for the actual path resolution.
     """
-    today = date.today().strftime("%Y-%m-%d")
-    journal_dir = instance_dir / "journal"
-
-    # Try nested structure first
-    nested_journal = journal_dir / today / f"{project_name}.md"
-    if nested_journal.exists():
-        return nested_journal
-
-    # Try flat structure
-    flat_journal = journal_dir / f"{today}.md"
-    if flat_journal.exists():
-        return flat_journal
-
-    # Return nested path as default (even if doesn't exist)
-    return nested_journal
+    from app.utils import get_journal_file
+    return get_journal_file(instance_dir, date.today(), project_name)
 
 
 def extract_session_summary(journal_path: Path, max_chars: int = 800) -> str:

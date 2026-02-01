@@ -207,7 +207,7 @@ def handle_resume():
     quota_file = KOAN_ROOT / ".koan-quota-reset"
 
     if pause_file.exists():
-        pause_file.unlink()
+        pause_file.unlink(missing_ok=True)
         format_and_send("Kōan unpaused. Missions will resume on the next loop iteration.")
         return
 
@@ -228,7 +228,7 @@ def handle_resume():
         likely_reset = hours_since_pause >= 2
 
         if likely_reset:
-            quota_file.unlink()  # Remove the quota marker
+            quota_file.unlink(missing_ok=True)  # Remove the quota marker
             format_and_send(f"Quota likely reset ({reset_info}, paused {hours_since_pause:.1f}h ago). To resume, run: make run. The run loop will start fresh.")
         else:
             format_and_send(f"Quota probably not reset yet ({reset_info}). Paused {hours_since_pause:.1f}h ago. Check back later.")
@@ -280,16 +280,8 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
     journal_context = ""
     if not lite:
         # Load today's journal for recent context
-        today = f"{date.today():%Y-%m-%d}"
-        journal_dir = INSTANCE_DIR / "journal" / today
-        if journal_dir.is_dir():
-            parts = []
-            for f in sorted(journal_dir.glob("*.md")):
-                parts.append(f.read_text())
-            journal_content = "\n---\n".join(parts)
-        else:
-            journal_path = INSTANCE_DIR / "journal" / f"{today}.md"
-            journal_content = journal_path.read_text() if journal_path.exists() else ""
+        from app.utils import read_all_journals
+        journal_content = read_all_journals(INSTANCE_DIR, date.today())
         if journal_content:
             if len(journal_content) > 2000:
                 journal_context = "...\n" + journal_content[-2000:]

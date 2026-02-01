@@ -153,6 +153,91 @@ class TestInsertPendingMission:
 
 
 
+class TestGetJournalFile:
+    def test_nested_exists(self, tmp_path):
+        from app.utils import get_journal_file
+        nested = tmp_path / "journal" / "2026-02-01" / "koan.md"
+        nested.parent.mkdir(parents=True)
+        nested.write_text("nested content")
+        result = get_journal_file(tmp_path, "2026-02-01", "koan")
+        assert result == nested
+
+    def test_flat_fallback(self, tmp_path):
+        from app.utils import get_journal_file
+        flat = tmp_path / "journal" / "2026-02-01.md"
+        flat.parent.mkdir(parents=True)
+        flat.write_text("flat content")
+        result = get_journal_file(tmp_path, "2026-02-01", "koan")
+        assert result == flat
+
+    def test_default_nested(self, tmp_path):
+        from app.utils import get_journal_file
+        (tmp_path / "journal").mkdir()
+        result = get_journal_file(tmp_path, "2026-02-01", "koan")
+        assert str(result).endswith("journal/2026-02-01/koan.md")
+        assert not result.exists()
+
+    def test_accepts_date_object(self, tmp_path):
+        from datetime import date
+        from app.utils import get_journal_file
+        (tmp_path / "journal").mkdir()
+        result = get_journal_file(tmp_path, date(2026, 2, 1), "koan")
+        assert "2026-02-01" in str(result)
+
+
+class TestReadAllJournals:
+    def test_nested_files(self, tmp_path):
+        from app.utils import read_all_journals
+        d = tmp_path / "journal" / "2026-02-01"
+        d.mkdir(parents=True)
+        (d / "koan.md").write_text("koan journal")
+        (d / "other.md").write_text("other journal")
+        result = read_all_journals(tmp_path, "2026-02-01")
+        assert "[koan]" in result
+        assert "[other]" in result
+
+    def test_flat_file(self, tmp_path):
+        from app.utils import read_all_journals
+        (tmp_path / "journal").mkdir()
+        (tmp_path / "journal" / "2026-02-01.md").write_text("flat journal")
+        result = read_all_journals(tmp_path, "2026-02-01")
+        assert "flat journal" in result
+
+    def test_empty_dir(self, tmp_path):
+        from app.utils import read_all_journals
+        (tmp_path / "journal").mkdir()
+        result = read_all_journals(tmp_path, "2026-02-01")
+        assert result == ""
+
+    def test_accepts_date_object(self, tmp_path):
+        from datetime import date
+        from app.utils import read_all_journals
+        d = tmp_path / "journal" / "2026-02-01"
+        d.mkdir(parents=True)
+        (d / "koan.md").write_text("content")
+        result = read_all_journals(tmp_path, date(2026, 2, 1))
+        assert "content" in result
+
+
+class TestAppendToJournal:
+    def test_creates_and_appends(self, tmp_path):
+        from app.utils import append_to_journal
+        append_to_journal(tmp_path, "koan", "first entry\n")
+        append_to_journal(tmp_path, "koan", "second entry\n")
+        # Find the journal file (date-dependent)
+        journal_dirs = list((tmp_path / "journal").iterdir())
+        assert len(journal_dirs) == 1
+        journal_file = journal_dirs[0] / "koan.md"
+        content = journal_file.read_text()
+        assert "first entry" in content
+        assert "second entry" in content
+
+    def test_creates_directory(self, tmp_path):
+        from app.utils import append_to_journal
+        append_to_journal(tmp_path, "myproject", "entry\n")
+        assert (tmp_path / "journal").is_dir()
+
+
 class TestAtomicWrite:
     def test_writes_content(self, tmp_path):
         from app.utils import atomic_write

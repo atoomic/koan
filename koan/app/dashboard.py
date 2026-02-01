@@ -224,16 +224,8 @@ def chat_send():
 
         # Load today's journal
         journal_context = ""
-        today = f"{date.today():%Y-%m-%d}"
-        journal_dir = JOURNAL_DIR / today
-        if journal_dir.is_dir():
-            parts = []
-            for f in sorted(journal_dir.glob("*.md")):
-                parts.append(f.read_text())
-            journal_content = "\n---\n".join(parts)
-        else:
-            journal_path = JOURNAL_DIR / f"{today}.md"
-            journal_content = journal_path.read_text() if journal_path.exists() else ""
+        from app.utils import read_all_journals
+        journal_content = read_all_journals(INSTANCE_DIR, date.today())
         if journal_content:
             journal_context = journal_content[-2000:] if len(journal_content) > 2000 else journal_content
 

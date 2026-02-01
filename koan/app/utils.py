@@ -33,6 +33,94 @@ _MISSIONS_DEFAULT = "# Missions\n\n## En attente\n\n## En cours\n\n## Terminées
 _MISSIONS_LOCK = threading.Lock()
 
 
+def get_journal_file(instance_dir: Path, target_date, project_name: str) -> Path:
+    """Find journal file for a project on a given date.
+
+    Supports both nested (journal/YYYY-MM-DD/project.md) and
+    flat (journal/YYYY-MM-DD.md) structures. Returns nested path as default.
+
+    Args:
+        instance_dir: Path to instance directory
+        target_date: date object or string "YYYY-MM-DD"
+        project_name: Project name (used for nested structure)
+
+    Returns:
+        Path to journal file (may not exist)
+    """
+    if hasattr(target_date, 'strftime'):
+        date_str = target_date.strftime("%Y-%m-%d")
+    else:
+        date_str = str(target_date)
+
+    journal_dir = instance_dir / "journal"
+    nested = journal_dir / date_str / f"{project_name}.md"
+    if nested.exists():
+        return nested
+
+    flat = journal_dir / f"{date_str}.md"
+    if flat.exists():
+        return flat
+
+    return nested
+
+
+def read_all_journals(instance_dir: Path, target_date) -> str:
+    """Read all journal entries for a date across all project subdirs.
+
+    Combines flat (legacy) and nested per-project files.
+
+    Args:
+        instance_dir: Path to instance directory
+        target_date: date object or string "YYYY-MM-DD"
+
+    Returns:
+        Combined journal content
+    """
+    if hasattr(target_date, 'strftime'):
+        date_str = target_date.strftime("%Y-%m-%d")
+    else:
+        date_str = str(target_date)
+
+    journal_base = instance_dir / "journal"
+    journal_dir = journal_base / date_str
+    parts = []
+
+    # Check for flat file (legacy)
+    flat = journal_base / f"{date_str}.md"
+    if flat.is_file():
+        parts.append(flat.read_text())
+
+    # Check nested per-project files
+    if journal_dir.is_dir():
+        for f in sorted(journal_dir.iterdir()):
+            if f.suffix == ".md":
+                parts.append(f"[{f.stem}]\n{f.read_text()}")
+
+    return "\n\n---\n\n".join(parts)
+
+
+def append_to_journal(instance_dir: Path, project_name: str, content: str):
+    """Append content to today's journal file for a project.
+
+    Creates the directory structure if needed. Uses file locking.
+
+    Args:
+        instance_dir: Path to instance directory
+        project_name: Project name
+        content: Content to append
+    """
+    from datetime import datetime as _dt
+    date_str = _dt.now().strftime("%Y-%m-%d")
+    journal_dir = instance_dir / "journal" / date_str
+    journal_dir.mkdir(parents=True, exist_ok=True)
+    journal_file = journal_dir / f"{project_name}.md"
+
+    with open(journal_file, "a", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.write(content)
+        fcntl.flock(f, fcntl.LOCK_UN)
+
+
 def load_dotenv():
     """Load .env file from the project root, stripping quotes from values.
 
