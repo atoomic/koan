@@ -50,23 +50,60 @@ def load_human_prefs(instance_dir: Path) -> str:
     return ""
 
 
-def format_for_telegram(raw_content: str, soul: str, prefs: str) -> str:
+def load_memory_context(instance_dir: Path, project_name: str = "") -> str:
+    """Load recent memory context (summary + learnings) for richer formatting.
+
+    Args:
+        instance_dir: Path to instance directory
+        project_name: Optional project name for scoped learnings
+
+    Returns:
+        Memory context string or empty string
+    """
+    parts = []
+
+    # Recent summary (last 5 lines)
+    summary_file = instance_dir / "memory" / "summary.md"
+    if summary_file.exists():
+        lines = summary_file.read_text().strip().splitlines()
+        recent = [l for l in lines if l.strip()][-5:]
+        if recent:
+            parts.append("Recent sessions:\n" + "\n".join(recent))
+
+    # Project-specific learnings (last 10 lines)
+    if project_name:
+        learnings_file = instance_dir / "memory" / "projects" / project_name / "learnings.md"
+        if learnings_file.exists():
+            content = learnings_file.read_text().strip()
+            lines = content.splitlines()
+            recent = [l for l in lines if l.strip()][-10:]
+            if recent:
+                parts.append("Project learnings:\n" + "\n".join(recent))
+
+    return "\n\n".join(parts)
+
+
+def format_for_telegram(raw_content: str, soul: str, prefs: str,
+                        memory_context: str = "") -> str:
     """Format raw content via Claude for Telegram.
 
     Args:
         raw_content: Raw message text (journal dump, retrospective, etc.)
         soul: Kōan's identity from soul.md
         prefs: Human preferences context
+        memory_context: Recent memory (summary + learnings) for richer context
 
     Returns:
         Formatted message (French, plain text, conversational)
     """
     # Build formatting prompt
+    memory_block = f"\nRecent memory context:\n{memory_context}" if memory_context else ""
     prompt = f"""You are Kōan. Read your identity:
 
 {soul}
 
 {f"Human preferences: {prefs}" if prefs else ""}
+{memory_block}
 
 Task: Format this message for Telegram (sent to Alexis via the outbox).
 
@@ -145,7 +182,7 @@ def main():
         sys.exit(1)
 
     instance_dir = Path(sys.argv[1])
-    # project_name = sys.argv[2] if len(sys.argv) > 2 else "unknown"
+    project_name = sys.argv[2] if len(sys.argv) > 2 else ""
 
     if not instance_dir.exists():
         print(f"[format_outbox] Instance directory not found: {instance_dir}", file=sys.stderr)
@@ -160,9 +197,10 @@ def main():
     # Load context
     soul = load_soul(instance_dir)
     prefs = load_human_prefs(instance_dir)
+    memory = load_memory_context(instance_dir, project_name)
 
     # Format via Claude
-    formatted = format_for_telegram(raw_message, soul, prefs)
+    formatted = format_for_telegram(raw_message, soul, prefs, memory)
 
     # Output to stdout (will be captured by run.sh and appended to outbox)
     print(formatted)

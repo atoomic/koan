@@ -126,7 +126,7 @@ class TestParseProject:
 # ---------------------------------------------------------------------------
 
 class TestHandleMission:
-    @patch("app.awake.send_telegram")
+    @patch("app.awake.format_and_send")
     @patch("app.awake.MISSIONS_FILE")
     @patch("app.awake.INSTANCE_DIR")
     def test_mission_appended_to_pending(self, mock_inst, mock_file, mock_send, tmp_path):
@@ -143,7 +143,7 @@ class TestHandleMission:
         assert "- audit security" in content
         mock_send.assert_called_once()
 
-    @patch("app.awake.send_telegram")
+    @patch("app.awake.format_and_send")
     def test_mission_with_project_tag(self, mock_send, tmp_path):
         missions_file = tmp_path / "missions.md"
         missions_file.write_text(

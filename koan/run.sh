@@ -70,7 +70,7 @@ PYTHON="python3"
 export PYTHONPATH="$KOAN_ROOT/koan"
 
 notify() {
-  "$PYTHON" "$NOTIFY" "$@" 2>/dev/null || true
+  "$PYTHON" "$NOTIFY" --format "$@" 2>/dev/null || true
 }
 
 # Temp file for Claude output (set early so trap can clean it)
@@ -335,13 +335,10 @@ Koan paused after $count runs. Send /resume via Telegram when quota resets to ch
       notify "Run $RUN_NUM/$MAX_RUNS — Autonomous run completed"
     fi
 
-    # Extract journal summary, format via Claude, and send via outbox
+    # Extract journal summary and append raw to outbox
+    # (formatting via Claude happens at flush time in awake.py)
     SUMMARY_TEXT=$("$PYTHON" "$MISSION_SUMMARY" "$INSTANCE" "$PROJECT_NAME" 2>/dev/null || echo "")
     if [ -n "$SUMMARY_TEXT" ]; then
-      # Format through Claude for conversational, French, plain text output
-      FORMAT_OUTBOX="$APP_DIR/format_outbox.py"
-      FORMATTED_TEXT=$(echo "$SUMMARY_TEXT" | "$PYTHON" "$FORMAT_OUTBOX" "$INSTANCE" "$PROJECT_NAME" 2>/dev/null || echo "$SUMMARY_TEXT")
-
       # Locked append to outbox (avoid race with awake.py)
       "$PYTHON" -c "
 import fcntl, sys
@@ -349,7 +346,7 @@ with open('$INSTANCE/outbox.md', 'a') as f:
     fcntl.flock(f, fcntl.LOCK_EX)
     f.write(sys.stdin.read())
     fcntl.flock(f, fcntl.LOCK_UN)
-" <<< "$FORMATTED_TEXT"
+" <<< "$SUMMARY_TEXT"
     fi
 
     # Auto-merge logic (if on koan/* branch)

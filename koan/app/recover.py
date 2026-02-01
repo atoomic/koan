@@ -20,7 +20,7 @@ import re
 import sys
 from pathlib import Path
 
-from app.notify import send_telegram
+from app.notify import format_and_send
 
 
 def recover_missions(instance_dir: str) -> int:
@@ -137,8 +137,8 @@ if __name__ == "__main__":
     count = recover_missions(instance_dir)
 
     if count > 0:
-        msg = f"🔄 Restart — {count} mission(s) recovered from interrupted run, moved back to Pending."
-        send_telegram(msg)
+        msg = f"Restart — {count} mission(s) recovered from interrupted run, moved back to Pending."
+        format_and_send(msg)
         print(f"[recover] {count} mission(s) moved back to Pending")
     else:
         print("[recover] No stale missions found")

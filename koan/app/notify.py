@@ -15,6 +15,7 @@ Usage from Python:
 
 import os
 import sys
+from pathlib import Path
 
 import requests
 
@@ -51,10 +52,67 @@ def send_telegram(text: str) -> bool:
     return ok
 
 
+def format_and_send(raw_message: str, instance_dir: str = None,
+                     project_name: str = "") -> bool:
+    """Format a message through Claude with Kōan's personality, then send to Telegram.
+
+    Every message sent to Telegram should go through this function to ensure
+    consistent personality, language (French), and readability on mobile.
+
+    Args:
+        raw_message: The raw/technical message to format
+        instance_dir: Path to instance directory (auto-detected from KOAN_ROOT if None)
+        project_name: Optional project name for scoped memory context
+
+    Returns:
+        True if message was sent successfully
+    """
+    from app.format_outbox import (
+        format_for_telegram, load_soul, load_human_prefs,
+        load_memory_context, fallback_format
+    )
+
+    if not instance_dir:
+        load_dotenv()
+        koan_root = os.environ.get("KOAN_ROOT", "")
+        if koan_root:
+            instance_dir = str(Path(koan_root) / "instance")
+        else:
+            # Can't format without instance dir — send raw with basic cleanup
+            return send_telegram(fallback_format(raw_message))
+
+    instance_path = Path(instance_dir)
+    try:
+        soul = load_soul(instance_path)
+        prefs = load_human_prefs(instance_path)
+        memory = load_memory_context(instance_path, project_name)
+        formatted = format_for_telegram(raw_message, soul, prefs, memory)
+        return send_telegram(formatted)
+    except Exception as e:
+        print(f"[notify] Format error, sending fallback: {e}", file=sys.stderr)
+        return send_telegram(fallback_format(raw_message))
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <message>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} [--format] <message>", file=sys.stderr)
+        print(f"  --format: Format through Claude before sending", file=sys.stderr)
         sys.exit(1)
-    message = " ".join(sys.argv[1:])
-    success = send_telegram(message)
+
+    args = sys.argv[1:]
+    use_format = False
+    if args[0] == "--format":
+        use_format = True
+        args = args[1:]
+
+    if not args:
+        print(f"Usage: {sys.argv[0]} [--format] <message>", file=sys.stderr)
+        sys.exit(1)
+
+    message = " ".join(args)
+
+    if use_format:
+        success = format_and_send(message)
+    else:
+        success = send_telegram(message)
     sys.exit(0 if success else 1)

@@ -23,8 +23,9 @@ from typing import Optional, Tuple, List, Dict
 
 import requests
 
+from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
 from app.health_check import write_heartbeat
-from app.notify import send_telegram
+from app.notify import send_telegram, format_and_send
 from app.utils import (
     load_dotenv,
     parse_project as _parse_project,
@@ -131,12 +132,12 @@ def handle_command(text: str):
 
     if cmd == "/stop":
         (KOAN_ROOT / ".koan-stop").write_text("STOP")
-        send_telegram("Stop requested. Current mission will complete, then Kōan will stop.")
+        format_and_send("Stop requested. Current mission will complete, then Kōan will stop.")
         return
 
     if cmd == "/status":
         status = _build_status()
-        send_telegram(status)
+        format_and_send(status)
         return
 
     if cmd == "/resume":
@@ -192,7 +193,7 @@ def handle_resume():
     quota_file = KOAN_ROOT / ".koan-quota-reset"
 
     if not quota_file.exists():
-        send_telegram("ℹ️ No quota pause detected. Kōan is either running or was stopped normally.\n\nUse /status to check current state.")
+        format_and_send("No quota pause detected. Kōan is either running or was stopped normally. Use /status to check current state.")
         return
 
     try:
@@ -209,12 +210,12 @@ def handle_resume():
 
         if likely_reset:
             quota_file.unlink()  # Remove the quota marker
-            send_telegram(f"✅ Quota likely reset ({reset_info}, paused {hours_since_pause:.1f}h ago)\n\nTo resume, run: make run\n\nThe run loop will start fresh. Check claude.ai/settings to verify your quota before starting.")
+            format_and_send(f"Quota likely reset ({reset_info}, paused {hours_since_pause:.1f}h ago). To resume, run: make run. The run loop will start fresh.")
         else:
-            send_telegram(f"⏳ Quota probably not reset yet ({reset_info})\n\nPaused {hours_since_pause:.1f}h ago. Check back later or visit claude.ai/settings to verify your quota status.")
+            format_and_send(f"Quota probably not reset yet ({reset_info}). Paused {hours_since_pause:.1f}h ago. Check back later.")
     except Exception as e:
         print(f"[awake] Error checking quota reset: {e}")
-        send_telegram(f"⚠️ Error checking quota status. Try /status or check manually.")
+        format_and_send("Error checking quota status. Try /status or check manually.")
 
 
 def handle_mission(text: str):
@@ -242,7 +243,7 @@ def handle_mission(text: str):
     if project:
         ack_msg += f" (project: {project})"
     ack_msg += f":\n\n{mission_text[:500]}"
-    send_telegram(ack_msg)
+    format_and_send(ack_msg)
     print(f"[awake] Mission queued: [{project or 'default'}] {mission_text[:60]}")
 
 
@@ -330,21 +331,26 @@ def handle_chat(text: str):
         elif result.returncode != 0:
             print(f"[awake] Claude error: {result.stderr[:200]}")
             error_msg = "Hmm, I couldn't formulate a response. Try again?"
-            send_telegram(error_msg)
+            format_and_send(error_msg)
             save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", error_msg)
         else:
             print("[awake] Empty response from Claude.")
     except subprocess.TimeoutExpired:
         print(f"[awake] Claude timed out ({CHAT_TIMEOUT}s).")
         timeout_msg = f"Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
-        send_telegram(timeout_msg)
+        format_and_send(timeout_msg)
         save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
     except Exception as e:
         print(f"[awake] Claude error: {e}")
 
 
 def flush_outbox():
-    """Relay messages from the run loop outbox. Uses file locking for concurrency."""
+    """Relay messages from the run loop outbox. Uses file locking for concurrency.
+
+    ALL outbox messages are formatted via Claude before sending to Telegram.
+    This ensures consistent personality, French language, and conversational tone
+    regardless of the message source (Claude session, run.sh, retrospective).
+    """
     if not OUTBOX_FILE.exists():
         return
     try:
@@ -352,12 +358,14 @@ def flush_outbox():
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             content = f.read().strip()
             if content:
-                if send_telegram(content):
+                # Format through Claude before sending
+                formatted = _format_outbox_message(content)
+                if send_telegram(formatted):
                     f.seek(0)
                     f.truncate()
                     # Show preview of sent message (first 150 chars)
-                    preview = content[:150].replace("\n", " ")
-                    if len(content) > 150:
+                    preview = formatted[:150].replace("\n", " ")
+                    if len(formatted) > 150:
                         preview += "..."
                     print(f"[awake] Outbox flushed: {preview}")
                 else:
@@ -368,6 +376,25 @@ def flush_outbox():
         pass
     except Exception as e:
         print(f"[awake] Outbox error: {e}")
+
+
+def _format_outbox_message(raw_content: str) -> str:
+    """Format outbox content via Claude with full personality context.
+
+    Args:
+        raw_content: Raw message text from outbox.md
+
+    Returns:
+        Formatted message ready for Telegram
+    """
+    try:
+        soul = load_soul(INSTANCE_DIR)
+        prefs = load_human_prefs(INSTANCE_DIR)
+        memory = load_memory_context(INSTANCE_DIR)
+        return format_for_telegram(raw_content, soul, prefs, memory)
+    except Exception as e:
+        print(f"[awake] Format error, sending raw: {e}")
+        return raw_content
 
 
 # ---------------------------------------------------------------------------

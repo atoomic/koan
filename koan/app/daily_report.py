@@ -19,7 +19,7 @@ from datetime import date, timedelta, datetime
 from pathlib import Path
 from typing import List, Optional
 
-from app.notify import send_telegram
+from app.notify import format_and_send
 
 
 from app.utils import load_dotenv
@@ -208,7 +208,7 @@ def send_daily_report(report_type: str = None) -> bool:
         return False
 
     report = generate_report(report_type)
-    success = send_telegram(report)
+    success = format_and_send(report)
 
     if success:
         mark_report_sent()
@@ -230,7 +230,7 @@ if __name__ == "__main__":
         report = generate_report(forced_type)
         print(report)
         print()
-        success = send_telegram(report)
+        success = format_and_send(report)
         if success:
             mark_report_sent()
         sys.exit(0 if success else 1)

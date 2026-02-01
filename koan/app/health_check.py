@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from app.notify import send_telegram
+from app.notify import format_and_send
 
 
 HEARTBEAT_FILENAME = ".koan-heartbeat"
@@ -60,12 +60,12 @@ def check_and_alert(koan_root: str, max_age: int = DEFAULT_MAX_AGE) -> bool:
     try:
         ts = float(path.read_text().strip())
         age_minutes = (time.time() - ts) / 60
-        send_telegram(
+        format_and_send(
             f"Telegram bridge (awake.py) appears down — "
             f"last heartbeat {age_minutes:.0f} min ago."
         )
     except (ValueError, OSError):
-        send_telegram("Telegram bridge (awake.py) appears down — heartbeat file unreadable.")
+        format_and_send("Telegram bridge (awake.py) appears down — heartbeat file unreadable.")
 
     return False
 

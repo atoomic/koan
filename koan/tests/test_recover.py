@@ -203,7 +203,7 @@ class TestRecoverMissions:
 class TestRecoverCLI:
     """Test the __main__ CLI behavior."""
 
-    @patch("app.recover.send_telegram")
+    @patch("app.recover.format_and_send")
     def test_cli_with_recovery(self, mock_send, instance_dir, capsys):
         """CLI prints count and sends Telegram when missions recovered."""
         missions = instance_dir / "missions.md"
@@ -216,8 +216,8 @@ class TestRecoverCLI:
             # Can't easily test sys.exit, so just call the main block logic
             count = recover_missions(str(instance_dir))
             if count > 0:
-                recover.send_telegram(
-                    f"🔄 Restart — {count} mission(s) recovered from interrupted run, moved back to Pending."
+                recover.format_and_send(
+                    f"Restart — {count} mission(s) recovered from interrupted run, moved back to Pending."
                 )
 
         mock_send.assert_called_once()

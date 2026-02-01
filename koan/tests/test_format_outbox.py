@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 from app.format_outbox import (
     load_soul,
     load_human_prefs,
+    load_memory_context,
     format_for_telegram,
     fallback_format,
 )
@@ -122,3 +123,62 @@ class TestFormatForTelegram:
         call_args = mock_run.call_args[0][0]
         prompt = call_args[2]
         assert "Human preferences:" not in prompt
+
+    @patch("app.format_outbox.subprocess.run")
+    def test_prompt_includes_memory_context(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        format_for_telegram("content", "soul", "prefs", memory_context="Session 61: tests")
+        call_args = mock_run.call_args[0][0]
+        prompt = call_args[2]
+        assert "Session 61: tests" in prompt
+        assert "Recent memory context" in prompt
+
+    @patch("app.format_outbox.subprocess.run")
+    def test_prompt_omits_memory_when_empty(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        format_for_telegram("content", "soul", "prefs", memory_context="")
+        call_args = mock_run.call_args[0][0]
+        prompt = call_args[2]
+        assert "Recent memory context" not in prompt
+
+
+class TestLoadMemoryContext:
+    def test_returns_empty_when_no_files(self, tmp_path):
+        result = load_memory_context(tmp_path)
+        assert result == ""
+
+    def test_loads_summary_last_lines(self, instance_dir):
+        summary_dir = instance_dir / "memory"
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        (summary_dir / "summary.md").write_text(
+            "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7"
+        )
+        result = load_memory_context(instance_dir)
+        assert "Line 7" in result
+        assert "Line 3" in result
+        assert "Line 2" not in result
+
+    def test_loads_project_learnings(self, instance_dir):
+        learnings_dir = instance_dir / "memory" / "projects" / "koan"
+        learnings_dir.mkdir(parents=True, exist_ok=True)
+        (learnings_dir / "learnings.md").write_text("## Architecture\n- KOAN_ROOT is env var")
+        result = load_memory_context(instance_dir, "koan")
+        assert "KOAN_ROOT" in result
+
+    def test_no_learnings_without_project_name(self, instance_dir):
+        learnings_dir = instance_dir / "memory" / "projects" / "koan"
+        learnings_dir.mkdir(parents=True, exist_ok=True)
+        (learnings_dir / "learnings.md").write_text("Secret learning")
+        result = load_memory_context(instance_dir, "")
+        assert "Secret learning" not in result
+
+    def test_combines_summary_and_learnings(self, instance_dir):
+        summary_dir = instance_dir / "memory"
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        (summary_dir / "summary.md").write_text("Session 61: tests")
+        learnings_dir = summary_dir / "projects" / "koan"
+        learnings_dir.mkdir(parents=True, exist_ok=True)
+        (learnings_dir / "learnings.md").write_text("- Important fact")
+        result = load_memory_context(instance_dir, "koan")
+        assert "Session 61" in result
+        assert "Important fact" in result
