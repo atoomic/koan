@@ -346,10 +346,10 @@ def api_status():
 
 
 def _parse_project(text: str):
-    match = re.search(r'\[project:([a-zA-Z0-9_-]+)\]', text)
+    match = re.search(r'\[projec?t:([a-zA-Z0-9_-]+)\]', text)
     if match:
         project = match.group(1)
-        cleaned = re.sub(r'\[project:[a-zA-Z0-9_-]+\]\s*', '', text).strip()
+        cleaned = re.sub(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*', '', text).strip()
         return project, cleaned
     return None, text
 

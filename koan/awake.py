@@ -117,11 +117,11 @@ def is_command(text: str) -> bool:
 
 
 def parse_project(text: str) -> Tuple[Optional[str], str]:
-    """Extract [project:name] from message. Returns (project_name, cleaned_text)."""
-    match = re.search(r'\[project:([a-zA-Z0-9_-]+)\]', text)
+    """Extract [project:name] or [projet:name] from message. Returns (project_name, cleaned_text)."""
+    match = re.search(r'\[projec?t:([a-zA-Z0-9_-]+)\]', text)
     if match:
         project = match.group(1)
-        cleaned = re.sub(r'\[project:[a-zA-Z0-9_-]+\]\s*', '', text).strip()
+        cleaned = re.sub(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*', '', text).strip()
         return project, cleaned
     return None, text
 
@@ -176,7 +176,7 @@ def _build_status() -> str:
                     current_section = None
             elif stripped.startswith("- "):
                 # Extract project tag if present
-                match = re.search(r'\[project:([a-zA-Z0-9_-]+)\]', stripped)
+                match = re.search(r'\[projec?t:([a-zA-Z0-9_-]+)\]', stripped)
                 project = match.group(1) if match else "default"
 
                 if current_section == "pending":
@@ -197,7 +197,7 @@ def _build_status() -> str:
                         parts.append(f"  In progress: {len(in_progress)}")
                         for m in in_progress[:2]:
                             # Remove project tag from display
-                            display = re.sub(r'\[project:[a-zA-Z0-9_-]+\]\s*', '', m)
+                            display = re.sub(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*', '', m)
                             parts.append(f"    {display}")
                     if pending:
                         parts.append(f"  Pending: {len(pending)}")

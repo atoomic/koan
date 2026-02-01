@@ -113,9 +113,9 @@ while [ $count -lt $MAX_RUNS ]; do
   # Extract mission title (strip "- ", project tag, and leading/trailing whitespace)
   MISSION_TITLE=""
   if [ -n "$MISSION_LINE" ]; then
-    MISSION_TITLE=$(echo "$MISSION_LINE" | sed 's/^- //' | sed 's/\[project:[a-zA-Z0-9_-]*\] *//' | sed 's/^ *//;s/ *$//')
+    MISSION_TITLE=$(echo "$MISSION_LINE" | sed 's/^- //' | sed 's/\[projec\{0,1\}t:[a-zA-Z0-9_-]*\] *//' | sed 's/^ *//;s/ *$//')
   fi
-  if [[ "$MISSION_LINE" =~ \[project:([a-zA-Z0-9_-]+)\] ]]; then
+  if [[ "$MISSION_LINE" =~ \[projec?t:([a-zA-Z0-9_-]+)\] ]]; then
     PROJECT_NAME="${BASH_REMATCH[1]}"
 
     # Find project index

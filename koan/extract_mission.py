@@ -48,7 +48,7 @@ def extract_next_mission(missions_path: str, project_name: str = "") -> str:
 
         # If project_name filter is set, check tag
         if project_name:
-            tag_match = re.search(r"\[projet?:([a-zA-Z0-9_-]+)\]", line)
+            tag_match = re.search(r"\[projec?t:([a-zA-Z0-9_-]+)\]", line)
             if tag_match:
                 if tag_match.group(1).lower() != project_name.lower():
                     continue  # Mission is for a different project
