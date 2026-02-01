@@ -9,6 +9,7 @@ KOAN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTANCE="$KOAN_ROOT/instance"
 NOTIFY="$(dirname "$0")/notify.py"
 DAILY_REPORT="$(dirname "$0")/daily_report.py"
+MISSION_SUMMARY="$(dirname "$0")/mission_summary.py"
 
 if [ ! -d "$INSTANCE" ]; then
   echo "[koan] No instance/ directory found. Run: cp -r instance.example instance"
@@ -206,6 +207,12 @@ Koan paused after $count runs. Send /resume via Telegram when quota resets to ch
       notify "Run $RUN_NUM/$MAX_RUNS — Mission completed: $MISSION_TITLE"
     else
       notify "Run $RUN_NUM/$MAX_RUNS — Autonomous run completed"
+    fi
+
+    # Extract journal summary and send via outbox
+    SUMMARY_TEXT=$("$PYTHON" "$MISSION_SUMMARY" "$INSTANCE" "$PROJECT_NAME" 2>/dev/null || echo "")
+    if [ -n "$SUMMARY_TEXT" ]; then
+      echo "$SUMMARY_TEXT" >> "$INSTANCE/outbox.md"
     fi
   else
     if [ -n "$MISSION_TITLE" ]; then
