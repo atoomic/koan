@@ -1,0 +1,61 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What is Kōan
+
+Kōan is an autonomous background agent that uses idle Claude API quota to work on local projects. It runs as a continuous loop, pulling missions from a shared file, executing them via Claude Code CLI, and communicating progress via Telegram. Philosophy: "The agent proposes. The human decides." — no unsupervised code modifications.
+
+## Commands
+
+```bash
+make setup          # Create venv, install dependencies
+make run            # Start main agent loop
+make awake          # Start Telegram bridge (fast-response polling)
+make dashboard      # Start Flask web dashboard (port 5001)
+make test           # Run full test suite (pytest)
+make say m="..."    # Send test message as if from Telegram
+make clean          # Remove venv
+```
+
+Run a single test file:
+```bash
+.venv/bin/pytest koan/tests/test_missions.py -v
+```
+
+## Architecture
+
+Two parallel processes run independently:
+
+- **`awake.py`** (Telegram bridge): Polls Telegram every 3s. Classifies messages as "chat" (instant Claude reply) or "mission" (queued to `missions.md`). Flushes `outbox.md` messages back to Telegram.
+- **`run.sh`** (agent loop): Picks pending missions from `missions.md`, executes via Claude Code CLI, writes journal entries and reports. Supports multi-project rotation.
+
+Communication between processes happens through shared files in `instance/` with atomic writes (`utils.atomic_write()` using temp file + rename + `fcntl.flock()`).
+
+### Key modules (`koan/app/`)
+
+- **`missions.py`** — Single source of truth for `missions.md` parsing (sections: En attente / En cours / Terminées). Missions can be tagged `[project:name]`.
+- **`utils.py`** — File locking (thread + file locks), config loading, atomic writes
+- **`memory_manager.py`** — Per-project memory isolation and compaction
+- **`usage_tracker.py`** — Budget tracking; decides autonomous mode (REVIEW/IMPLEMENT/DEEP/WAIT) based on quota percentage
+- **`git_sync.py`** / **`git_auto_merge.py`** — Branch tracking, sync awareness, configurable auto-merge
+- **`recover.py`** — Crash recovery for stale in-progress missions
+- **`notify.py`** — Telegram notification helper
+
+### Instance directory
+
+`instance/` (gitignored, copy from `instance.example/`) holds all runtime state:
+- `missions.md` — Task queue
+- `outbox.md` — Bot → Telegram message queue
+- `config.yaml` — Per-instance configuration (tools, auto-merge rules)
+- `soul.md` — Agent personality definition
+- `memory/` — Global summary + per-project learnings/context
+- `journal/` — Daily logs organized as `YYYY-MM-DD/project.md`
+
+## Conventions
+
+- Claude always creates **`koan/*` branches**, never commits to main
+- Environment config via `.env` file and `KOAN_*` variables (e.g., `KOAN_PROJECTS=name:path;name2:path2`)
+- Multi-project support: up to 5 projects, each with isolated memory under `memory/projects/{name}/`
+- Tests use temp directories and isolated env vars — no real Telegram calls
+- `system-prompt.md` defines the Claude agent's identity, priorities, and autonomous mode rules
