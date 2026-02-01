@@ -1,5 +1,6 @@
 """Tests for koan/utils.py — shared utilities."""
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -123,3 +124,29 @@ class TestInsertPendingMission:
         content = missions.read_text()
         assert "## En attente" in content
         assert "- Orphan task" in content
+
+    def test_concurrent_inserts_no_lost_missions(self, tmp_path):
+        """Regression: concurrent inserts must not lose missions (TOCTOU fix)."""
+        from app.utils import insert_pending_mission
+        missions = tmp_path / "missions.md"
+        missions.write_text("# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n")
+
+        num_threads = 8
+        errors = []
+
+        def insert_task(i):
+            try:
+                insert_pending_mission(missions, f"- Task {i}")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=insert_task, args=(i,)) for i in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Errors during concurrent insert: {errors}"
+        content = missions.read_text()
+        for i in range(num_threads):
+            assert f"- Task {i}" in content, f"Task {i} lost during concurrent insert"

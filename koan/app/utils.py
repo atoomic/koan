@@ -12,18 +12,24 @@ import fcntl
 import json
 import os
 import re
+import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 
 
-KOAN_ROOT = Path(os.environ["KOAN_ROOT"])
+try:
+    KOAN_ROOT = Path(os.environ["KOAN_ROOT"])
+except KeyError:
+    sys.exit("KOAN_ROOT environment variable is not set. Run via 'make run' or export it manually.")
 
 # Pre-compiled regex for project tag extraction (accepts both [project:X] and [projet:X])
 _PROJECT_TAG_RE = re.compile(r'\[projec?t:([a-zA-Z0-9_-]+)\]')
 _PROJECT_TAG_STRIP_RE = re.compile(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*')
 
 _MISSIONS_DEFAULT = "# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n"
+_MISSIONS_LOCK = threading.Lock()
 
 
 def load_dotenv():
@@ -59,35 +65,39 @@ def parse_project(text: str) -> Tuple[Optional[str], str]:
 def insert_pending_mission(missions_path: Path, entry: str):
     """Insert a mission entry into the pending section of missions.md.
 
-    Uses file locking to prevent race conditions between awake.py and dashboard.py.
+    Uses file locking for the entire read-modify-write cycle to prevent
+    TOCTOU race conditions between awake.py and dashboard.py.
     Creates the file with default structure if it doesn't exist.
     """
-    if not missions_path.exists():
-        content = _MISSIONS_DEFAULT
-    else:
-        content = missions_path.read_text()
-        if not content.strip():
-            content = _MISSIONS_DEFAULT
+    # Thread lock (in-process) + file lock (cross-process) for full protection
+    with _MISSIONS_LOCK:
+        if not missions_path.exists():
+            missions_path.write_text(_MISSIONS_DEFAULT)
 
-    marker = None
-    for candidate in ("## En attente", "## Pending"):
-        if candidate in content:
-            marker = candidate
-            break
+        with open(missions_path, "r+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            content = f.read()
+            if not content.strip():
+                content = _MISSIONS_DEFAULT
 
-    if marker:
-        idx = content.index(marker) + len(marker)
-        while idx < len(content) and content[idx] == "\n":
-            idx += 1
-        content = content[:idx] + f"\n{entry}\n" + content[idx:]
-    else:
-        content += f"\n## En attente\n\n{entry}\n"
+            marker = None
+            for candidate in ("## En attente", "## Pending"):
+                if candidate in content:
+                    marker = candidate
+                    break
 
-    # Write with file locking to prevent races with awake.py / dashboard.py
-    with open(missions_path, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.write(content)
-        fcntl.flock(f, fcntl.LOCK_UN)
+            if marker:
+                idx = content.index(marker) + len(marker)
+                while idx < len(content) and content[idx] == "\n":
+                    idx += 1
+                content = content[:idx] + f"\n{entry}\n" + content[idx:]
+            else:
+                content += f"\n## En attente\n\n{entry}\n"
+
+            f.seek(0)
+            f.truncate()
+            f.write(content)
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 # ---------------------------------------------------------------------------

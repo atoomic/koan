@@ -15,6 +15,7 @@ Returns via stdout:
     Missions file is updated in-place if recovery happens.
 """
 
+import fcntl
 import re
 import sys
 from pathlib import Path
@@ -30,7 +31,11 @@ def recover_missions(instance_dir: str) -> int:
 
     from app.missions import find_section_boundaries
 
-    content = missions_path.read_text()
+    # Read with shared lock to get consistent snapshot
+    with open(missions_path, "r") as f:
+        fcntl.flock(f, fcntl.LOCK_SH)
+        content = f.read()
+        fcntl.flock(f, fcntl.LOCK_UN)
     lines = content.splitlines()
 
     # Find section boundaries
@@ -118,7 +123,14 @@ def recover_missions(instance_dir: str) -> int:
             if not any(m.strip() for m in remaining_in_progress):
                 new_lines.append("")
 
-    missions_path.write_text("\n".join(new_lines) + "\n")
+    # Write with exclusive lock to prevent races with insert_pending_mission
+    new_content = "\n".join(new_lines) + "\n"
+    with open(missions_path, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        f.truncate()
+        f.write(new_content)
+        fcntl.flock(f, fcntl.LOCK_UN)
     return len(recovered)
 
 
