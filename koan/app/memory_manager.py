@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
 
+from app.utils import atomic_write
+
 
 def parse_summary_sessions(content: str) -> List[Tuple[str, str, str]]:
     """Parse summary.md into (date_header, session_text, project_hint) tuples.
@@ -74,7 +76,7 @@ def _flush_sessions(date_header: str, lines: List[str], sessions: list):
 def _extract_project_hint(text: str) -> str:
     """Extract project name from session text like '(projet: koan)' or 'projet:koan'."""
     # Match patterns: (projet: X), (project: X), projet:X, project:X
-    m = re.search(r"\(?\s*projet?\s*:\s*([a-zA-Z0-9_-]+)\s*\)?", text, re.IGNORECASE)
+    m = re.search(r"\(?\s*projec?t\s*:\s*([a-zA-Z0-9_-]+)\s*\)?", text, re.IGNORECASE)
     if m:
         return m.group(1).lower()
     return ""
@@ -168,7 +170,7 @@ def compact_summary(instance_dir: str, max_sessions: int = 10) -> int:
         output_lines.append(text)
         output_lines.append("")
 
-    summary_path.write_text("\n".join(output_lines).rstrip() + "\n")
+    atomic_write(summary_path, "\n".join(output_lines).rstrip() + "\n")
     return removed
 
 
@@ -201,7 +203,7 @@ def cleanup_learnings(instance_dir: str, project_name: str) -> int:
             new_lines.append(line)
 
     if removed > 0:
-        learnings_path.write_text("\n".join(new_lines) + "\n")
+        atomic_write(learnings_path, "\n".join(new_lines) + "\n")
 
     return removed
 
