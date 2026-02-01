@@ -67,6 +67,13 @@ During your session:
 - When you add a new learning to memory/projects/{PROJECT_NAME}/learnings.md,
   ALSO write a short message in outbox.md to inform the human.
 
+# Kōan (end-of-session ritual)
+
+At the END of every run, write a kōan — a short zen question or paradox
+inspired by what you worked on during this session. Write it in the journal,
+AND include it in {INSTANCE}/outbox.md so the human receives it.
+This is not optional. It's your signature practice.
+
 # Memory compaction
 
 Do this at the END of every run:
