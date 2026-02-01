@@ -1,7 +1,9 @@
-"""Tests for awake.py — message classification, mission handling, project parsing."""
+"""Tests for awake.py — message classification, mission handling, project parsing, handlers."""
 
 import re
-from unittest.mock import patch, MagicMock
+import subprocess
+import time
+from unittest.mock import patch, MagicMock, mock_open
 
 import pytest
 
@@ -10,7 +12,15 @@ from app.awake import (
     is_command,
     parse_project,
     handle_mission,
+    handle_command,
+    handle_chat,
+    handle_resume,
+    handle_message,
+    flush_outbox,
+    _format_outbox_message,
     _build_status,
+    get_updates,
+    check_config,
     MISSIONS_FILE,
 )
 
@@ -192,3 +202,369 @@ class TestBuildStatus:
             status = _build_status()
 
         assert "Kōan Status" in status
+
+    @patch("app.awake.MISSIONS_FILE")
+    def test_status_with_stop_file(self, mock_file, tmp_path):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text("# Missions\n\n## En attente\n\n## En cours\n\n")
+        (tmp_path / ".koan-stop").write_text("STOP")
+        with patch("app.awake.MISSIONS_FILE", missions_file), \
+             patch("app.awake.KOAN_ROOT", tmp_path):
+            status = _build_status()
+
+        assert "Stop requested" in status
+
+    @patch("app.awake.MISSIONS_FILE")
+    def test_status_with_loop_status(self, mock_file, tmp_path):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text("# Missions\n\n## En attente\n\n## En cours\n\n")
+        (tmp_path / ".koan-status").write_text("Run 3/20")
+        with patch("app.awake.MISSIONS_FILE", missions_file), \
+             patch("app.awake.KOAN_ROOT", tmp_path):
+            status = _build_status()
+
+        assert "Run 3/20" in status
+
+
+# ---------------------------------------------------------------------------
+# handle_command
+# ---------------------------------------------------------------------------
+
+class TestHandleCommand:
+    @patch("app.awake.format_and_send")
+    def test_stop_creates_file(self, mock_send, tmp_path):
+        with patch("app.awake.KOAN_ROOT", tmp_path):
+            handle_command("/stop")
+        assert (tmp_path / ".koan-stop").exists()
+        mock_send.assert_called_once()
+
+    @patch("app.awake._build_status", return_value="📊 Kōan Status\nAll clear")
+    @patch("app.awake.format_and_send")
+    def test_status_calls_build_status(self, mock_send, mock_build):
+        handle_command("/status")
+        mock_build.assert_called_once()
+        mock_send.assert_called_once_with("📊 Kōan Status\nAll clear")
+
+    @patch("app.awake.handle_resume")
+    def test_resume_delegates(self, mock_resume):
+        handle_command("/resume")
+        mock_resume.assert_called_once()
+
+    @patch("app.awake.handle_chat")
+    def test_unknown_command_falls_to_chat(self, mock_chat):
+        handle_command("/unknown")
+        mock_chat.assert_called_once_with("/unknown")
+
+
+# ---------------------------------------------------------------------------
+# handle_resume
+# ---------------------------------------------------------------------------
+
+class TestHandleResume:
+    @patch("app.awake.format_and_send")
+    def test_no_quota_file(self, mock_send, tmp_path):
+        with patch("app.awake.KOAN_ROOT", tmp_path):
+            handle_resume()
+        assert "No quota pause" in mock_send.call_args[0][0]
+
+    @patch("app.awake.format_and_send")
+    def test_likely_reset(self, mock_send, tmp_path):
+        quota_file = tmp_path / ".koan-quota-reset"
+        old_ts = str(int(time.time()) - 3 * 3600)  # 3 hours ago
+        quota_file.write_text(f"resets 7pm (Europe/Paris)\n{old_ts}")
+        with patch("app.awake.KOAN_ROOT", tmp_path):
+            handle_resume()
+        assert not quota_file.exists()
+        assert "Quota likely reset" in mock_send.call_args[0][0]
+
+    @patch("app.awake.format_and_send")
+    def test_not_yet_reset(self, mock_send, tmp_path):
+        quota_file = tmp_path / ".koan-quota-reset"
+        recent_ts = str(int(time.time()) - 30 * 60)  # 30 min ago
+        quota_file.write_text(f"resets 7pm (Europe/Paris)\n{recent_ts}")
+        with patch("app.awake.KOAN_ROOT", tmp_path):
+            handle_resume()
+        assert quota_file.exists()
+        assert "not reset yet" in mock_send.call_args[0][0]
+
+    @patch("app.awake.format_and_send")
+    def test_corrupt_quota_file(self, mock_send, tmp_path):
+        quota_file = tmp_path / ".koan-quota-reset"
+        quota_file.write_text("garbage\nnot-a-number")
+        with patch("app.awake.KOAN_ROOT", tmp_path):
+            handle_resume()
+        assert "Error" in mock_send.call_args[0][0]
+
+
+# ---------------------------------------------------------------------------
+# handle_chat
+# ---------------------------------------------------------------------------
+
+class TestHandleChat:
+    @patch("app.awake.save_telegram_message")
+    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.get_allowed_tools", return_value="")
+    @patch("app.awake.send_telegram", return_value=True)
+    @patch("app.awake.subprocess.run")
+    def test_successful_chat(self, mock_run, mock_send, mock_tools,
+                             mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+        mock_run.return_value = MagicMock(stdout="Hello back!", returncode=0)
+        journal_dir = tmp_path / "journal" / "2026-02-01"
+        journal_dir.mkdir(parents=True)
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.PROJECT_PATH", ""), \
+             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.SOUL", "test soul"), \
+             patch("app.awake.SUMMARY", "test summary"):
+            handle_chat("hello")
+        mock_send.assert_called_once_with("Hello back!")
+        # Saved both user and assistant messages
+        assert mock_save.call_count == 2
+
+    @patch("app.awake.save_telegram_message")
+    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.get_allowed_tools", return_value="")
+    @patch("app.awake.format_and_send")
+    @patch("app.awake.subprocess.run")
+    def test_chat_timeout(self, mock_run, mock_send, mock_tools,
+                          mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+        mock_run.side_effect = subprocess.TimeoutExpired("claude", 180)
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.PROJECT_PATH", ""), \
+             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.SOUL", ""), \
+             patch("app.awake.SUMMARY", ""), \
+             patch("app.awake.CHAT_TIMEOUT", 180):
+            handle_chat("complex question")
+        mock_send.assert_called_once()
+        assert "Timeout" in mock_send.call_args[0][0]
+
+    @patch("app.awake.save_telegram_message")
+    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.get_allowed_tools", return_value="")
+    @patch("app.awake.format_and_send")
+    @patch("app.awake.subprocess.run")
+    def test_chat_error_nonzero_exit(self, mock_run, mock_send, mock_tools,
+                                     mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+        mock_run.return_value = MagicMock(stdout="", returncode=1, stderr="API error")
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.PROJECT_PATH", ""), \
+             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.SOUL", ""), \
+             patch("app.awake.SUMMARY", ""):
+            handle_chat("hello")
+        mock_send.assert_called_once()
+        assert "couldn't formulate" in mock_send.call_args[0][0]
+
+    @patch("app.awake.save_telegram_message")
+    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.get_allowed_tools", return_value="")
+    @patch("app.awake.send_telegram", return_value=True)
+    @patch("app.awake.subprocess.run")
+    def test_chat_reads_journal_flat_fallback(self, mock_run, mock_send, mock_tools,
+                                              mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+        """Falls back to flat journal if nested dir doesn't exist."""
+        mock_run.return_value = MagicMock(stdout="ok", returncode=0)
+        # No nested journal dir — create flat file
+        journal_dir = tmp_path / "journal"
+        journal_dir.mkdir(parents=True)
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.PROJECT_PATH", ""), \
+             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.SOUL", ""), \
+             patch("app.awake.SUMMARY", ""):
+            handle_chat("hi")
+        mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# flush_outbox
+# ---------------------------------------------------------------------------
+
+class TestFlushOutbox:
+    @patch("app.awake._format_outbox_message", return_value="Formatted msg")
+    @patch("app.awake.send_telegram", return_value=True)
+    def test_flush_formats_and_sends(self, mock_send, mock_fmt, tmp_path):
+        outbox = tmp_path / "outbox.md"
+        outbox.write_text("Raw message here")
+        with patch("app.awake.OUTBOX_FILE", outbox):
+            flush_outbox()
+        mock_fmt.assert_called_once_with("Raw message here")
+        mock_send.assert_called_once_with("Formatted msg")
+        assert outbox.read_text() == ""
+
+    @patch("app.awake._format_outbox_message", return_value="Formatted msg")
+    @patch("app.awake.send_telegram", return_value=False)
+    def test_flush_keeps_on_send_failure(self, mock_send, mock_fmt, tmp_path):
+        outbox = tmp_path / "outbox.md"
+        outbox.write_text("Important message")
+        with patch("app.awake.OUTBOX_FILE", outbox):
+            flush_outbox()
+        # Message preserved on send failure
+        assert outbox.read_text() == "Important message"
+
+    def test_flush_no_file(self, tmp_path):
+        outbox = tmp_path / "outbox.md"
+        with patch("app.awake.OUTBOX_FILE", outbox):
+            flush_outbox()  # Should not raise
+
+    @patch("app.awake._format_outbox_message", return_value="X")
+    @patch("app.awake.send_telegram", return_value=True)
+    def test_flush_empty_file(self, mock_send, mock_fmt, tmp_path):
+        outbox = tmp_path / "outbox.md"
+        outbox.write_text("")
+        with patch("app.awake.OUTBOX_FILE", outbox):
+            flush_outbox()
+        mock_send.assert_not_called()
+
+    @patch("app.awake._format_outbox_message", return_value="X")
+    @patch("app.awake.send_telegram", return_value=True)
+    def test_flush_whitespace_only(self, mock_send, mock_fmt, tmp_path):
+        outbox = tmp_path / "outbox.md"
+        outbox.write_text("   \n\n  ")
+        with patch("app.awake.OUTBOX_FILE", outbox):
+            flush_outbox()
+        mock_send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _format_outbox_message
+# ---------------------------------------------------------------------------
+
+class TestFormatOutboxMessage:
+    @patch("app.awake.format_for_telegram", return_value="Formatted")
+    @patch("app.awake.load_memory_context", return_value="mem")
+    @patch("app.awake.load_human_prefs", return_value="prefs")
+    @patch("app.awake.load_soul", return_value="soul")
+    def test_formats_with_context(self, mock_soul, mock_prefs, mock_mem, mock_fmt, tmp_path):
+        with patch("app.awake.INSTANCE_DIR", tmp_path):
+            result = _format_outbox_message("raw content")
+        assert result == "Formatted"
+        mock_fmt.assert_called_once_with("raw content", "soul", "prefs", "mem")
+
+    @patch("app.awake.load_soul", side_effect=Exception("load error"))
+    def test_fallback_on_error(self, mock_soul, tmp_path):
+        with patch("app.awake.INSTANCE_DIR", tmp_path):
+            result = _format_outbox_message("raw content")
+        assert result == "raw content"
+
+
+# ---------------------------------------------------------------------------
+# handle_message (dispatch)
+# ---------------------------------------------------------------------------
+
+class TestHandleMessage:
+    @patch("app.awake.handle_command")
+    def test_dispatches_command(self, mock_cmd):
+        handle_message("/stop")
+        mock_cmd.assert_called_once_with("/stop")
+
+    @patch("app.awake.handle_mission")
+    def test_dispatches_mission(self, mock_mission):
+        handle_message("implement dark mode")
+        mock_mission.assert_called_once_with("implement dark mode")
+
+    @patch("app.awake.handle_chat")
+    def test_dispatches_chat(self, mock_chat):
+        handle_message("how are you?")
+        mock_chat.assert_called_once_with("how are you?")
+
+    @patch("app.awake.handle_command")
+    @patch("app.awake.handle_mission")
+    @patch("app.awake.handle_chat")
+    def test_empty_message_ignored(self, mock_chat, mock_mission, mock_cmd):
+        handle_message("")
+        mock_cmd.assert_not_called()
+        mock_mission.assert_not_called()
+        mock_chat.assert_not_called()
+
+    @patch("app.awake.handle_command")
+    @patch("app.awake.handle_mission")
+    @patch("app.awake.handle_chat")
+    def test_whitespace_only_ignored(self, mock_chat, mock_mission, mock_cmd):
+        handle_message("   \n  ")
+        mock_cmd.assert_not_called()
+        mock_mission.assert_not_called()
+        mock_chat.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# get_updates
+# ---------------------------------------------------------------------------
+
+class TestGetUpdates:
+    @patch("app.awake.requests.get")
+    def test_returns_results(self, mock_get):
+        mock_get.return_value = MagicMock()
+        mock_get.return_value.json.return_value = {"ok": True, "result": [{"update_id": 1}]}
+        result = get_updates()
+        assert len(result) == 1
+        assert result[0]["update_id"] == 1
+
+    @patch("app.awake.requests.get")
+    def test_passes_offset(self, mock_get):
+        mock_get.return_value = MagicMock()
+        mock_get.return_value.json.return_value = {"ok": True, "result": []}
+        get_updates(offset=42)
+        _, kwargs = mock_get.call_args
+        assert kwargs["params"]["offset"] == 42
+
+    @patch("app.awake.requests.get")
+    def test_handles_network_error(self, mock_get):
+        import requests as req
+        mock_get.side_effect = req.RequestException("timeout")
+        result = get_updates()
+        assert result == []
+
+    @patch("app.awake.requests.get")
+    def test_handles_json_error(self, mock_get):
+        mock_get.return_value = MagicMock()
+        mock_get.return_value.json.side_effect = ValueError("bad json")
+        result = get_updates()
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# check_config
+# ---------------------------------------------------------------------------
+
+class TestCheckConfig:
+    def test_exits_without_token(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("KOAN_TELEGRAM_TOKEN", "")
+        with patch("app.awake.BOT_TOKEN", ""), \
+             patch("app.awake.CHAT_ID", "123"), \
+             pytest.raises(SystemExit):
+            check_config()
+
+    def test_exits_without_chat_id(self, monkeypatch, tmp_path):
+        with patch("app.awake.BOT_TOKEN", "token"), \
+             patch("app.awake.CHAT_ID", ""), \
+             pytest.raises(SystemExit):
+            check_config()
+
+    def test_exits_without_instance_dir(self, tmp_path):
+        with patch("app.awake.BOT_TOKEN", "token"), \
+             patch("app.awake.CHAT_ID", "123"), \
+             patch("app.awake.INSTANCE_DIR", tmp_path / "nonexistent"), \
+             pytest.raises(SystemExit):
+            check_config()
+
+    def test_passes_with_valid_config(self, tmp_path):
+        inst = tmp_path / "instance"
+        inst.mkdir()
+        with patch("app.awake.BOT_TOKEN", "token"), \
+             patch("app.awake.CHAT_ID", "123"), \
+             patch("app.awake.INSTANCE_DIR", inst):
+            check_config()  # Should not raise
