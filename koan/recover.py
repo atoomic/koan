@@ -101,26 +101,31 @@ def recover_missions(instance_dir: str) -> int:
         else:
             break
 
-    # Remove "(aucune)" from pending section if we're adding missions
+    # Rebuild file with recovered missions moved to pending
     new_lines = []
     for i, line in enumerate(lines):
-        if i == pending_start + 1:
-            # After pending header: insert recovered missions
+        # Skip (aucune)/(none) placeholders in the pending section
+        if pending_start < i < in_progress_start:
+            if line.strip() in ("(aucune)", "(none)"):
+                continue
+
+        # Skip in-progress body lines (will be replaced)
+        if in_progress_start < i < in_progress_end:
+            continue
+
+        # Append the current line (headers, other content)
+        new_lines.append(line)
+
+        # After the pending header: insert recovered missions
+        if i == pending_start:
             new_lines.append("")
             for m in recovered:
                 new_lines.append(m)
-        if pending_start < i < (in_progress_start or len(lines)):
-            if line.strip() in ("(aucune)", "(none)"):
-                continue  # Remove placeholder
-        if in_progress_start < i < in_progress_end:
-            continue  # Will be replaced
-        new_lines.append(line)
 
+        # After the in-progress header: re-add remaining items
         if i == in_progress_start:
-            # Re-add remaining in-progress items
             for m in remaining_in_progress:
                 new_lines.append(m)
-            # If nothing remains, add placeholder
             if not any(m.strip() for m in remaining_in_progress):
                 new_lines.append("")
 
