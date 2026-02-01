@@ -22,21 +22,9 @@ from typing import Optional, Tuple
 
 import requests
 
+from health_check import write_heartbeat
 from notify import send_telegram
-
-
-def load_dotenv():
-    """Load .env file, stripping quotes from values."""
-    env_path = Path(__file__).parent / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ[key.strip()] = value.strip().strip("\"'")
-
+from utils import load_dotenv, parse_project as _parse_project, insert_pending_mission
 
 load_dotenv()
 
@@ -118,13 +106,8 @@ def is_command(text: str) -> bool:
 
 
 def parse_project(text: str) -> Tuple[Optional[str], str]:
-    """Extract [project:name] from message. Returns (project_name, cleaned_text)."""
-    match = re.search(r'\[project:([a-zA-Z0-9_-]+)\]', text)
-    if match:
-        project = match.group(1)
-        cleaned = re.sub(r'\[project:[a-zA-Z0-9_-]+\]\s*', '', text).strip()
-        return project, cleaned
-    return None, text
+    """Extract [project:name] or [projet:name] from message."""
+    return _parse_project(text)
 
 
 # ---------------------------------------------------------------------------
@@ -155,37 +138,15 @@ def handle_command(text: str):
 
 def _build_status() -> str:
     """Build status message grouped by project."""
+    from missions import group_by_project
+
     parts = ["📊 Kōan Status"]
 
     # Parse missions by project
     if MISSIONS_FILE.exists():
-        from collections import defaultdict
         content = MISSIONS_FILE.read_text()
-        missions_by_project = defaultdict(lambda: {"pending": [], "in_progress": []})
+        missions_by_project = group_by_project(content)
 
-        lines = content.splitlines()
-        current_section = None
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("## "):
-                section_name = stripped[3:].strip().lower()
-                if section_name in ("en attente", "pending"):
-                    current_section = "pending"
-                elif section_name in ("en cours", "in progress", "in_progress"):
-                    current_section = "in_progress"
-                else:
-                    current_section = None
-            elif stripped.startswith("- "):
-                # Extract project tag if present
-                match = re.search(r'\[project:([a-zA-Z0-9_-]+)\]', stripped)
-                project = match.group(1) if match else "default"
-
-                if current_section == "pending":
-                    missions_by_project[project]["pending"].append(stripped)
-                elif current_section == "in_progress":
-                    missions_by_project[project]["in_progress"].append(stripped)
-
-        # Display by project
         if missions_by_project:
             for project in sorted(missions_by_project.keys()):
                 missions = missions_by_project[project]
@@ -263,30 +224,8 @@ def handle_mission(text: str):
     else:
         mission_entry = f"- {mission_text}"
 
-    # Append to missions.md under pending section
-    if MISSIONS_FILE.exists():
-        content = MISSIONS_FILE.read_text()
-    else:
-        content = "# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n"
-
-    # Find the pending section (French or English)
-    marker = None
-    for candidate in ("## En attente", "## Pending"):
-        if candidate in content:
-            marker = candidate
-            break
-
-    if marker:
-        idx = content.index(marker) + len(marker)
-        # Find the end of the header line (skip newlines)
-        while idx < len(content) and content[idx] == "\n":
-            idx += 1
-        new_entry = f"\n{mission_entry}\n"
-        content = content[:idx] + new_entry + content[idx:]
-    else:
-        content += f"\n## En attente\n\n{mission_entry}\n"
-
-    MISSIONS_FILE.write_text(content)
+    # Append to missions.md under pending section (with file locking)
+    insert_pending_mission(MISSIONS_FILE, mission_entry)
 
     # Acknowledge with project info
     ack_msg = f"✅ Mission received"
@@ -416,6 +355,7 @@ def main():
                 handle_message(text)
 
         flush_outbox()
+        write_heartbeat(str(KOAN_ROOT))
         time.sleep(POLL_INTERVAL)
 
 
