@@ -82,6 +82,11 @@ RECOVER="$(dirname "$0")/recover.py"
 echo "[koan] Checking for interrupted missions..."
 "$PYTHON" "$RECOVER" "$INSTANCE" || true
 
+# Memory cleanup: compact summary, dedup learnings
+MEMORY_MGR="$(dirname "$0")/memory_manager.py"
+echo "[koan] Running memory cleanup..."
+"$PYTHON" "$MEMORY_MGR" "$INSTANCE" cleanup 15 2>/dev/null || true
+
 echo "[koan] Starting. Max runs: $MAX_RUNS, interval: ${INTERVAL}s"
 notify "Koan starting — $MAX_RUNS max runs, ${INTERVAL}s interval"
 
@@ -100,8 +105,9 @@ while [ $count -lt $MAX_RUNS ]; do
   RUN_NUM=$((count + 1))
   echo "[koan] Run $RUN_NUM/$MAX_RUNS — $(date '+%Y-%m-%d %H:%M:%S')"
 
-  # Extract next pending mission line
-  MISSION_LINE=$(grep -m1 "^- " "$INSTANCE/missions.md" 2>/dev/null || echo "")
+  # Extract next pending mission line (section-aware, scoped to "En attente")
+  EXTRACT_MISSION="$(dirname "$0")/extract_mission.py"
+  MISSION_LINE=$("$PYTHON" "$EXTRACT_MISSION" "$INSTANCE/missions.md" 2>/dev/null || echo "")
 
   # Extract mission title (strip "- ", project tag, and leading/trailing whitespace)
   MISSION_TITLE=""
