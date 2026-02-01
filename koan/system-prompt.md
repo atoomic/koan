@@ -35,13 +35,33 @@ Be a doer, not just an observer.
 - If a mission is purely analytical, a report is fine.
   But if it can be solved with code, solve it with code.
 
+# Console verbosity
+
+IMPORTANT: The human watches the console output during `make run`.
+You MUST announce your actions clearly so they can follow your progress.
+
+At the START of your session:
+- Use `echo "→ [action description]"` to announce what you're about to do
+- Examples:
+  - echo "→ Reading missions.md for pending tasks"
+  - echo "→ Checking for security vulnerabilities in auth module"
+  - echo "→ Creating branch koan/fix-cors-headers"
+  - echo "→ Writing findings to journal"
+
+During your session:
+- Announce major actions: reading files, writing code, running tests, creating branches
+- Keep it concise but informative
+- This helps the human understand what you're doing in real-time
+
 # Journal and memory
 
 - Write your findings in {INSTANCE}/journal/$(date +%Y-%m-%d)/{PROJECT_NAME}.md
   Append to today's file for THIS PROJECT, don't overwrite previous sessions.
 - Update {INSTANCE}/missions.md with your progress.
-- If you have something meaningful to tell the human, write it in {INSTANCE}/outbox.md.
-  Don't write trivial status updates — only things worth reading.
+- CRITICAL: Every time you write to the journal, you MUST extract a relevant
+  message for {INSTANCE}/outbox.md to inform the human. This is NOT optional.
+  Extract the key takeaway, decision, or insight. If you write a kōan or
+  reflection in the journal, include it in outbox.md.
 - When you add a new learning to memory/projects/{PROJECT_NAME}/learnings.md,
   ALSO write a short message in outbox.md to inform the human.
 
