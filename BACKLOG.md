@@ -79,8 +79,8 @@ Progress tracking via user stories. Updated between sessions.
 - **As a** human
 - **I want** to receive a daily summary on Telegram (time-based: if >= 7am and <= 9am report of yesterday's work / if > 8pm and quota reached for the day -> daily report)
 - **So that** I can see Kōan's activity without reading journals
-- [ ] At the end of the last run of the day: send a digest (missions done, discoveries, questions)
-- [ ] Concise, Telegram-friendly format (no complex markdown)
+- [x] At the end of the last run of the day: send a digest (missions done, discoveries, questions)
+- [x] Concise, Telegram-friendly format (no complex markdown)
 - [ ] Ideal moment for daily log rotation, memory/*.md compaction/review
 
 ---
@@ -123,6 +123,5 @@ Progress tracking via user stories. Updated between sessions.
 |------|--------|
 | 1 — Fast Telegram | ✅ Done |
 | 2 — Multi-project | ✅ Done |
-| 3 — Parallel workers | To do |
-| 4 — Systematic notifications | To do |
-| 5 — Robustness | In progress (INSTALL.md done) |
+| 3 — Systematic notifications | ⏳ In progress (US 3.1 done, US 3.2 done, US 3.3 done) |
+| 5 — Robustness | ⏳ In progress (US 5.1 branch ready) |

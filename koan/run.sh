@@ -8,6 +8,7 @@ set -euo pipefail
 KOAN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTANCE="$KOAN_ROOT/instance"
 NOTIFY="$(dirname "$0")/notify.py"
+DAILY_REPORT="$(dirname "$0")/daily_report.py"
 
 if [ ! -d "$INSTANCE" ]; then
   echo "[koan] No instance/ directory found. Run: cp -r instance.example instance"
@@ -66,6 +67,9 @@ count=0
 
 echo "[koan] Starting. Max runs: $MAX_RUNS, interval: ${INTERVAL}s"
 notify "Koan starting — $MAX_RUNS max runs, ${INTERVAL}s interval"
+
+# Daily report check (morning recap or evening summary)
+"$PYTHON" "$DAILY_REPORT" 2>/dev/null || true
 
 while [ $count -lt $MAX_RUNS ]; do
   # Check for stop request
@@ -187,3 +191,6 @@ done
 
 echo "[koan] Session complete. $count runs executed."
 notify "Session complete — $count runs executed"
+
+# End-of-session daily report check
+"$PYTHON" "$DAILY_REPORT" 2>/dev/null || true
