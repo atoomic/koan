@@ -7,12 +7,13 @@ set -euo pipefail
 
 KOAN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTANCE="$KOAN_ROOT/instance"
-NOTIFY="$(dirname "$0")/notify.py"
-DAILY_REPORT="$(dirname "$0")/daily_report.py"
-MISSION_SUMMARY="$(dirname "$0")/mission_summary.py"
-GIT_SYNC="$(dirname "$0")/git_sync.py"
+APP_DIR="$(dirname "$0")/app"
+NOTIFY="$APP_DIR/notify.py"
+DAILY_REPORT="$APP_DIR/daily_report.py"
+MISSION_SUMMARY="$APP_DIR/mission_summary.py"
+GIT_SYNC="$APP_DIR/git_sync.py"
 GIT_SYNC_INTERVAL=${KOAN_GIT_SYNC_INTERVAL:-5}
-HEALTH_CHECK="$(dirname "$0")/health_check.py"
+HEALTH_CHECK="$APP_DIR/health_check.py"
 
 if [ ! -d "$INSTANCE" ]; then
   echo "[koan] No instance/ directory found. Run: cp -r instance.example instance"
@@ -82,12 +83,12 @@ trap cleanup INT TERM
 count=0
 
 # Crash recovery: move stale in-progress missions back to pending
-RECOVER="$(dirname "$0")/recover.py"
+RECOVER="$APP_DIR/recover.py"
 echo "[koan] Checking for interrupted missions..."
 "$PYTHON" "$RECOVER" "$INSTANCE" || true
 
 # Memory cleanup: compact summary, dedup learnings
-MEMORY_MGR="$(dirname "$0")/memory_manager.py"
+MEMORY_MGR="$APP_DIR/memory_manager.py"
 echo "[koan] Running memory cleanup..."
 "$PYTHON" "$MEMORY_MGR" "$INSTANCE" cleanup 15 2>/dev/null || true
 
@@ -120,7 +121,7 @@ while [ $count -lt $MAX_RUNS ]; do
   echo "[koan] Run $RUN_NUM/$MAX_RUNS — $(date '+%Y-%m-%d %H:%M:%S')"
 
   # Extract next pending mission line (section-aware, scoped to "En attente")
-  EXTRACT_MISSION="$(dirname "$0")/extract_mission.py"
+  EXTRACT_MISSION="$APP_DIR/extract_mission.py"
   MISSION_LINE=$("$PYTHON" "$EXTRACT_MISSION" "$INSTANCE/missions.md" 2>/dev/null || echo "")
 
   # Extract mission title (strip "- ", project tag, and leading/trailing whitespace)

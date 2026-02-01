@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from git_sync import (
+from app.git_sync import (
     run_git,
     get_koan_branches,
     get_recent_main_commits,
@@ -31,7 +31,7 @@ class TestRunGit:
 
     def test_returns_empty_on_timeout(self):
         """run_git returns empty on timeout."""
-        with patch("git_sync.subprocess.run", side_effect=subprocess.TimeoutExpired("git", 10)):
+        with patch("app.git_sync.subprocess.run", side_effect=subprocess.TimeoutExpired("git", 10)):
             assert run_git("/tmp", "status") == ""
 
 
@@ -45,7 +45,7 @@ class TestGetKoanBranches:
             "  remotes/origin/koan/other\n"
             "  main\n"
         )
-        with patch("git_sync.run_git", return_value=mock_output):
+        with patch("app.git_sync.run_git", return_value=mock_output):
             branches = get_koan_branches("/fake")
         assert "koan/fix-bug" in branches
         assert "koan/current" in branches
@@ -54,14 +54,14 @@ class TestGetKoanBranches:
         assert len([b for b in branches if b == "koan/fix-bug"]) == 1
 
     def test_empty_output(self):
-        with patch("git_sync.run_git", return_value=""):
+        with patch("app.git_sync.run_git", return_value=""):
             assert get_koan_branches("/fake") == []
 
 
 class TestGetMergedBranches:
     def test_parses_merged(self):
         mock_output = "  remotes/origin/koan/done-feature\n  remotes/origin/koan/old-fix\n"
-        with patch("git_sync.run_git", return_value=mock_output):
+        with patch("app.git_sync.run_git", return_value=mock_output):
             merged = get_merged_branches("/fake")
         assert "koan/done-feature" in merged
         assert "koan/old-fix" in merged
@@ -70,7 +70,7 @@ class TestGetMergedBranches:
 class TestGetUnmergedBranches:
     def test_parses_unmerged(self):
         mock_output = "  koan/wip\n  remotes/origin/koan/pending-review\n"
-        with patch("git_sync.run_git", return_value=mock_output):
+        with patch("app.git_sync.run_git", return_value=mock_output):
             unmerged = get_unmerged_branches("/fake")
         assert "koan/wip" in unmerged
         assert "koan/pending-review" in unmerged
@@ -79,19 +79,19 @@ class TestGetUnmergedBranches:
 class TestGetRecentMainCommits:
     def test_parses_commits(self):
         mock_output = "abc1234 fix: something\ndef5678 feat: other thing\n"
-        with patch("git_sync.run_git", return_value=mock_output):
+        with patch("app.git_sync.run_git", return_value=mock_output):
             commits = get_recent_main_commits("/fake")
         assert len(commits) == 2
         assert "abc1234 fix: something" in commits[0]
 
     def test_empty(self):
-        with patch("git_sync.run_git", return_value=""):
+        with patch("app.git_sync.run_git", return_value=""):
             assert get_recent_main_commits("/fake") == []
 
 
 class TestBuildSyncReport:
     def test_report_includes_merged_and_unmerged(self):
-        with patch("git_sync.run_git") as mock_git:
+        with patch("app.git_sync.run_git") as mock_git:
             # fetch returns nothing, branch commands return data
             def side_effect(cwd, *args):
                 args_str = " ".join(args)
@@ -114,7 +114,7 @@ class TestBuildSyncReport:
         assert "Git sync" in report
 
     def test_report_no_changes(self):
-        with patch("git_sync.run_git", return_value=""):
+        with patch("app.git_sync.run_git", return_value=""):
             report = build_sync_report("/fake")
         assert "No notable changes" in report
 
