@@ -201,8 +201,7 @@ def handle_resume():
         paused_at = int(lines[1]) if len(lines) > 1 else 0
 
         # Calculate time since pause (rough estimate)
-        import time as time_module
-        hours_since_pause = (time_module.time() - paused_at) / 3600
+        hours_since_pause = (time.time() - paused_at) / 3600
 
         # Parse reset time from message like "resets 7pm (Europe/Paris)"
         # This is a simple heuristic - we assume if several hours have passed, quota likely reset
