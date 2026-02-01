@@ -151,6 +151,55 @@ class TestInsertPendingMission:
         for i in range(num_threads):
             assert f"- Task {i}" in content, f"Task {i} lost during concurrent insert"
 
+
+
+class TestAtomicWrite:
+    def test_writes_content(self, tmp_path):
+        from app.utils import atomic_write
+        target = tmp_path / "test.md"
+        atomic_write(target, "hello world\n")
+        assert target.read_text() == "hello world\n"
+
+    def test_overwrites_existing(self, tmp_path):
+        from app.utils import atomic_write
+        target = tmp_path / "test.md"
+        target.write_text("old content")
+        atomic_write(target, "new content")
+        assert target.read_text() == "new content"
+
+    def test_no_temp_files_left(self, tmp_path):
+        from app.utils import atomic_write
+        target = tmp_path / "test.md"
+        atomic_write(target, "content")
+        files = list(tmp_path.iterdir())
+        assert len(files) == 1
+        assert files[0].name == "test.md"
+
+    def test_concurrent_writes_no_corruption(self, tmp_path):
+        from app.utils import atomic_write
+        target = tmp_path / "missions.md"
+        target.write_text("")
+
+        errors = []
+
+        def writer(n):
+            try:
+                for _ in range(20):
+                    atomic_write(target, f"writer-{n}\n" * 10)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        content = target.read_text()
+        lines = [l for l in content.splitlines() if l]
+        assert len(set(lines)) == 1
+
     def test_preserves_utf8(self, tmp_path):
         from app.utils import atomic_write
         target = tmp_path / "test.md"
