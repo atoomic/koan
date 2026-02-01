@@ -165,7 +165,13 @@ def _build_status() -> str:
         for line in lines:
             stripped = line.strip()
             if stripped.startswith("## "):
-                current_section = stripped[3:].lower().replace(" ", "_")
+                section_name = stripped[3:].strip().lower()
+                if section_name in ("en attente", "pending"):
+                    current_section = "pending"
+                elif section_name in ("en cours", "in progress", "in_progress"):
+                    current_section = "in_progress"
+                else:
+                    current_section = None
             elif stripped.startswith("- "):
                 # Extract project tag if present
                 match = re.search(r'\[project:([a-zA-Z0-9_-]+)\]', stripped)

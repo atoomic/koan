@@ -152,15 +152,15 @@ class TestHandleMission:
 
 class TestBuildStatus:
     @patch("awake.MISSIONS_FILE")
-    def test_status_with_pending(self, mock_file, tmp_path):
-        """Note: _build_status checks for English 'pending'/'in_progress' sections."""
+    def test_status_with_french_sections(self, mock_file, tmp_path):
+        """_build_status handles French section names from missions.md."""
         missions_file = tmp_path / "missions.md"
         missions_file.write_text(
             "# Missions\n\n"
-            "## Pending\n\n"
+            "## En attente\n\n"
             "- [project:koan] add tests\n"
             "- fix bug\n\n"
-            "## In Progress\n\n"
+            "## En cours\n\n"
             "- [project:koan] doing stuff\n\n"
         )
         with patch("awake.MISSIONS_FILE", missions_file), \
