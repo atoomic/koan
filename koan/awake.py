@@ -22,6 +22,7 @@ from typing import Optional, Tuple
 
 import requests
 
+from health_check import write_heartbeat
 from notify import send_telegram
 from utils import load_dotenv, parse_project as _parse_project, insert_pending_mission
 
@@ -136,37 +137,15 @@ def handle_command(text: str):
 
 def _build_status() -> str:
     """Build status message grouped by project."""
+    from missions import group_by_project
+
     parts = ["📊 Kōan Status"]
 
     # Parse missions by project
     if MISSIONS_FILE.exists():
-        from collections import defaultdict
         content = MISSIONS_FILE.read_text()
-        missions_by_project = defaultdict(lambda: {"pending": [], "in_progress": []})
+        missions_by_project = group_by_project(content)
 
-        lines = content.splitlines()
-        current_section = None
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("## "):
-                section_name = stripped[3:].strip().lower()
-                if section_name in ("en attente", "pending"):
-                    current_section = "pending"
-                elif section_name in ("en cours", "in progress", "in_progress"):
-                    current_section = "in_progress"
-                else:
-                    current_section = None
-            elif stripped.startswith("- "):
-                # Extract project tag if present
-                match = re.search(r'\[project:([a-zA-Z0-9_-]+)\]', stripped)
-                project = match.group(1) if match else "default"
-
-                if current_section == "pending":
-                    missions_by_project[project]["pending"].append(stripped)
-                elif current_section == "in_progress":
-                    missions_by_project[project]["in_progress"].append(stripped)
-
-        # Display by project
         if missions_by_project:
             for project in sorted(missions_by_project.keys()):
                 missions = missions_by_project[project]
@@ -373,6 +352,7 @@ def main():
                 handle_message(text)
 
         flush_outbox()
+        write_heartbeat(str(KOAN_ROOT))
         time.sleep(POLL_INTERVAL)
 
 
