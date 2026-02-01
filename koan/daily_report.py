@@ -22,19 +22,9 @@ from typing import List, Optional
 from notify import send_telegram
 
 
-def _load_dotenv():
-    env_path = Path(__file__).parent.parent / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+from utils import load_dotenv
 
-
-_load_dotenv()
+load_dotenv()
 
 KOAN_ROOT = Path(__file__).parent.parent
 INSTANCE_DIR = KOAN_ROOT / "instance"

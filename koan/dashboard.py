@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
+from utils import parse_project, insert_pending_mission
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -209,26 +210,7 @@ def add_mission():
     else:
         entry = f"- {text}"
 
-    # Append to missions.md pending section
-    content = read_file(MISSIONS_FILE)
-    if not content:
-        content = "# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n"
-
-    marker = None
-    for candidate in ("## En attente", "## Pending"):
-        if candidate in content:
-            marker = candidate
-            break
-
-    if marker:
-        idx = content.index(marker) + len(marker)
-        while idx < len(content) and content[idx] == "\n":
-            idx += 1
-        content = content[:idx] + f"\n{entry}\n" + content[idx:]
-    else:
-        content += f"\n## En attente\n\n{entry}\n"
-
-    MISSIONS_FILE.write_text(content)
+    insert_pending_mission(MISSIONS_FILE, entry)
     return redirect(url_for("missions_page"))
 
 
@@ -249,31 +231,13 @@ def chat_send():
 
     if mode == "mission":
         # Queue as mission (same logic as awake.py)
-        project, mission_text = _parse_project(text)
+        project, mission_text = parse_project(text)
         if project:
             entry = f"- [project:{project}] {mission_text}"
         else:
             entry = f"- {mission_text}"
 
-        content = read_file(MISSIONS_FILE)
-        if not content:
-            content = "# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n"
-
-        marker = None
-        for candidate in ("## En attente", "## Pending"):
-            if candidate in content:
-                marker = candidate
-                break
-
-        if marker:
-            idx = content.index(marker) + len(marker)
-            while idx < len(content) and content[idx] == "\n":
-                idx += 1
-            content = content[:idx] + f"\n{entry}\n" + content[idx:]
-        else:
-            content += f"\n## En attente\n\n{entry}\n"
-
-        MISSIONS_FILE.write_text(content)
+        insert_pending_mission(MISSIONS_FILE, entry)
         return jsonify({"ok": True, "type": "mission", "text": mission_text})
 
     else:
@@ -343,15 +307,6 @@ def api_status():
             "done": len(missions["done"]),
         },
     })
-
-
-def _parse_project(text: str):
-    match = re.search(r'\[project:([a-zA-Z0-9_-]+)\]', text)
-    if match:
-        project = match.group(1)
-        cleaned = re.sub(r'\[project:[a-zA-Z0-9_-]+\]\s*', '', text).strip()
-        return project, cleaned
-    return None, text
 
 
 # ---------------------------------------------------------------------------
