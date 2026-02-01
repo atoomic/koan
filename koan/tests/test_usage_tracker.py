@@ -283,3 +283,74 @@ class TestOutputFormatting:
 
         reason = tracker.get_decision_reason("wait")
         assert "exhaust" in reason.lower()
+
+
+class TestCanAffordRun:
+    """Test can_afford_run() with cost multipliers across modes."""
+
+    def test_review_cheapest(self, usage_file_standard):
+        """Review mode costs 0.5x — affordable even with moderate budget."""
+        tracker = UsageTracker(usage_file_standard, runs_completed=5)
+        # base_cost = 25/5 = 5.0, review = 5*0.5 = 2.5
+        # available = min(65, 30) = 30 → 2.5 <= 30
+        assert tracker.can_afford_run("review") is True
+
+    def test_implement_normal_cost(self, usage_file_standard):
+        """Implement mode costs 1.0x."""
+        tracker = UsageTracker(usage_file_standard, runs_completed=5)
+        # base_cost = 5.0, implement = 5.0
+        # available = 30 → 5.0 <= 30
+        assert tracker.can_afford_run("implement") is True
+
+    def test_deep_most_expensive(self, usage_file_standard):
+        """Deep mode costs 2.0x."""
+        tracker = UsageTracker(usage_file_standard, runs_completed=5)
+        # base_cost = 5.0, deep = 10.0
+        # available = 30 → 10.0 <= 30
+        assert tracker.can_afford_run("deep") is True
+
+    def test_cannot_afford_deep_near_exhaustion(self, usage_file_high):
+        """Near-exhaustion: deep mode too expensive."""
+        tracker = UsageTracker(usage_file_high, runs_completed=3)
+        # base_cost = 85/3 ≈ 28.33, deep = 56.67
+        # available = min(5, 8) = 5 → 56.67 > 5
+        assert tracker.can_afford_run("deep") is False
+
+    def test_cannot_afford_implement_near_exhaustion(self, usage_file_high):
+        """Near-exhaustion: implement also too expensive."""
+        tracker = UsageTracker(usage_file_high, runs_completed=3)
+        # base_cost ≈ 28.33, implement = 28.33
+        # available = 5 → 28.33 > 5
+        assert tracker.can_afford_run("implement") is False
+
+    def test_review_still_possible_near_exhaustion(self, tmp_path):
+        """Review might still fit when others don't."""
+        usage = tmp_path / "usage.md"
+        usage.write_text("Session (5hr) : 80% (reset in 1h)\nWeekly (7 day) : 70% (Resets in 2d)")
+        tracker = UsageTracker(usage, runs_completed=10)
+        # base_cost = 80/10 = 8.0, review = 4.0
+        # available = min(10, 20) = 10 → 4.0 <= 10
+        assert tracker.can_afford_run("review") is True
+
+    def test_unknown_mode_defaults_to_1x(self, usage_file_standard):
+        """Unknown mode uses 1.0x multiplier (fallback)."""
+        tracker = UsageTracker(usage_file_standard, runs_completed=5)
+        assert tracker.can_afford_run("unknown_mode") is True
+
+    def test_first_run_uses_default_cost(self, usage_file_low):
+        """First run (0 completed) uses 5.0 default cost."""
+        tracker = UsageTracker(usage_file_low, runs_completed=0)
+        # base_cost = 5.0 (default), deep = 10.0
+        # available = min(80, 65) = 65 → 10.0 <= 65
+        assert tracker.can_afford_run("deep") is True
+
+    def test_exact_boundary(self, tmp_path):
+        """Cost exactly equals available budget — should be affordable."""
+        usage = tmp_path / "usage.md"
+        usage.write_text("Session (5hr) : 80% (reset in 1h)\nWeekly (7 day) : 80% (Resets in 2d)")
+        tracker = UsageTracker(usage, runs_completed=10)
+        # base_cost = 80/10 = 8.0, implement = 8.0
+        # available = min(10, 10) = 10 → 8.0 <= 10
+        assert tracker.can_afford_run("implement") is True
+        # deep = 16.0 → 16.0 > 10
+        assert tracker.can_afford_run("deep") is False

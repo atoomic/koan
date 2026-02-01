@@ -1,11 +1,12 @@
 """Tests for koan/dashboard.py"""
 
 import shutil
+import subprocess
 
 import pytest
 from jinja2 import FileSystemLoader
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from app import dashboard
 
@@ -176,6 +177,96 @@ class TestJournal:
         with patch.object(dashboard, "JOURNAL_DIR", tmp_path / "journal"):
             entries = dashboard.get_journal_entries()
             assert entries == []
+
+
+class TestChatSend:
+    """Test /chat/send endpoint — the Claude chat handler."""
+
+    @patch("app.dashboard.get_allowed_tools", return_value="")
+    @patch("app.dashboard.get_tools_description", return_value="")
+    @patch("app.dashboard.save_telegram_message")
+    @patch("app.dashboard.load_recent_telegram_history", return_value=[])
+    @patch("app.dashboard.format_conversation_history", return_value="")
+    @patch("app.dashboard.subprocess.run")
+    def test_chat_success(self, mock_run, mock_fmt, mock_hist, mock_save,
+                          mock_tools_desc, mock_tools, app_client, instance_dir):
+        mock_run.return_value = MagicMock(stdout="Salut !", returncode=0)
+        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
+             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
+             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
+             patch.object(dashboard, "JOURNAL_DIR", instance_dir / "journal"):
+            resp = app_client.post("/chat/send", data={"message": "hello", "mode": "chat"})
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["type"] == "chat"
+        assert data["response"] == "Salut !"
+        mock_run.assert_called_once()
+
+    @patch("app.dashboard.get_allowed_tools", return_value="")
+    @patch("app.dashboard.get_tools_description", return_value="")
+    @patch("app.dashboard.save_telegram_message")
+    @patch("app.dashboard.load_recent_telegram_history", return_value=[])
+    @patch("app.dashboard.format_conversation_history", return_value="")
+    @patch("app.dashboard.subprocess.run")
+    def test_chat_empty_response_fallback(self, mock_run, mock_fmt, mock_hist, mock_save,
+                                          mock_tools_desc, mock_tools, app_client, instance_dir):
+        mock_run.return_value = MagicMock(stdout="", returncode=0)
+        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
+             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
+             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
+             patch.object(dashboard, "JOURNAL_DIR", instance_dir / "journal"):
+            resp = app_client.post("/chat/send", data={"message": "hello", "mode": "chat"})
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert "Réessaie" in data["response"]
+
+    @patch("app.dashboard.get_allowed_tools", return_value="")
+    @patch("app.dashboard.get_tools_description", return_value="")
+    @patch("app.dashboard.save_telegram_message")
+    @patch("app.dashboard.load_recent_telegram_history", return_value=[])
+    @patch("app.dashboard.format_conversation_history", return_value="")
+    @patch("app.dashboard.subprocess.run")
+    def test_chat_timeout(self, mock_run, mock_fmt, mock_hist, mock_save,
+                          mock_tools_desc, mock_tools, app_client, instance_dir):
+        mock_run.side_effect = subprocess.TimeoutExpired("claude", 120)
+        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
+             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
+             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
+             patch.object(dashboard, "JOURNAL_DIR", instance_dir / "journal"):
+            resp = app_client.post("/chat/send", data={"message": "deep question", "mode": "chat"})
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert "Timeout" in data["response"]
+
+    @patch("app.dashboard.get_allowed_tools", return_value="")
+    @patch("app.dashboard.get_tools_description", return_value="")
+    @patch("app.dashboard.save_telegram_message")
+    @patch("app.dashboard.load_recent_telegram_history", return_value=[])
+    @patch("app.dashboard.format_conversation_history", return_value="")
+    @patch("app.dashboard.subprocess.run")
+    def test_chat_exception(self, mock_run, mock_fmt, mock_hist, mock_save,
+                            mock_tools_desc, mock_tools, app_client, instance_dir):
+        mock_run.side_effect = OSError("claude not found")
+        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
+             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
+             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
+             patch.object(dashboard, "JOURNAL_DIR", instance_dir / "journal"):
+            resp = app_client.post("/chat/send", data={"message": "hi", "mode": "chat"})
+        data = resp.get_json()
+        assert data["ok"] is False
+        assert "claude not found" in data["error"]
+
+    def test_chat_send_with_project_tag(self, app_client, instance_dir):
+        with patch.object(dashboard, "MISSIONS_FILE", instance_dir / "missions.md"):
+            resp = app_client.post("/chat/send", data={
+                "message": "[project:koan] add feature",
+                "mode": "mission",
+            })
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["type"] == "mission"
+        content = (instance_dir / "missions.md").read_text()
+        assert "[project:koan] add feature" in content
 
 
 class TestParseProject:
