@@ -20,6 +20,7 @@ from app.awake import (
     _format_outbox_message,
     _clean_chat_response,
     _build_status,
+    _run_in_worker,
     get_updates,
     check_config,
     MISSIONS_FILE,
@@ -137,7 +138,7 @@ class TestParseProject:
 # ---------------------------------------------------------------------------
 
 class TestHandleMission:
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     @patch("app.awake.MISSIONS_FILE")
     @patch("app.awake.INSTANCE_DIR")
     def test_mission_appended_to_pending(self, mock_inst, mock_file, mock_send, tmp_path):
@@ -154,7 +155,7 @@ class TestHandleMission:
         assert "- audit security" in content
         mock_send.assert_called_once()
 
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_mission_with_project_tag(self, mock_send, tmp_path):
         missions_file = tmp_path / "missions.md"
         missions_file.write_text(
@@ -232,7 +233,7 @@ class TestBuildStatus:
 # ---------------------------------------------------------------------------
 
 class TestHandleCommand:
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_stop_creates_file(self, mock_send, tmp_path):
         with patch("app.awake.KOAN_ROOT", tmp_path):
             handle_command("/stop")
@@ -240,7 +241,7 @@ class TestHandleCommand:
         mock_send.assert_called_once()
 
     @patch("app.awake._build_status", return_value="📊 Kōan Status\nAll clear")
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_status_calls_build_status(self, mock_send, mock_build):
         handle_command("/status")
         mock_build.assert_called_once()
@@ -262,13 +263,13 @@ class TestHandleCommand:
 # ---------------------------------------------------------------------------
 
 class TestHandleResume:
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_no_quota_file(self, mock_send, tmp_path):
         with patch("app.awake.KOAN_ROOT", tmp_path):
             handle_resume()
         assert "No pause or quota hold" in mock_send.call_args[0][0]
 
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_likely_reset(self, mock_send, tmp_path):
         quota_file = tmp_path / ".koan-quota-reset"
         old_ts = str(int(time.time()) - 3 * 3600)  # 3 hours ago
@@ -278,7 +279,7 @@ class TestHandleResume:
         assert not quota_file.exists()
         assert "Quota likely reset" in mock_send.call_args[0][0]
 
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_not_yet_reset(self, mock_send, tmp_path):
         quota_file = tmp_path / ".koan-quota-reset"
         recent_ts = str(int(time.time()) - 30 * 60)  # 30 min ago
@@ -288,7 +289,7 @@ class TestHandleResume:
         assert quota_file.exists()
         assert "not reset yet" in mock_send.call_args[0][0]
 
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_corrupt_quota_file(self, mock_send, tmp_path):
         quota_file = tmp_path / ".koan-quota-reset"
         quota_file.write_text("garbage\nnot-a-number")
@@ -330,7 +331,7 @@ class TestHandleChat:
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_allowed_tools", return_value="")
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     @patch("app.awake.subprocess.run")
     def test_chat_timeout(self, mock_run, mock_send, mock_tools,
                           mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
@@ -351,7 +352,7 @@ class TestHandleChat:
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_allowed_tools", return_value="")
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     @patch("app.awake.subprocess.run")
     def test_chat_error_nonzero_exit(self, mock_run, mock_send, mock_tools,
                                      mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
@@ -477,28 +478,28 @@ class TestHandleMessage:
         handle_message("implement dark mode")
         mock_mission.assert_called_once_with("implement dark mode")
 
-    @patch("app.awake.handle_chat")
-    def test_dispatches_chat(self, mock_chat):
+    @patch("app.awake._run_in_worker")
+    def test_dispatches_chat(self, mock_worker):
         handle_message("how are you?")
-        mock_chat.assert_called_once_with("how are you?")
+        mock_worker.assert_called_once_with(handle_chat, "how are you?")
 
     @patch("app.awake.handle_command")
     @patch("app.awake.handle_mission")
-    @patch("app.awake.handle_chat")
-    def test_empty_message_ignored(self, mock_chat, mock_mission, mock_cmd):
+    @patch("app.awake._run_in_worker")
+    def test_empty_message_ignored(self, mock_worker, mock_mission, mock_cmd):
         handle_message("")
         mock_cmd.assert_not_called()
         mock_mission.assert_not_called()
-        mock_chat.assert_not_called()
+        mock_worker.assert_not_called()
 
     @patch("app.awake.handle_command")
     @patch("app.awake.handle_mission")
-    @patch("app.awake.handle_chat")
-    def test_whitespace_only_ignored(self, mock_chat, mock_mission, mock_cmd):
+    @patch("app.awake._run_in_worker")
+    def test_whitespace_only_ignored(self, mock_worker, mock_mission, mock_cmd):
         handle_message("   \n  ")
         mock_cmd.assert_not_called()
         mock_mission.assert_not_called()
-        mock_chat.assert_not_called()
+        mock_worker.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -597,7 +598,7 @@ class TestMainLoop:
         mock_updates.assert_called_once_with(None)
         mock_handle.assert_called_once_with("hello")
         mock_flush.assert_called_once()
-        mock_heartbeat.assert_called_once()
+        mock_heartbeat.assert_called()
 
     @patch("app.awake.write_heartbeat")
     @patch("app.awake.flush_outbox")
@@ -653,7 +654,7 @@ class TestMainLoop:
             main()
         mock_handle.assert_not_called()
         mock_flush.assert_called_once()
-        mock_heartbeat.assert_called_once()
+        mock_heartbeat.assert_called()
 
     @patch("app.awake.write_heartbeat")
     @patch("app.awake.flush_outbox")
@@ -678,7 +679,7 @@ class TestMainLoop:
 # ---------------------------------------------------------------------------
 
 class TestPauseCommand:
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_pause_creates_file(self, mock_send, tmp_path):
         with patch("app.awake.KOAN_ROOT", tmp_path):
             handle_command("/pause")
@@ -686,14 +687,14 @@ class TestPauseCommand:
         mock_send.assert_called_once()
         assert "paused" in mock_send.call_args[0][0].lower()
 
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_pause_already_paused(self, mock_send, tmp_path):
         (tmp_path / ".koan-pause").write_text("PAUSE")
         with patch("app.awake.KOAN_ROOT", tmp_path):
             handle_command("/pause")
         assert "already paused" in mock_send.call_args[0][0].lower()
 
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_resume_clears_pause(self, mock_send, tmp_path):
         (tmp_path / ".koan-pause").write_text("PAUSE")
         with patch("app.awake.KOAN_ROOT", tmp_path):
@@ -701,7 +702,7 @@ class TestPauseCommand:
         assert not (tmp_path / ".koan-pause").exists()
         assert "unpaused" in mock_send.call_args[0][0].lower()
 
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_resume_pause_takes_priority_over_quota(self, mock_send, tmp_path):
         """If both pause and quota files exist, /resume clears pause first."""
         (tmp_path / ".koan-pause").write_text("PAUSE")
@@ -712,7 +713,7 @@ class TestPauseCommand:
         assert (tmp_path / ".koan-quota-reset").exists()
         assert "unpaused" in mock_send.call_args[0][0].lower()
 
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     def test_status_shows_pause(self, mock_send, tmp_path):
         (tmp_path / ".koan-pause").write_text("PAUSE")
         instance = tmp_path / "instance"
@@ -735,7 +736,7 @@ class TestChatLiteRetryErrors:
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_allowed_tools", return_value="")
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     @patch("app.awake.subprocess.run")
     def test_lite_retry_non_timeout_error(self, mock_run, mock_send, mock_tools,
                                            mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
@@ -759,7 +760,7 @@ class TestChatLiteRetryErrors:
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_allowed_tools", return_value="")
-    @patch("app.awake.format_and_send")
+    @patch("app.awake.send_telegram")
     @patch("app.awake.subprocess.run")
     def test_lite_retry_timeout_says_timeout(self, mock_run, mock_send, mock_tools,
                                               mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):

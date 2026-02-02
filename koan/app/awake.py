@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -25,7 +26,7 @@ import requests
 
 from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
 from app.health_check import write_heartbeat
-from app.notify import send_telegram, format_and_send
+from app.notify import send_telegram
 from app.utils import (
     load_dotenv,
     parse_project as _parse_project,
@@ -132,21 +133,21 @@ def handle_command(text: str):
 
     if cmd == "/stop":
         (KOAN_ROOT / ".koan-stop").write_text("STOP")
-        format_and_send("Stop requested. Current mission will complete, then Kōan will stop.")
+        send_telegram("Stop requested. Current mission will complete, then Kōan will stop.")
         return
 
     if cmd == "/pause":
         pause_file = KOAN_ROOT / ".koan-pause"
         if pause_file.exists():
-            format_and_send("Kōan is already paused. Use /resume to unpause.")
+            send_telegram("Already paused. /resume to unpause.")
         else:
             pause_file.write_text("PAUSE")
-            format_and_send("Kōan paused. The run loop stays active but no missions will be executed. Use /resume to unpause.")
+            send_telegram("Paused. No missions will run. /resume to unpause.")
         return
 
     if cmd == "/status":
         status = _build_status()
-        format_and_send(status)
+        send_telegram(status)
         return
 
     if cmd == "/resume":
@@ -208,11 +209,11 @@ def handle_resume():
 
     if pause_file.exists():
         pause_file.unlink(missing_ok=True)
-        format_and_send("Kōan unpaused. Missions will resume on the next loop iteration.")
+        send_telegram("Unpaused. Missions resume next cycle.")
         return
 
     if not quota_file.exists():
-        format_and_send("No pause or quota hold detected. Kōan is either running or was stopped normally. Use /status to check current state.")
+        send_telegram("No pause or quota hold detected. /status to check.")
         return
 
     try:
@@ -220,21 +221,17 @@ def handle_resume():
         reset_info = lines[0] if lines else "unknown time"
         paused_at = int(lines[1]) if len(lines) > 1 else 0
 
-        # Calculate time since pause (rough estimate)
         hours_since_pause = (time.time() - paused_at) / 3600
-
-        # Parse reset time from message like "resets 7pm (Europe/Paris)"
-        # This is a simple heuristic - we assume if several hours have passed, quota likely reset
         likely_reset = hours_since_pause >= 2
 
         if likely_reset:
-            quota_file.unlink(missing_ok=True)  # Remove the quota marker
-            format_and_send(f"Quota likely reset ({reset_info}, paused {hours_since_pause:.1f}h ago). To resume, run: make run. The run loop will start fresh.")
+            quota_file.unlink(missing_ok=True)
+            send_telegram(f"Quota likely reset ({reset_info}, paused {hours_since_pause:.1f}h ago). Restart with: make run")
         else:
-            format_and_send(f"Quota probably not reset yet ({reset_info}). Paused {hours_since_pause:.1f}h ago. Check back later.")
+            send_telegram(f"Quota not reset yet ({reset_info}). Paused {hours_since_pause:.1f}h ago. Check back later.")
     except Exception as e:
         print(f"[awake] Error checking quota reset: {e}")
-        format_and_send("Error checking quota status. Try /status or check manually.")
+        send_telegram("Error checking quota. /status or check manually.")
 
 
 def handle_mission(text: str):
@@ -262,7 +259,7 @@ def handle_mission(text: str):
     if project:
         ack_msg += f" (project: {project})"
     ack_msg += f":\n\n{mission_text[:500]}"
-    format_and_send(ack_msg)
+    send_telegram(ack_msg)
     print(f"[awake] Mission queued: [{project or 'default'}] {mission_text[:60]}")
 
 
@@ -293,6 +290,21 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
     prefs_path = INSTANCE_DIR / "memory" / "global" / "human-preferences.md"
     if prefs_path.exists():
         prefs_context = prefs_path.read_text().strip()
+
+    # Load current mission state (live sync with run loop)
+    missions_context = ""
+    if MISSIONS_FILE.exists():
+        from app.missions import parse_sections
+        sections = parse_sections(MISSIONS_FILE.read_text())
+        in_progress = sections.get("in_progress", [])
+        pending = sections.get("pending", [])
+        if in_progress or pending:
+            parts = []
+            if in_progress:
+                parts.append("In progress: " + "; ".join(in_progress[:3]))
+            if pending:
+                parts.append(f"Pending: {len(pending)} mission(s)")
+            missions_context = "\n".join(parts)
 
     # Determine time-of-day for natural tone
     hour = datetime.now().hour
@@ -385,7 +397,7 @@ def handle_chat(text: str):
         elif result.returncode != 0:
             print(f"[awake] Claude error: {result.stderr[:200]}")
             error_msg = "Hmm, I couldn't formulate a response. Try again?"
-            format_and_send(error_msg)
+            send_telegram(error_msg)
             save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", error_msg)
         else:
             print("[awake] Empty response from Claude.")
@@ -406,16 +418,16 @@ def handle_chat(text: str):
                 print(f"[awake] Chat reply (lite retry): {response[:80]}...")
             else:
                 timeout_msg = f"Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
-                format_and_send(timeout_msg)
+                send_telegram(timeout_msg)
                 save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
         except subprocess.TimeoutExpired:
             timeout_msg = f"Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
-            format_and_send(timeout_msg)
+            send_telegram(timeout_msg)
             save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
         except Exception as e:
             print(f"[awake] Lite retry error: {e}")
             error_msg = "Something went wrong — try again?"
-            format_and_send(error_msg)
+            send_telegram(error_msg)
             save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", error_msg)
     except Exception as e:
         print(f"[awake] Claude error: {e}")
@@ -478,6 +490,25 @@ def _format_outbox_message(raw_content: str) -> str:
 # Main loop
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Worker thread — runs handle_chat in background so polling stays responsive
+# ---------------------------------------------------------------------------
+
+_worker_thread: Optional[threading.Thread] = None
+_worker_lock = threading.Lock()
+
+
+def _run_in_worker(fn, *args):
+    """Run fn(*args) in a background thread. One worker at a time."""
+    global _worker_thread
+    with _worker_lock:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            send_telegram("Busy with a previous message. Try again in a moment.")
+            return
+        _worker_thread = threading.Thread(target=fn, args=args, daemon=True)
+        _worker_thread.start()
+
+
 def handle_message(text: str):
     text = text.strip()
     if not text:
@@ -488,11 +519,15 @@ def handle_message(text: str):
     elif is_mission(text):
         handle_mission(text)
     else:
-        handle_chat(text)
+        _run_in_worker(handle_chat, text)
 
 
 def main():
     check_config()
+    # Purge stale heartbeat so health_check doesn't report STALE on restart
+    heartbeat_file = KOAN_ROOT / ".koan-heartbeat"
+    heartbeat_file.unlink(missing_ok=True)
+    write_heartbeat(str(KOAN_ROOT))
     print(f"[awake] Token: ...{BOT_TOKEN[-8:]}")
     print(f"[awake] Chat ID: {CHAT_ID}")
     print(f"[awake] Soul: {len(SOUL)} chars loaded")
