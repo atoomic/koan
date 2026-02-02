@@ -334,6 +334,32 @@ create koan/* branches, commit, and push, but DO NOT merge yourself.
   fi
   PROMPT="$PROMPT$MERGE_POLICY"
 
+  # Create pending.md — live progress journal for this run
+  PENDING_FILE="$INSTANCE/journal/pending.md"
+  JOURNAL_DIR="$INSTANCE/journal/$(date +%Y-%m-%d)"
+  mkdir -p "$JOURNAL_DIR"
+  if [ -n "$MISSION_TITLE" ]; then
+    cat > "$PENDING_FILE" <<EOF
+# Mission: $MISSION_TITLE
+Project: $PROJECT_NAME
+Started: $(date '+%Y-%m-%d %H:%M:%S')
+Run: $RUN_NUM/$MAX_RUNS
+Mode: ${AUTONOMOUS_MODE:-mission}
+
+---
+EOF
+  else
+    cat > "$PENDING_FILE" <<EOF
+# Autonomous run
+Project: $PROJECT_NAME
+Started: $(date '+%Y-%m-%d %H:%M:%S')
+Run: $RUN_NUM/$MAX_RUNS
+Mode: $AUTONOMOUS_MODE
+
+---
+EOF
+  fi
+
   # Execute next mission, capture output to detect quota errors
   cd "$PROJECT_PATH"
   CLAUDE_OUT="$(mktemp)"
@@ -380,6 +406,20 @@ Koan paused after $count runs. Send /resume via Telegram when quota resets to ch
   fi
   rm -f "$CLAUDE_OUT"
   CLAUDE_OUT=""
+
+  # If Claude didn't clean up pending.md, archive it to daily journal
+  PENDING_FILE="$INSTANCE/journal/pending.md"
+  if [ -f "$PENDING_FILE" ]; then
+    JOURNAL_DIR="$INSTANCE/journal/$(date +%Y-%m-%d)"
+    mkdir -p "$JOURNAL_DIR"
+    JOURNAL_FILE="$JOURNAL_DIR/$PROJECT_NAME.md"
+    echo "" >> "$JOURNAL_FILE"
+    echo "## Run $RUN_NUM — $(date '+%H:%M') (auto-archived from pending)" >> "$JOURNAL_FILE"
+    echo "" >> "$JOURNAL_FILE"
+    cat "$PENDING_FILE" >> "$JOURNAL_FILE"
+    rm -f "$PENDING_FILE"
+    echo "[koan] pending.md archived to journal (Claude didn't clean up)"
+  fi
 
   # Report result with mission title
   if [ $CLAUDE_EXIT -eq 0 ]; then

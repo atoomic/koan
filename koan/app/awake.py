@@ -291,9 +291,25 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
     if prefs_path.exists():
         prefs_context = prefs_path.read_text().strip()
 
+    # Load live progress from pending.md (run in progress)
+    pending_context = ""
+    pending_path = INSTANCE_DIR / "journal" / "pending.md"
+    if pending_path.exists():
+        try:
+            pending_content = pending_path.read_text()
+            # Take last 1500 chars for recent progress
+            if len(pending_content) > 1500:
+                pending_context = "Live progress (pending.md, last entries):\n...\n" + pending_content[-1500:]
+            else:
+                pending_context = "Live progress (pending.md):\n" + pending_content
+        except Exception:
+            pass
+
     # Load current mission state (live sync with run loop)
     missions_context = ""
-    if MISSIONS_FILE.exists():
+    if pending_context:
+        missions_context = pending_context
+    elif MISSIONS_FILE.exists():
         from app.missions import parse_sections
         sections = parse_sections(MISSIONS_FILE.read_text())
         in_progress = sections.get("in_progress", [])
@@ -328,6 +344,7 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
     summary_block = f"Summary of past sessions:\n{SUMMARY[:summary_budget]}" if SUMMARY and summary_budget else ""
     prefs_block = f"About the human:\n{prefs_context}" if prefs_context else ""
     journal_block = f"Today's journal (excerpt):\n{journal_context}" if journal_context else ""
+    missions_block = f"Current missions state:\n{missions_context}" if missions_context else ""
 
     prompt = load_prompt(
         "chat",
@@ -336,6 +353,7 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
         PREFS=prefs_block,
         SUMMARY=summary_block,
         JOURNAL=journal_block,
+        MISSIONS=missions_block,
         HISTORY=history_context or "",
         TIME_HINT=time_hint,
         TEXT=text,

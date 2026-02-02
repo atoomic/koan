@@ -23,6 +23,30 @@ from pathlib import Path
 from app.notify import format_and_send
 
 
+def check_pending_journal(instance_dir: str) -> bool:
+    """Check if a pending.md exists from an interrupted run. Returns True if found.
+
+    We do NOT delete it — the next Claude session reads it for recovery context.
+    We just log its presence so the human knows recovery will happen.
+    """
+    pending_path = Path(instance_dir) / "journal" / "pending.md"
+    if pending_path.exists():
+        content = pending_path.read_text().strip()
+        lines = content.splitlines()
+        # Count progress lines (after the --- separator)
+        separator_seen = False
+        progress_lines = 0
+        for line in lines:
+            if line.strip() == "---":
+                separator_seen = True
+                continue
+            if separator_seen and line.strip():
+                progress_lines += 1
+        print(f"[recover] Found pending.md with {progress_lines} progress entries — next run will resume")
+        return True
+    return False
+
+
 def recover_missions(instance_dir: str) -> int:
     """Move stale in-progress simple missions back to pending. Returns count."""
     missions_path = Path(instance_dir) / "missions.md"
@@ -134,12 +158,18 @@ if __name__ == "__main__":
         sys.exit(1)
 
     instance_dir = sys.argv[1]
+    has_pending = check_pending_journal(instance_dir)
     count = recover_missions(instance_dir)
 
-    if count > 0:
-        msg = f"Restart — {count} mission(s) recovered from interrupted run, moved back to Pending."
+    if count > 0 or has_pending:
+        parts = []
+        if count > 0:
+            parts.append(f"{count} mission(s) moved back to Pending")
+        if has_pending:
+            parts.append("interrupted run detected (pending.md) — will resume")
+        msg = "Restart — " + ", ".join(parts) + "."
         format_and_send(msg)
-        print(f"[recover] {count} mission(s) moved back to Pending")
+        print(f"[recover] {msg}")
     else:
         print("[recover] No stale missions found")
 
