@@ -1,14 +1,18 @@
-"""Tests for memory_manager.py — scoped summary, compaction, learnings dedup."""
+"""Tests for memory_manager.py — scoped summary, compaction, learnings dedup, journal archival."""
 
 import pytest
+from datetime import date, timedelta
 
 from app.memory_manager import (
     parse_summary_sessions,
     scoped_summary,
     compact_summary,
     cleanup_learnings,
+    cap_learnings,
+    archive_journals,
     run_cleanup,
     _extract_project_hint,
+    _extract_session_digest,
 )
 
 
@@ -243,3 +247,197 @@ class TestRunCleanup:
         (mem / "summary.md").write_text("# Summary\n\n## 2026-02-01\n\nSession 1 : work\n")
         stats = run_cleanup(str(tmp_path))
         assert stats["summary_compacted"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _extract_session_digest
+# ---------------------------------------------------------------------------
+
+class TestExtractSessionDigest:
+
+    def test_session_with_subheader(self):
+        content = "## Session 23 — Run 1/20\n\n### Mode autonome — US 5.1\n\nLots of details...\n"
+        digests = _extract_session_digest(content)
+        assert len(digests) == 1
+        assert "Session 23" in digests[0]
+        assert "US 5.1" in digests[0]
+
+    def test_session_without_subheader(self):
+        content = "## Session 5 — Run 3/20\n\nDid stuff without sub-header.\n"
+        digests = _extract_session_digest(content)
+        assert len(digests) == 1
+        assert "Session 5" in digests[0]
+
+    def test_multiple_sessions(self):
+        content = (
+            "## Session 1 — Run 1/20\n\n### Fix bug A\n\nDetails.\n\n"
+            "## Session 2 — Run 2/20\n\n### Add feature B\n\nMore details.\n"
+        )
+        digests = _extract_session_digest(content)
+        assert len(digests) == 2
+        assert "Fix bug A" in digests[0]
+        assert "Add feature B" in digests[1]
+
+    def test_empty_content(self):
+        assert _extract_session_digest("") == []
+
+    def test_no_sessions(self):
+        assert _extract_session_digest("Just some text\nwithout headers\n") == []
+
+    def test_mode_header(self):
+        content = "## Mode autonome\n\n### Audit sécurité\n\nFindings...\n"
+        digests = _extract_session_digest(content)
+        assert len(digests) == 1
+        assert "Audit sécurité" in digests[0]
+
+
+# ---------------------------------------------------------------------------
+# archive_journals
+# ---------------------------------------------------------------------------
+
+class TestArchiveJournals:
+
+    def _make_journal_day(self, tmp_path, date_str, project, content):
+        """Create a nested journal entry: journal/YYYY-MM-DD/project.md"""
+        day_dir = tmp_path / "journal" / date_str
+        day_dir.mkdir(parents=True, exist_ok=True)
+        (day_dir / f"{project}.md").write_text(content)
+
+    def test_archives_old_journals(self, tmp_path):
+        old_date = (date.today() - timedelta(days=35)).strftime("%Y-%m-%d")
+        old_month = old_date[:7]
+        self._make_journal_day(
+            tmp_path, old_date, "koan",
+            "## Session 1 — Run 1/20\n\n### Fix bug\n\nDetails.\n"
+        )
+        stats = archive_journals(str(tmp_path), archive_after_days=30)
+        assert stats["archived_days"] == 1
+        assert stats["archive_lines"] == 1
+
+        # Archive file created
+        archive = tmp_path / "journal" / "archives" / old_month / "koan.md"
+        assert archive.exists()
+        content = archive.read_text()
+        assert "Fix bug" in content
+        assert old_date in content
+
+        # Original deleted
+        assert not (tmp_path / "journal" / old_date).exists()
+
+    def test_skips_recent_journals(self, tmp_path):
+        recent_date = (date.today() - timedelta(days=5)).strftime("%Y-%m-%d")
+        self._make_journal_day(
+            tmp_path, recent_date, "koan", "## Session 1\n\nRecent.\n"
+        )
+        stats = archive_journals(str(tmp_path), archive_after_days=30)
+        assert stats["archived_days"] == 0
+        # Original still exists
+        assert (tmp_path / "journal" / recent_date).exists()
+
+    def test_deletes_very_old_journals(self, tmp_path):
+        very_old = (date.today() - timedelta(days=100)).strftime("%Y-%m-%d")
+        self._make_journal_day(
+            tmp_path, very_old, "koan", "## Session 1\n\n### Ancient\n\nOld.\n"
+        )
+        stats = archive_journals(str(tmp_path), archive_after_days=30, delete_after_days=90)
+        assert stats["deleted_days"] == 1
+
+    def test_flat_legacy_journal(self, tmp_path):
+        old_date = (date.today() - timedelta(days=40)).strftime("%Y-%m-%d")
+        journal_dir = tmp_path / "journal"
+        journal_dir.mkdir(parents=True)
+        (journal_dir / f"{old_date}.md").write_text(
+            "## Session 1\n\n### Legacy work\n\nStuff.\n"
+        )
+        stats = archive_journals(str(tmp_path), archive_after_days=30)
+        assert stats["archived_days"] == 1
+        assert not (journal_dir / f"{old_date}.md").exists()
+
+    def test_no_journal_dir(self, tmp_path):
+        stats = archive_journals(str(tmp_path))
+        assert stats["archived_days"] == 0
+
+    def test_idempotent_archive(self, tmp_path):
+        """Running archive twice doesn't duplicate lines."""
+        old_date = (date.today() - timedelta(days=35)).strftime("%Y-%m-%d")
+        old_month = old_date[:7]
+        self._make_journal_day(
+            tmp_path, old_date, "koan",
+            "## Session 1\n\n### Work A\n\nDetails.\n"
+        )
+        archive_journals(str(tmp_path), archive_after_days=30)
+
+        # Create another day and run again
+        old_date2 = (date.today() - timedelta(days=36)).strftime("%Y-%m-%d")
+        self._make_journal_day(
+            tmp_path, old_date2, "koan",
+            "## Session 2\n\n### Work B\n\nMore.\n"
+        )
+        archive_journals(str(tmp_path), archive_after_days=30)
+
+        archive = tmp_path / "journal" / "archives" / old_month / "koan.md"
+        content = archive.read_text()
+        # Each digest line appears exactly once
+        lines = [l for l in content.splitlines() if l.strip().startswith(old_date)]
+        assert len(lines) == 1
+
+    def test_multiple_projects_same_day(self, tmp_path):
+        old_date = (date.today() - timedelta(days=35)).strftime("%Y-%m-%d")
+        old_month = old_date[:7]
+        self._make_journal_day(
+            tmp_path, old_date, "koan",
+            "## Session 1\n\n### Koan work\n\nK.\n"
+        )
+        self._make_journal_day(
+            tmp_path, old_date, "anantys-back",
+            "## Session 2\n\n### Anantys work\n\nA.\n"
+        )
+        stats = archive_journals(str(tmp_path), archive_after_days=30)
+        assert stats["archive_lines"] == 2
+
+        # Separate archive files per project
+        assert (tmp_path / "journal" / "archives" / old_month / "koan.md").exists()
+        assert (tmp_path / "journal" / "archives" / old_month / "anantys-back.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# cap_learnings
+# ---------------------------------------------------------------------------
+
+class TestCapLearnings:
+
+    def _write_learnings(self, tmp_path, project, content):
+        p = tmp_path / "memory" / "projects" / project
+        p.mkdir(parents=True, exist_ok=True)
+        (p / "learnings.md").write_text(content)
+        return p / "learnings.md"
+
+    def test_caps_oversized_learnings(self, tmp_path):
+        lines = ["# Learnings\n", ""]
+        for i in range(300):
+            lines.append(f"- fact {i}")
+        path = self._write_learnings(tmp_path, "koan", "\n".join(lines))
+
+        removed = cap_learnings(str(tmp_path), "koan", max_lines=100)
+        assert removed == 200
+        content = path.read_text()
+        assert "fact 299" in content  # recent kept
+        assert "fact 0" not in content  # old removed
+        assert "archived" in content  # truncation note
+
+    def test_no_cap_needed(self, tmp_path):
+        self._write_learnings(tmp_path, "koan", "# Learnings\n\n- A\n- B\n")
+        assert cap_learnings(str(tmp_path), "koan", max_lines=200) == 0
+
+    def test_missing_file(self, tmp_path):
+        assert cap_learnings(str(tmp_path), "koan") == 0
+
+    def test_preserves_header(self, tmp_path):
+        lines = ["# Learnings\n", ""]
+        for i in range(50):
+            lines.append(f"- fact {i}")
+        path = self._write_learnings(tmp_path, "koan", "\n".join(lines))
+
+        cap_learnings(str(tmp_path), "koan", max_lines=10)
+        content = path.read_text()
+        assert content.startswith("# Learnings")
