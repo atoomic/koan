@@ -286,11 +286,9 @@ class TestDailyReportCLI:
         missions_file = tmp_path / "missions.md"
         missions_file.write_text("# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n\n")
         marker = tmp_path / ".marker"
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"ok": True}
         with patch("sys.argv", ["daily_report.py", "--morning"]), \
-             patch("requests.post", return_value=mock_resp), \
+             patch("app.notify.format_and_send", return_value=True), \
+             patch("app.daily_report.format_and_send", return_value=True), \
              patch("app.daily_report.MISSIONS_FILE", missions_file), \
              patch("app.daily_report.INSTANCE_DIR", tmp_path), \
              patch("app.daily_report.REPORT_MARKER", marker), \
@@ -302,11 +300,9 @@ class TestDailyReportCLI:
         missions_file = tmp_path / "missions.md"
         missions_file.write_text("# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n\n")
         marker = tmp_path / ".marker"
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"ok": True}
         with patch("sys.argv", ["daily_report.py", "--evening"]), \
-             patch("requests.post", return_value=mock_resp), \
+             patch("app.notify.format_and_send", return_value=True), \
+             patch("app.daily_report.format_and_send", return_value=True), \
              patch("app.daily_report.MISSIONS_FILE", missions_file), \
              patch("app.daily_report.INSTANCE_DIR", tmp_path), \
              patch("app.daily_report.REPORT_MARKER", marker), \
@@ -325,11 +321,9 @@ class TestDailyReportCLI:
     def test_cli_send_failure_exits_1(self, tmp_path):
         missions_file = tmp_path / "missions.md"
         missions_file.write_text("# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n\n")
-        mock_resp = MagicMock()
-        mock_resp.status_code = 400
-        mock_resp.json.return_value = {"ok": False, "description": "Bad Request"}
         with patch("sys.argv", ["daily_report.py", "--morning"]), \
-             patch("requests.post", return_value=mock_resp), \
+             patch("app.notify.format_and_send", return_value=False), \
+             patch("app.daily_report.format_and_send", return_value=False), \
              patch("app.daily_report.MISSIONS_FILE", missions_file), \
              patch("app.daily_report.INSTANCE_DIR", tmp_path), \
              pytest.raises(SystemExit) as exc_info:

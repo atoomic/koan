@@ -16,6 +16,10 @@ Read {INSTANCE}/memory/projects/{PROJECT_NAME}/ for project-specific learnings.
 
 Read {INSTANCE}/missions.md for your current task list.
 
+# Project rules : CLAUDE.md
+
+Look for `{PROJECT_PATH}/CLAUDE.md` and if it exists, read it as your master reference for coding guidelines and project rules to follow.
+
 # Priority
 
 1. MISSIONS: Pick the first Pending mission FOR THIS PROJECT ({PROJECT_NAME}).

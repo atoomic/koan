@@ -113,8 +113,12 @@ done
 # Daily report check (morning recap or evening summary)
 "$PYTHON" "$DAILY_REPORT" 2>/dev/null || true
 
+##
+# Kōan main loop - alive and running
+##
 while [ $count -lt $MAX_RUNS ]; do
-  # Check for stop request
+  
+  # Check for stop request - graceful shutdown
   if [ -f "$KOAN_ROOT/.koan-stop" ]; then
     echo "[koan] Stop requested."
     rm -f "$KOAN_ROOT/.koan-stop"
@@ -126,9 +130,10 @@ while [ $count -lt $MAX_RUNS ]; do
   if [ -f "$KOAN_ROOT/.koan-pause" ]; then
     echo "[koan] Paused. Contemplative mode. ($(date '+%H:%M'))"
 
-    # ~30% chance of a contemplative session (imprévisible)
+    # ~50% chance of a contemplative session
+    STEP_IN_PROBABILITY=50
     ROLL=$((RANDOM % 100))
-    if [ $ROLL -lt 30 ]; then
+    if [ $ROLL -lt $STEP_IN_PROBABILITY ]; then
       echo "[koan] A thought stirs..."
       PROJECT_NAME="${PROJECT_NAMES[0]}"
       PROJECT_PATH="${PROJECT_PATHS[0]}"

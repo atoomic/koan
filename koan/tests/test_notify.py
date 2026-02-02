@@ -107,7 +107,8 @@ class TestFormatAndSend:
         mock_send.assert_called_once_with("clean msg")
 
     @patch("app.notify.send_telegram", return_value=True)
-    def test_no_koan_root_sends_fallback(self, mock_send, monkeypatch):
+    @patch("app.notify.load_dotenv")
+    def test_no_koan_root_sends_fallback(self, mock_dotenv, mock_send, monkeypatch):
         """Without KOAN_ROOT and no instance_dir, sends basic fallback."""
         monkeypatch.delenv("KOAN_ROOT", raising=False)
         result = format_and_send("raw technical msg")

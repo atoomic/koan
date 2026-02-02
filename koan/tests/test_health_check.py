@@ -93,7 +93,8 @@ class TestHealthCheckCLI:
         write_heartbeat(str(tmp_path))
         monkeypatch.setattr("sys.argv", ["health_check.py", str(tmp_path)])
         f = io.StringIO()
-        with patch("app.health_check.format_and_send"), \
+        with patch("app.notify.format_and_send"), \
+             patch("app.health_check.format_and_send"), \
              contextlib.redirect_stdout(f), \
              pytest.raises(SystemExit) as exc_info:
             runpy.run_module("app.health_check", run_name="__main__")
@@ -106,7 +107,8 @@ class TestHealthCheckCLI:
         hb.write_text(str(time.time() - 300))
         monkeypatch.setattr("sys.argv", ["health_check.py", str(tmp_path), "--max-age", "60"])
         f = io.StringIO()
-        with patch("app.health_check.format_and_send"), \
+        with patch("app.notify.format_and_send"), \
+             patch("app.health_check.format_and_send"), \
              contextlib.redirect_stdout(f), \
              pytest.raises(SystemExit) as exc_info:
             runpy.run_module("app.health_check", run_name="__main__")

@@ -23,6 +23,12 @@ Run a single test file:
 .venv/bin/pytest koan/tests/test_missions.py -v
 ```
 
+## Test suite 
+
+- Never call Claude (subprocess) in tests. Mock `format_and_send` which invokes Claude CLI for message formatting.
+- With `runpy.run_module()` (CLI tests), patch both `app.<module>.format_and_send` **and** `app.notify.format_and_send` — `runpy` re-executes the module so the import-level binding escapes the first patch.
+- When `load_dotenv()` would reload env vars from `.env` (defeating `monkeypatch.delenv`), patch `app.notify.load_dotenv` too.
+
 ## Architecture
 
 Two parallel processes run independently:
