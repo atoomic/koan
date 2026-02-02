@@ -241,8 +241,12 @@ while [ $count -lt $MAX_RUNS ]; do
     FOCUS_AREA="Execute assigned mission"
   fi
 
-  echo "Project: $PROJECT_NAME"
-  echo "  Path: $PROJECT_PATH"
+  # Enforce current project state
+  echo "$PROJECT_NAME" > "$KOAN_ROOT/.koan-project"
+  export KOAN_CURRENT_PROJECT="$PROJECT_NAME"
+  export KOAN_CURRENT_PROJECT_PATH="$PROJECT_PATH"
+
+  echo ">>> Current project: $PROJECT_NAME ($PROJECT_PATH)"
   echo ""
 
   # Mission lifecycle notification: taken or autonomous
@@ -251,7 +255,7 @@ while [ $count -lt $MAX_RUNS ]; do
     echo "  Mission: $MISSION_TITLE"
     echo "  Project: $PROJECT_NAME"
     echo ""
-    notify "Run $RUN_NUM/$MAX_RUNS — Mission taken: $MISSION_TITLE"
+    notify "Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME] Mission taken: $MISSION_TITLE"
   else
     ESTIMATED_COST="5.0"
     # Uppercase mode for display (bash 3.2 compatible)
@@ -356,9 +360,9 @@ Koan paused after $count runs. Send /resume via Telegram when quota resets to ch
   # Report result with mission title
   if [ $CLAUDE_EXIT -eq 0 ]; then
     if [ -n "$MISSION_TITLE" ]; then
-      notify "Run $RUN_NUM/$MAX_RUNS — Mission completed: $MISSION_TITLE"
+      notify "Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME] Mission completed: $MISSION_TITLE"
     else
-      notify "Run $RUN_NUM/$MAX_RUNS — Autonomous run completed"
+      notify "Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME] Autonomous run completed"
     fi
 
     # Extract journal summary and append raw to outbox
@@ -389,9 +393,9 @@ with open('$INSTANCE/outbox.md', 'a') as f:
     fi
   else
     if [ -n "$MISSION_TITLE" ]; then
-      notify "Run $RUN_NUM/$MAX_RUNS — Mission failed: $MISSION_TITLE"
+      notify "Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME] Mission failed: $MISSION_TITLE"
     else
-      notify "Run $RUN_NUM/$MAX_RUNS — Run failed"
+      notify "Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME] Run failed"
     fi
   fi
 

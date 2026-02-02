@@ -13,6 +13,7 @@ venv/
 # Runtime
 .koan-status
 .koan-stop
+.koan-project
 .koan-quota-reset
 
 # Environment & secrets

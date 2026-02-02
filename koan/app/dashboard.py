@@ -124,6 +124,45 @@ def get_journal_entries(limit: int = 7) -> list:
     return entries
 
 
+def _build_dashboard_prompt(text: str, *, lite: bool = False) -> str:
+    """Build the prompt for a dashboard chat response.
+
+    Args:
+        text: The user's message.
+        lite: If True, strip heavy context (journal, summary) to reduce prompt size.
+    """
+    from app.utils import read_all_journals
+
+    history = load_recent_telegram_history(TELEGRAM_HISTORY_FILE, max_messages=10)
+    history_context = format_conversation_history(history)
+
+    soul = read_file(SOUL_FILE)
+
+    summary = ""
+    if not lite:
+        summary = read_file(SUMMARY_FILE)[:1500]
+
+    journal_context = ""
+    if not lite:
+        journal_content = read_all_journals(INSTANCE_DIR, date.today())
+        if journal_content:
+            journal_context = journal_content[-2000:] if len(journal_content) > 2000 else journal_content
+
+    tools_desc = get_tools_description()
+
+    prompt_parts = [
+        f"You are Kōan. Here is your identity:\n\n{soul}\n",
+        f"{tools_desc}\n" if tools_desc else "",
+        f"Summary of past sessions:\n{summary}\n" if summary else "",
+        f"Today's journal (excerpt):\n{journal_context}\n" if journal_context else "",
+        f"{history_context}\n" if history_context else "",
+        f"The human sends you this message via the dashboard:\n\n  « {text} »\n",
+        "Respond directly. Be concise and natural. "
+        "2-3 sentences max unless the question requires more.\n"
+    ]
+    return "\n".join([p for p in prompt_parts if p])
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -215,39 +254,11 @@ def chat_send():
         # Save user message to history
         save_telegram_message(TELEGRAM_HISTORY_FILE, "user", text)
 
-        # Load recent conversation history
-        history = load_recent_telegram_history(TELEGRAM_HISTORY_FILE, max_messages=10)
-        history_context = format_conversation_history(history)
-
-        soul = read_file(SOUL_FILE)
-        summary = read_file(SUMMARY_FILE)[:1500]
-
-        # Load today's journal
-        journal_context = ""
-        from app.utils import read_all_journals
-        journal_content = read_all_journals(INSTANCE_DIR, date.today())
-        if journal_content:
-            journal_context = journal_content[-2000:] if len(journal_content) > 2000 else journal_content
-
-        # Load tools description
-        tools_desc = get_tools_description()
-
-        # Build prompt with conversation history
-        prompt_parts = [
-            f"You are Kōan. Here is your identity:\n\n{soul}\n",
-            f"{tools_desc}\n" if tools_desc else "",
-            f"Summary of past sessions:\n{summary}\n" if summary else "",
-            f"Today's journal (excerpt):\n{journal_context}\n" if journal_context else "",
-            f"{history_context}\n" if history_context else "",
-            f"The human sends you this message via the dashboard:\n\n  « {text} »\n",
-            f"Respond directly. Be concise and natural. "
-            f"2-3 sentences max unless the question requires more.\n"
-        ]
-        prompt = "\n".join([p for p in prompt_parts if p])
+        prompt = _build_dashboard_prompt(text)
+        project_path = os.environ.get("KOAN_PROJECT_PATH", str(KOAN_ROOT))
+        allowed_tools = get_allowed_tools()
 
         try:
-            project_path = os.environ.get("KOAN_PROJECT_PATH", str(KOAN_ROOT))
-            allowed_tools = get_allowed_tools()
             result = subprocess.run(
                 ["claude", "-p", prompt, "--allowedTools", allowed_tools, "--max-turns", "1"],
                 capture_output=True, text=True, timeout=CHAT_TIMEOUT,
@@ -260,10 +271,30 @@ def chat_send():
             save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
             return jsonify({"ok": True, "type": "chat", "response": response})
         except subprocess.TimeoutExpired:
-            timeout_msg = "Timeout — je prends trop de temps. Réessaie ?"
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
-            return jsonify({"ok": True, "type": "chat", "response": timeout_msg})
-        except Exception as e:
+            # Retry with lite context (no journal, no summary) like awake.py
+            print(f"[dashboard] Chat timed out ({CHAT_TIMEOUT}s). Retrying with lite context...")
+            lite_prompt = _build_dashboard_prompt(text, lite=True)
+            try:
+                result = subprocess.run(
+                    ["claude", "-p", lite_prompt, "--allowedTools", allowed_tools, "--max-turns", "1"],
+                    capture_output=True, text=True, timeout=CHAT_TIMEOUT,
+                    cwd=project_path,
+                )
+                response = result.stdout.strip()
+                if response:
+                    save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
+                    return jsonify({"ok": True, "type": "chat", "response": response})
+                else:
+                    timeout_msg = f"Timeout après {CHAT_TIMEOUT}s — essaie une question plus courte."
+                    save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
+                    return jsonify({"ok": True, "type": "chat", "response": timeout_msg})
+            except subprocess.TimeoutExpired:
+                timeout_msg = f"Timeout après {CHAT_TIMEOUT}s — essaie une question plus courte."
+                save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
+                return jsonify({"ok": True, "type": "chat", "response": timeout_msg})
+            except (OSError, ValueError) as e:
+                return jsonify({"ok": False, "error": str(e)})
+        except (OSError, ValueError) as e:
             return jsonify({"ok": False, "error": str(e)})
 
 

@@ -226,8 +226,32 @@ class TestChatSend:
     @patch("app.dashboard.load_recent_telegram_history", return_value=[])
     @patch("app.dashboard.format_conversation_history", return_value="")
     @patch("app.dashboard.subprocess.run")
-    def test_chat_timeout(self, mock_run, mock_fmt, mock_hist, mock_save,
-                          mock_tools_desc, mock_tools, app_client, instance_dir):
+    def test_chat_timeout_lite_retry_succeeds(self, mock_run, mock_fmt, mock_hist, mock_save,
+                                               mock_tools_desc, mock_tools, app_client, instance_dir):
+        """First call times out, lite retry succeeds."""
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired("claude", 120),
+            MagicMock(stdout="Réponse lite !", returncode=0),
+        ]
+        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
+             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
+             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
+             patch.object(dashboard, "JOURNAL_DIR", instance_dir / "journal"):
+            resp = app_client.post("/chat/send", data={"message": "deep question", "mode": "chat"})
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["response"] == "Réponse lite !"
+        assert mock_run.call_count == 2
+
+    @patch("app.dashboard.get_allowed_tools", return_value="")
+    @patch("app.dashboard.get_tools_description", return_value="")
+    @patch("app.dashboard.save_telegram_message")
+    @patch("app.dashboard.load_recent_telegram_history", return_value=[])
+    @patch("app.dashboard.format_conversation_history", return_value="")
+    @patch("app.dashboard.subprocess.run")
+    def test_chat_timeout_both_attempts(self, mock_run, mock_fmt, mock_hist, mock_save,
+                                         mock_tools_desc, mock_tools, app_client, instance_dir):
+        """Both full and lite calls time out."""
         mock_run.side_effect = subprocess.TimeoutExpired("claude", 120)
         with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
              patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
@@ -237,6 +261,51 @@ class TestChatSend:
         data = resp.get_json()
         assert data["ok"] is True
         assert "Timeout" in data["response"]
+        assert mock_run.call_count == 2
+
+    @patch("app.dashboard.get_allowed_tools", return_value="")
+    @patch("app.dashboard.get_tools_description", return_value="")
+    @patch("app.dashboard.save_telegram_message")
+    @patch("app.dashboard.load_recent_telegram_history", return_value=[])
+    @patch("app.dashboard.format_conversation_history", return_value="")
+    @patch("app.dashboard.subprocess.run")
+    def test_chat_timeout_lite_empty_response(self, mock_run, mock_fmt, mock_hist, mock_save,
+                                               mock_tools_desc, mock_tools, app_client, instance_dir):
+        """First call times out, lite retry returns empty."""
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired("claude", 120),
+            MagicMock(stdout="", returncode=0),
+        ]
+        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
+             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
+             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
+             patch.object(dashboard, "JOURNAL_DIR", instance_dir / "journal"):
+            resp = app_client.post("/chat/send", data={"message": "deep question", "mode": "chat"})
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert "Timeout" in data["response"]
+
+    @patch("app.dashboard.get_allowed_tools", return_value="")
+    @patch("app.dashboard.get_tools_description", return_value="")
+    @patch("app.dashboard.save_telegram_message")
+    @patch("app.dashboard.load_recent_telegram_history", return_value=[])
+    @patch("app.dashboard.format_conversation_history", return_value="")
+    @patch("app.dashboard.subprocess.run")
+    def test_chat_timeout_lite_retry_error(self, mock_run, mock_fmt, mock_hist, mock_save,
+                                            mock_tools_desc, mock_tools, app_client, instance_dir):
+        """First call times out, lite retry raises OSError."""
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired("claude", 120),
+            OSError("broken"),
+        ]
+        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
+             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
+             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
+             patch.object(dashboard, "JOURNAL_DIR", instance_dir / "journal"):
+            resp = app_client.post("/chat/send", data={"message": "hi", "mode": "chat"})
+        data = resp.get_json()
+        assert data["ok"] is False
+        assert "broken" in data["error"]
 
     @patch("app.dashboard.get_allowed_tools", return_value="")
     @patch("app.dashboard.get_tools_description", return_value="")
@@ -267,6 +336,35 @@ class TestChatSend:
         assert data["type"] == "mission"
         content = (instance_dir / "missions.md").read_text()
         assert "[project:koan] add feature" in content
+
+
+class TestBuildDashboardPrompt:
+    """Test _build_dashboard_prompt lite mode."""
+
+    def test_full_prompt_includes_journal_and_summary(self, instance_dir):
+        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
+             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
+             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
+             patch.object(dashboard, "INSTANCE_DIR", instance_dir), \
+             patch("app.dashboard.load_recent_telegram_history", return_value=[]), \
+             patch("app.dashboard.format_conversation_history", return_value=""), \
+             patch("app.dashboard.get_tools_description", return_value=""):
+            prompt = dashboard._build_dashboard_prompt("hello")
+        assert "Session 1: bootstrapped" in prompt
+        assert "Built the dashboard" in prompt
+
+    def test_lite_prompt_strips_journal_and_summary(self, instance_dir):
+        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
+             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
+             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
+             patch.object(dashboard, "INSTANCE_DIR", instance_dir), \
+             patch("app.dashboard.load_recent_telegram_history", return_value=[]), \
+             patch("app.dashboard.format_conversation_history", return_value=""), \
+             patch("app.dashboard.get_tools_description", return_value=""):
+            prompt = dashboard._build_dashboard_prompt("hello", lite=True)
+        assert "Session 1: bootstrapped" not in prompt
+        assert "Built the dashboard" not in prompt
+        assert "You are Kōan" in prompt
 
 
 class TestParseProject:
