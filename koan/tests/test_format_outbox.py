@@ -197,6 +197,60 @@ class TestLoadMemoryContext:
         assert "Session 61" in result
         assert "Important fact" in result
 
+    def test_loads_personality_evolution(self, instance_dir):
+        """personality-evolution.md should be included in memory context."""
+        personality_dir = instance_dir / "memory" / "global"
+        personality_dir.mkdir(parents=True, exist_ok=True)
+        (personality_dir / "personality-evolution.md").write_text(
+            "# Personality Evolution\n\n- I like DRY refactorings\n- I prefer French for outbox\n"
+        )
+        result = load_memory_context(instance_dir)
+        assert "DRY refactorings" in result
+        assert "Acquired personality traits" in result
+
+    def test_personality_evolution_skips_headers(self, instance_dir):
+        """Headers in personality-evolution.md should be filtered out."""
+        personality_dir = instance_dir / "memory" / "global"
+        personality_dir.mkdir(parents=True, exist_ok=True)
+        (personality_dir / "personality-evolution.md").write_text(
+            "# Personality Evolution\n## Observations\n- I enjoy audits\n"
+        )
+        result = load_memory_context(instance_dir)
+        assert "I enjoy audits" in result
+        assert "# Personality" not in result
+
+
+class TestGetTimeHint:
+    """Tests for _get_time_hint — tone adaptation by time of day."""
+
+    def _make_fake_now(self, hour):
+        from datetime import datetime as real_dt
+        return real_dt(2026, 2, 2, hour, 0)
+
+    def test_morning(self):
+        from app.format_outbox import _get_time_hint
+        fake = self._make_fake_now(9)
+        with patch("app.format_outbox.datetime") as mock_dt:
+            mock_dt.now.return_value = fake
+            result = _get_time_hint()
+        assert "morning" in result.lower()
+
+    def test_evening(self):
+        from app.format_outbox import _get_time_hint
+        fake = self._make_fake_now(20)
+        with patch("app.format_outbox.datetime") as mock_dt:
+            mock_dt.now.return_value = fake
+            result = _get_time_hint()
+        assert "evening" in result.lower()
+
+    def test_late_night(self):
+        from app.format_outbox import _get_time_hint
+        fake = self._make_fake_now(23)
+        with patch("app.format_outbox.datetime") as mock_dt:
+            mock_dt.now.return_value = fake
+            result = _get_time_hint()
+        assert "late night" in result.lower()
+
 
 class TestFormatOutboxCLI:
     """Tests for main() CLI entry point (lines 177-210)."""

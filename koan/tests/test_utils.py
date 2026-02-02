@@ -290,3 +290,33 @@ class TestAtomicWrite:
         target = tmp_path / "test.md"
         atomic_write(target, "kōan — été — 日本語\n")
         assert target.read_text(encoding="utf-8") == "kōan — été — 日本語\n"
+
+
+class TestAppendToOutbox:
+    def test_creates_file_if_missing(self, tmp_path):
+        from app.utils import append_to_outbox
+        outbox = tmp_path / "outbox.md"
+        append_to_outbox(outbox, "Hello world\n")
+        assert outbox.read_text() == "Hello world\n"
+
+    def test_appends_to_existing(self, tmp_path):
+        from app.utils import append_to_outbox
+        outbox = tmp_path / "outbox.md"
+        outbox.write_text("First\n")
+        append_to_outbox(outbox, "Second\n")
+        assert outbox.read_text() == "First\nSecond\n"
+
+    def test_concurrent_appends(self, tmp_path):
+        from app.utils import append_to_outbox
+        outbox = tmp_path / "outbox.md"
+        outbox.write_text("")
+        threads = []
+        for i in range(10):
+            t = threading.Thread(target=append_to_outbox, args=(outbox, f"msg{i}\n"))
+            threads.append(t)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        content = outbox.read_text()
+        assert content.count("\n") == 10

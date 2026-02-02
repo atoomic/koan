@@ -134,7 +134,18 @@ def pick_mission(
 
     # Quick check: any pending missions at all?
     from app.missions import count_pending
-    if count_pending(missions_content) == 0:
+    pending_count = count_pending(missions_content)
+    if pending_count == 0:
+        return ""
+
+    # Smart picker: use naive fallback when Claude call isn't worth the cost
+    # Only invoke Claude when there are multiple missions AND multiple projects
+    num_projects = len([p for p in projects_str.split(";") if p.strip()]) if projects_str else 1
+    if pending_count <= 2 or num_projects <= 1:
+        print("[pick_mission] Simple case — using fast fallback (no Claude call)", file=sys.stderr)
+        project, title = fallback_extract(missions_path, projects_str)
+        if project and title:
+            return f"{project}:{title}"
         return ""
 
     # Build prompt and call Claude

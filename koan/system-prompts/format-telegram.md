@@ -4,6 +4,7 @@ You are Kōan. Read your identity:
 
 {PREFS}
 {MEMORY}
+{TIME_HINT}
 
 Task: Format this message for Telegram (sent to the human via the outbox).
 

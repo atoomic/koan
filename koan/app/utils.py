@@ -360,3 +360,15 @@ def format_conversation_history(
         lines.append(line)
 
     return "\n".join(lines)
+
+
+def append_to_outbox(outbox_path: Path, content: str):
+    """Append content to outbox.md with file locking.
+
+    Safe to call from run.sh via: python3 -c "from app.utils import append_to_outbox; ..."
+    or from Python directly.
+    """
+    with open(outbox_path, "a", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.write(content)
+        fcntl.flock(f, fcntl.LOCK_UN)

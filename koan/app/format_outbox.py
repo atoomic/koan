@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -63,6 +64,15 @@ def load_memory_context(instance_dir: Path, project_name: str = "") -> str:
     """
     parts = []
 
+    # Personality evolution (acquired traits)
+    personality_file = instance_dir / "memory" / "global" / "personality-evolution.md"
+    if personality_file.exists():
+        content = personality_file.read_text().strip()
+        lines = content.splitlines()
+        recent = [l for l in lines if l.strip() and not l.startswith("#")][-5:]
+        if recent:
+            parts.append("Acquired personality traits:\n" + "\n".join(recent))
+
     # Recent summary (last 5 lines)
     summary_file = instance_dir / "memory" / "summary.md"
     if summary_file.exists():
@@ -84,6 +94,21 @@ def load_memory_context(instance_dir: Path, project_name: str = "") -> str:
     return "\n\n".join(parts)
 
 
+def _get_time_hint() -> str:
+    """Return a time-of-day hint for tone adaptation."""
+    hour = datetime.now().hour
+    if hour < 7:
+        return "It's very early morning."
+    elif hour < 12:
+        return "It's morning."
+    elif hour < 18:
+        return "It's afternoon."
+    elif hour < 22:
+        return "It's evening."
+    else:
+        return "It's late night."
+
+
 def format_for_telegram(raw_content: str, soul: str, prefs: str,
                         memory_context: str = "") -> str:
     """Format raw content via Claude for Telegram.
@@ -101,11 +126,13 @@ def format_for_telegram(raw_content: str, soul: str, prefs: str,
 
     prefs_block = f"Human preferences: {prefs}" if prefs else ""
     memory_block = f"Recent memory context:\n{memory_context}" if memory_context else ""
+    time_hint = _get_time_hint()
     prompt = load_prompt(
         "format-telegram",
         SOUL=soul,
         PREFS=prefs_block,
         MEMORY=memory_block,
+        TIME_HINT=time_hint,
         RAW_CONTENT=raw_content,
     )
 

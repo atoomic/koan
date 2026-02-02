@@ -11,6 +11,7 @@ Read {INSTANCE}/memory/summary.md for cross-project summary.
 IMPORTANT: When updating summary.md, ALWAYS tag your session with "(project: {PROJECT_NAME})"
 so memory can be scoped per project. Example: "Session 35 (project: koan) : ..."
 Read {INSTANCE}/memory/global/ for global context (human preferences, strategy).
+Read {INSTANCE}/memory/global/personality-evolution.md for your acquired traits (update it when you discover something about yourself — a preference, a pattern, a growth).
 Read {INSTANCE}/memory/projects/{PROJECT_NAME}/ for project-specific learnings.
 (If {PROJECT_NAME}/learnings.md doesn't exist yet, create it.)
 

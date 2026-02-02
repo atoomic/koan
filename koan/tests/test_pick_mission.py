@@ -118,10 +118,14 @@ class TestPickMission:
 
     @patch("app.pick_mission.call_claude")
     def test_picks_mission_from_claude(self, mock_claude, tmp_path):
+        """With 3+ missions and 2+ projects, Claude picker is called."""
         missions = tmp_path / "missions.md"
         missions.write_text(
-            "# Missions\n\n## En attente\n\n### project:koan\n- fix tests\n\n"
-            "### project:anantys\n- implement dashboard\n\n## En cours\n\n## Terminées\n"
+            "# Missions\n\n## En attente\n\n"
+            "- [project:koan] fix tests\n"
+            "- [project:koan] refactor utils\n"
+            "- [project:anantys] implement dashboard\n\n"
+            "## En cours\n\n## Terminées\n"
         )
         mock_claude.return_value = "mission:anantys:implement dashboard"
 
@@ -154,3 +158,43 @@ class TestPickMission:
         result = pick_mission(str(tmp_path), "koan:/p1", "1", "implement")
         assert result == ""
         mock_claude.assert_not_called()
+
+    @patch("app.pick_mission.call_claude")
+    def test_smart_picker_skips_claude_single_mission(self, mock_claude, tmp_path):
+        """When there's only 1-2 pending missions, use fast fallback."""
+        missions = tmp_path / "missions.md"
+        missions.write_text(
+            "# Missions\n\n## En attente\n\n- [project:koan] fix tests\n\n## En cours\n\n## Terminées\n"
+        )
+        result = pick_mission(str(tmp_path), "koan:/p1;anantys:/p2", "1", "implement")
+        assert result == "koan:fix tests"
+        mock_claude.assert_not_called()
+
+    @patch("app.pick_mission.call_claude")
+    def test_smart_picker_skips_claude_single_project(self, mock_claude, tmp_path):
+        """When there's only 1 project, use fast fallback even with many missions."""
+        missions = tmp_path / "missions.md"
+        missions.write_text(
+            "# Missions\n\n## En attente\n\n"
+            "- fix tests\n- add feature\n- refactor module\n\n"
+            "## En cours\n\n## Terminées\n"
+        )
+        result = pick_mission(str(tmp_path), "koan:/p1", "1", "implement")
+        assert result == "koan:fix tests"
+        mock_claude.assert_not_called()
+
+    @patch("app.pick_mission.call_claude")
+    def test_smart_picker_calls_claude_complex_case(self, mock_claude, tmp_path):
+        """When 3+ missions AND 2+ projects, Claude picker is used."""
+        missions = tmp_path / "missions.md"
+        missions.write_text(
+            "# Missions\n\n## En attente\n\n"
+            "- [project:koan] fix tests\n"
+            "- [project:anantys] add feature\n"
+            "- [project:koan] refactor module\n\n"
+            "## En cours\n\n## Terminées\n"
+        )
+        mock_claude.return_value = "mission:anantys:add feature"
+        result = pick_mission(str(tmp_path), "koan:/p1;anantys:/p2", "1", "implement")
+        assert result == "anantys:add feature"
+        mock_claude.assert_called_once()

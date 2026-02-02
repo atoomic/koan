@@ -473,11 +473,8 @@ Koan paused after $count runs. Send /resume via Telegram when quota resets to ch
     if [ -n "$SUMMARY_TEXT" ]; then
       # Locked append to outbox (avoid race with awake.py)
       "$PYTHON" -c "
-import fcntl, sys
-with open('$INSTANCE/outbox.md', 'a') as f:
-    fcntl.flock(f, fcntl.LOCK_EX)
-    f.write(sys.stdin.read())
-    fcntl.flock(f, fcntl.LOCK_UN)
+from pathlib import Path; from app.utils import append_to_outbox; import sys
+append_to_outbox(Path('$INSTANCE/outbox.md'), sys.stdin.read())
 " <<< "$SUMMARY_TEXT"
     fi
 
