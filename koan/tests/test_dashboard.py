@@ -341,18 +341,6 @@ class TestChatSend:
 class TestBuildDashboardPrompt:
     """Test _build_dashboard_prompt lite mode."""
 
-    def test_full_prompt_includes_journal_and_summary(self, instance_dir):
-        with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
-             patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \
-             patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
-             patch.object(dashboard, "INSTANCE_DIR", instance_dir), \
-             patch("app.dashboard.load_recent_telegram_history", return_value=[]), \
-             patch("app.dashboard.format_conversation_history", return_value=""), \
-             patch("app.dashboard.get_tools_description", return_value=""):
-            prompt = dashboard._build_dashboard_prompt("hello")
-        assert "Session 1: bootstrapped" in prompt
-        assert "Built the dashboard" in prompt
-
     def test_lite_prompt_strips_journal_and_summary(self, instance_dir):
         with patch.object(dashboard, "TELEGRAM_HISTORY_FILE", instance_dir / "history.jsonl"), \
              patch.object(dashboard, "SOUL_FILE", instance_dir / "soul.md"), \

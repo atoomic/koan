@@ -49,6 +49,29 @@ def run_git(cwd: str, *args) -> Tuple[int, str, str]:
         return 1, "", str(e)
 
 
+def get_branch_commit_messages(project_path: str, branch: str, base_branch: str) -> List[str]:
+    """Get commit subjects from branch since divergence from base."""
+    _, stdout, _ = run_git(project_path, "log", f"{base_branch}..{branch}", "--pretty=format:%s")
+    return [line for line in stdout.splitlines() if line.strip()]
+
+
+def build_merge_commit_message(branch: str, strategy: str, subjects: List[str]) -> str:
+    """Build a descriptive merge commit message."""
+    header = f"koan: auto-merge {branch} ({strategy})"
+    if not subjects:
+        return header
+    body = "\n".join(f"- {s}" for s in subjects)
+    return f"{header}\n\n{body}"
+
+
+def get_author_args() -> List[str]:
+    """Return --author args if KOAN_EMAIL is set."""
+    email = os.environ.get("KOAN_EMAIL", "")
+    if email:
+        return ["--author", f"Koan <{email}>"]
+    return []
+
+
 def find_matching_rule(branch: str, rules: List[dict]) -> Optional[dict]:
     """Find the first rule matching the branch name.
 
@@ -123,6 +146,8 @@ def is_branch_pushed(project_path: str, branch: str) -> bool:
 def perform_merge(project_path: str, branch: str, base_branch: str, strategy: str) -> Tuple[bool, str]:
     """Execute git merge with specified strategy.
 
+    Always returns to base_branch, even on failure.
+
     Args:
         project_path: Path to the git repository
         branch: Source branch to merge from
@@ -132,6 +157,19 @@ def perform_merge(project_path: str, branch: str, base_branch: str, strategy: st
     Returns:
         (success, error_message)
     """
+    try:
+        return _perform_merge_inner(project_path, branch, base_branch, strategy)
+    finally:
+        # Always end on base_branch
+        run_git(project_path, "checkout", base_branch)
+
+
+def _perform_merge_inner(project_path: str, branch: str, base_branch: str, strategy: str) -> Tuple[bool, str]:
+    """Inner merge logic (called by perform_merge with branch safety)."""
+    # Collect commit messages before merging
+    subjects = get_branch_commit_messages(project_path, branch, base_branch)
+    author_args = get_author_args()
+
     # Checkout base branch
     exit_code, _, stderr = run_git(project_path, "checkout", base_branch)
     if exit_code != 0:
@@ -152,8 +190,8 @@ def perform_merge(project_path: str, branch: str, base_branch: str, strategy: st
             return False, f"Merge conflict during squash: {stderr}"
 
         # Commit the squash
-        commit_msg = f"koan: auto-merge {branch} (squash)"
-        exit_code, _, stderr = run_git(project_path, "commit", "-m", commit_msg)
+        commit_msg = build_merge_commit_message(branch, strategy, subjects)
+        exit_code, _, stderr = run_git(project_path, "commit", "-m", commit_msg, *author_args)
         if exit_code != 0:
             return False, f"Failed to commit squash: {stderr}"
 
@@ -176,7 +214,8 @@ def perform_merge(project_path: str, branch: str, base_branch: str, strategy: st
 
     else:
         # Default: regular merge with --no-ff
-        exit_code, _, stderr = run_git(project_path, "merge", "--no-ff", branch, "-m", f"koan: auto-merge {branch}")
+        commit_msg = build_merge_commit_message(branch, "merge", subjects)
+        exit_code, _, stderr = run_git(project_path, "merge", "--no-ff", branch, "-m", commit_msg, *author_args)
         if exit_code != 0:
             # Abort merge on conflict
             run_git(project_path, "merge", "--abort")

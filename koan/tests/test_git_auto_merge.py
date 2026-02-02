@@ -452,29 +452,35 @@ class TestPerformMerge:
         return patch("app.git_auto_merge.run_git", side_effect=call_results)
 
     def test_squash_success(self):
-        """Squash merge: checkout, pull, merge --squash, commit, push."""
+        """Squash merge: log, checkout, pull, merge --squash, commit, push, checkout (finally)."""
         calls = [
+            (0, "fix bug\nadd test", ""),  # git log (commit messages)
             (0, "", ""),   # checkout main
             (0, "", ""),   # pull
             (0, "", ""),   # merge --squash
             (0, "", ""),   # commit
             (0, "", ""),   # push
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls) as mock:
             ok, err = perform_merge("/tmp", "koan/fix", "main", "squash")
             assert ok is True
             assert err == ""
-            # Verify commit message
-            commit_call = mock.call_args_list[3]
-            assert "koan: auto-merge koan/fix (squash)" in commit_call[0]
+            # Verify commit message includes branch subjects
+            commit_call = mock.call_args_list[4]
+            msg = commit_call[0][2]  # 3rd positional arg to run_git is "-m", msg is after
+            assert "koan: auto-merge koan/fix (squash)" in str(commit_call)
+            assert "fix bug" in str(commit_call)
 
     def test_squash_conflict(self):
         """Squash merge conflict triggers reset --hard."""
         calls = [
+            (0, "", ""),   # git log
             (0, "", ""),   # checkout
             (0, "", ""),   # pull
             (1, "", "CONFLICT"),  # merge --squash fails
             (0, "", ""),   # reset --hard
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls):
             ok, err = perform_merge("/tmp", "koan/fix", "main", "squash")
@@ -482,14 +488,16 @@ class TestPerformMerge:
             assert "conflict" in err.lower()
 
     def test_rebase_success(self):
-        """Rebase merge: rebase, checkout, ff-merge, push."""
+        """Rebase merge: log, checkout, pull, rebase, checkout, ff-merge, push, checkout (finally)."""
         calls = [
+            (0, "", ""),   # git log
             (0, "", ""),   # checkout main
             (0, "", ""),   # pull
             (0, "", ""),   # rebase
             (0, "", ""),   # checkout main (after rebase)
             (0, "", ""),   # merge --ff-only
             (0, "", ""),   # push
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls):
             ok, err = perform_merge("/tmp", "koan/fix", "main", "rebase")
@@ -498,10 +506,12 @@ class TestPerformMerge:
     def test_rebase_conflict(self):
         """Rebase conflict triggers rebase --abort."""
         calls = [
+            (0, "", ""),   # git log
             (0, "", ""),   # checkout
             (0, "", ""),   # pull
             (1, "", "CONFLICT"),  # rebase fails
             (0, "", ""),   # rebase --abort
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls):
             ok, err = perform_merge("/tmp", "koan/fix", "main", "rebase")
@@ -511,10 +521,12 @@ class TestPerformMerge:
     def test_merge_noff_success(self):
         """Regular merge with --no-ff."""
         calls = [
+            (0, "", ""),   # git log
             (0, "", ""),   # checkout
             (0, "", ""),   # pull
             (0, "", ""),   # merge --no-ff
             (0, "", ""),   # push
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls):
             ok, err = perform_merge("/tmp", "koan/fix", "main", "merge")
@@ -523,10 +535,12 @@ class TestPerformMerge:
     def test_merge_noff_conflict(self):
         """Regular merge conflict triggers merge --abort."""
         calls = [
+            (0, "", ""),   # git log
             (0, "", ""),   # checkout
             (0, "", ""),   # pull
             (1, "", "CONFLICT"),  # merge fails
             (0, "", ""),   # merge --abort
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls):
             ok, err = perform_merge("/tmp", "koan/fix", "main", "merge")
@@ -536,7 +550,9 @@ class TestPerformMerge:
     def test_checkout_failure(self):
         """Checkout failure aborts early."""
         calls = [
+            (0, "", ""),   # git log
             (1, "", "error: pathspec 'main' did not match"),  # checkout fails
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls):
             ok, err = perform_merge("/tmp", "koan/fix", "main", "squash")
@@ -546,8 +562,10 @@ class TestPerformMerge:
     def test_pull_failure(self):
         """Pull failure aborts."""
         calls = [
+            (0, "", ""),   # git log
             (0, "", ""),   # checkout ok
             (1, "", "fatal: unable to access"),  # pull fails
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls):
             ok, err = perform_merge("/tmp", "koan/fix", "main", "squash")
@@ -557,11 +575,13 @@ class TestPerformMerge:
     def test_push_failure(self):
         """Push failure after successful merge."""
         calls = [
+            (0, "", ""),   # git log
             (0, "", ""),   # checkout
             (0, "", ""),   # pull
             (0, "", ""),   # merge --squash
             (0, "", ""),   # commit
             (1, "", "rejected"),  # push fails
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls):
             ok, err = perform_merge("/tmp", "koan/fix", "main", "squash")
@@ -571,11 +591,13 @@ class TestPerformMerge:
     def test_rebase_ff_merge_failure(self):
         """After successful rebase, ff-merge fails."""
         calls = [
+            (0, "", ""),   # git log
             (0, "", ""),   # checkout
             (0, "", ""),   # pull
             (0, "", ""),   # rebase ok
             (0, "", ""),   # checkout main
             (1, "", "not a fast-forward"),  # ff-merge fails
+            (0, "", ""),   # checkout main (finally)
         ]
         with self._mock_git(calls):
             ok, err = perform_merge("/tmp", "koan/fix", "main", "rebase")
