@@ -8,7 +8,7 @@ set -euo pipefail
 KOAN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export KOAN_ROOT
 INSTANCE="$KOAN_ROOT/instance"
-APP_DIR="$(dirname "$0")/app"
+APP_DIR="$KOAN_ROOT/koan/app"
 NOTIFY="$APP_DIR/notify.py"
 DAILY_REPORT="$APP_DIR/daily_report.py"
 MISSION_SUMMARY="$APP_DIR/mission_summary.py"
