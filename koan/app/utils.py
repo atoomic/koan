@@ -169,6 +169,88 @@ def get_tools_description() -> str:
     return config.get("tools", {}).get("description", "")
 
 
+def get_model_config() -> dict:
+    """Get model configuration from config.yaml.
+
+    Returns dict with keys: mission, chat, lightweight, fallback, review_mode.
+    Empty strings mean "use default model".
+    """
+    config = load_config()
+    defaults = {
+        "mission": "",
+        "chat": "",
+        "lightweight": "haiku",
+        "fallback": "sonnet",
+        "review_mode": "",
+    }
+    models = config.get("models", {})
+    return {k: models.get(k, v) for k, v in defaults.items()}
+
+
+def build_claude_flags(
+    model: str = "",
+    fallback: str = "",
+    disallowed_tools: Optional[List[str]] = None,
+) -> List[str]:
+    """Build extra CLI flags for a Claude invocation.
+
+    Args:
+        model: Model name/alias (empty = use default)
+        fallback: Fallback model when primary is overloaded (empty = none)
+        disallowed_tools: Tools to block (e.g., ["Bash", "Edit", "Write"] for read-only)
+
+    Returns:
+        List of CLI flag strings to append to the command.
+    """
+    flags: List[str] = []
+    if model:
+        flags.extend(["--model", model])
+    if fallback:
+        flags.extend(["--fallback-model", fallback])
+    if disallowed_tools:
+        flags.extend(["--disallowedTools"] + disallowed_tools)
+    return flags
+
+
+def get_claude_flags_for_role(role: str, autonomous_mode: str = "") -> str:
+    """Get CLI flags for a Claude invocation role, as a space-separated string.
+
+    Designed to be called from run.sh to get model/fallback flags.
+
+    Args:
+        role: One of "mission", "chat", "lightweight", "contemplative"
+        autonomous_mode: Current mode (review/implement/deep) — affects tool restrictions
+
+    Returns:
+        Space-separated CLI flags string (may be empty)
+    """
+    models = get_model_config()
+    flags: List[str] = []
+
+    if role == "mission":
+        model = models["mission"]
+        # In review mode, prefer cheaper model if configured
+        if autonomous_mode == "review" and models["review_mode"]:
+            model = models["review_mode"]
+        if model:
+            flags.extend(["--model", model])
+        if models["fallback"]:
+            flags.extend(["--fallback-model", models["fallback"]])
+        # Review mode: block write tools
+        if autonomous_mode == "review":
+            flags.extend(["--disallowedTools", "Bash", "Edit", "Write"])
+    elif role == "contemplative":
+        if models["lightweight"]:
+            flags.extend(["--model", models["lightweight"]])
+    elif role == "chat":
+        if models["chat"]:
+            flags.extend(["--model", models["chat"]])
+        if models["fallback"]:
+            flags.extend(["--fallback-model", models["fallback"]])
+
+    return " ".join(flags)
+
+
 def get_auto_merge_config(config: dict, project_name: str) -> dict:
     """Get auto-merge config with per-project override support.
 

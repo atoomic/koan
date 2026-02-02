@@ -21,6 +21,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from app.utils import get_model_config, build_claude_flags
+
 
 def load_soul(instance_dir: Path) -> str:
     """Load Kōan's identity from soul.md.
@@ -137,9 +139,11 @@ def format_for_telegram(raw_content: str, soul: str, prefs: str,
     )
 
     try:
-        # Call Claude CLI to format the message
+        # Call Claude CLI to format the message (lightweight model)
+        models = get_model_config()
+        extra_flags = build_claude_flags(model=models["lightweight"])
         result = subprocess.run(
-            ["claude", "-p", prompt],
+            ["claude", "-p", prompt] + extra_flags,
             input=None,  # Prompt is self-contained
             capture_output=True,
             text=True,

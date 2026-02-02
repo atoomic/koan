@@ -37,6 +37,8 @@ from app.utils import (
     compact_telegram_history,
     get_allowed_tools,
     get_tools_description,
+    get_model_config,
+    build_claude_flags,
 )
 
 load_dotenv()
@@ -401,10 +403,12 @@ def handle_chat(text: str):
 
     prompt = _build_chat_prompt(text)
     allowed_tools = get_allowed_tools()
+    models = get_model_config()
+    chat_flags = build_claude_flags(model=models["chat"], fallback=models["fallback"])
 
     try:
         result = subprocess.run(
-            ["claude", "-p", prompt, "--allowedTools", allowed_tools, "--max-turns", "1"],
+            ["claude", "-p", prompt, "--allowedTools", allowed_tools, "--max-turns", "1"] + chat_flags,
             capture_output=True, text=True, timeout=CHAT_TIMEOUT,
             cwd=PROJECT_PATH or str(KOAN_ROOT),
         )
@@ -427,7 +431,7 @@ def handle_chat(text: str):
         lite_prompt = _build_chat_prompt(text, lite=True)
         try:
             result = subprocess.run(
-                ["claude", "-p", lite_prompt, "--allowedTools", allowed_tools, "--max-turns", "1"],
+                ["claude", "-p", lite_prompt, "--allowedTools", allowed_tools, "--max-turns", "1"] + chat_flags,
                 capture_output=True, text=True, timeout=CHAT_TIMEOUT,
                 cwd=PROJECT_PATH or str(KOAN_ROOT),
             )

@@ -31,6 +31,8 @@ from app.utils import (
     format_conversation_history,
     get_allowed_tools,
     get_tools_description,
+    get_model_config,
+    build_claude_flags,
 )
 
 # ---------------------------------------------------------------------------
@@ -259,10 +261,12 @@ def chat_send():
         prompt = _build_dashboard_prompt(text)
         project_path = os.environ.get("KOAN_PROJECT_PATH", str(KOAN_ROOT))
         allowed_tools = get_allowed_tools()
+        models = get_model_config()
+        chat_flags = build_claude_flags(model=models["chat"], fallback=models["fallback"])
 
         try:
             result = subprocess.run(
-                ["claude", "-p", prompt, "--allowedTools", allowed_tools, "--max-turns", "1"],
+                ["claude", "-p", prompt, "--allowedTools", allowed_tools, "--max-turns", "1"] + chat_flags,
                 capture_output=True, text=True, timeout=CHAT_TIMEOUT,
                 cwd=project_path,
             )
@@ -278,7 +282,7 @@ def chat_send():
             lite_prompt = _build_dashboard_prompt(text, lite=True)
             try:
                 result = subprocess.run(
-                    ["claude", "-p", lite_prompt, "--allowedTools", allowed_tools, "--max-turns", "1"],
+                    ["claude", "-p", lite_prompt, "--allowedTools", allowed_tools, "--max-turns", "1"] + chat_flags,
                     capture_output=True, text=True, timeout=CHAT_TIMEOUT,
                     cwd=project_path,
                 )

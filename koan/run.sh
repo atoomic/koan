@@ -25,7 +25,7 @@ if [ ! -d "$INSTANCE" ]; then
 fi
 
 # Config via env vars (or defaults)
-MAX_RUNS=${KOAN_MAX_RUNS:-20}
+MAX_RUNS=${KOAN_MAX_RUNS:-10}
 INTERVAL=${KOAN_INTERVAL:-5}
 
 # Parse projects configuration (bash 3.2 compatible - no associative arrays)
@@ -162,8 +162,10 @@ while [ $count -lt $MAX_RUNS ]; do
         "$KOAN_ROOT/koan/system-prompts/contemplative.md")
 
       cd "$INSTANCE"
+      CONTEMPLATE_FLAGS=$("$PYTHON" -c "from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('contemplative'))" 2>/dev/null || echo "")
       set +e
-      claude -p "$CONTEMPLATE_PROMPT" --allowedTools Read,Write,Glob,Grep --max-turns 3 2>/dev/null
+      # shellcheck disable=SC2086
+      claude -p "$CONTEMPLATE_PROMPT" --allowedTools Read,Write,Glob,Grep --max-turns 3 $CONTEMPLATE_FLAGS 2>/dev/null
       set -e
     fi
 
@@ -388,8 +390,10 @@ EOF
   cd "$PROJECT_PATH"
   CLAUDE_OUT="$(mktemp)"
   CLAUDE_ERR="$(mktemp)"
+  MISSION_FLAGS=$("$PYTHON" -c "from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('mission', '$AUTONOMOUS_MODE'))" 2>/dev/null || echo "")
   set +e  # Don't exit on error, we need to check the output
-  claude -p "$PROMPT" --allowedTools Bash,Read,Write,Glob,Grep,Edit --output-format json > "$CLAUDE_OUT" 2>"$CLAUDE_ERR"
+  # shellcheck disable=SC2086
+  claude -p "$PROMPT" --allowedTools Bash,Read,Write,Glob,Grep,Edit --output-format json $MISSION_FLAGS > "$CLAUDE_OUT" 2>"$CLAUDE_ERR"
   CLAUDE_EXIT=$?
   set -e
 

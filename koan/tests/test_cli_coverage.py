@@ -294,6 +294,117 @@ class TestUtilsLoadConfig:
         assert desc == "Custom desc"
 
 
+class TestModelConfig:
+    """Tests for model configuration and CLI flag builders."""
+
+    def test_get_model_config_defaults(self):
+        """Default model config when no models section in config."""
+        from app.utils import get_model_config
+        with patch("app.utils.load_config", return_value={}):
+            cfg = get_model_config()
+        assert cfg["mission"] == ""
+        assert cfg["lightweight"] == "haiku"
+        assert cfg["fallback"] == "sonnet"
+
+    def test_get_model_config_custom(self):
+        """Custom model config overrides defaults."""
+        from app.utils import get_model_config
+        config = {"models": {"mission": "opus", "lightweight": "sonnet", "fallback": ""}}
+        with patch("app.utils.load_config", return_value=config):
+            cfg = get_model_config()
+        assert cfg["mission"] == "opus"
+        assert cfg["lightweight"] == "sonnet"
+        assert cfg["fallback"] == ""
+        # Unspecified keys get defaults
+        assert cfg["review_mode"] == ""
+
+    def test_build_claude_flags_empty(self):
+        """No flags when everything is empty."""
+        from app.utils import build_claude_flags
+        assert build_claude_flags() == []
+
+    def test_build_claude_flags_model(self):
+        """Model flag generated correctly."""
+        from app.utils import build_claude_flags
+        flags = build_claude_flags(model="haiku")
+        assert flags == ["--model", "haiku"]
+
+    def test_build_claude_flags_fallback(self):
+        """Fallback flag generated correctly."""
+        from app.utils import build_claude_flags
+        flags = build_claude_flags(fallback="sonnet")
+        assert flags == ["--fallback-model", "sonnet"]
+
+    def test_build_claude_flags_disallowed_tools(self):
+        """DisallowedTools flags generated correctly."""
+        from app.utils import build_claude_flags
+        flags = build_claude_flags(disallowed_tools=["Bash", "Edit"])
+        assert flags == ["--disallowedTools", "Bash", "Edit"]
+
+    def test_build_claude_flags_combined(self):
+        """All flags combined."""
+        from app.utils import build_claude_flags
+        flags = build_claude_flags(model="opus", fallback="sonnet", disallowed_tools=["Write"])
+        assert "--model" in flags
+        assert "--fallback-model" in flags
+        assert "--disallowedTools" in flags
+        assert "Write" in flags
+
+    def test_get_claude_flags_for_role_mission(self):
+        """Mission role returns fallback flag."""
+        from app.utils import get_claude_flags_for_role
+        config = {"models": {"mission": "", "fallback": "sonnet", "review_mode": ""}}
+        with patch("app.utils.load_config", return_value=config):
+            flags = get_claude_flags_for_role("mission")
+        assert "--fallback-model sonnet" in flags
+        assert "--model" not in flags
+
+    def test_get_claude_flags_for_role_mission_with_model(self):
+        """Mission role with explicit model."""
+        from app.utils import get_claude_flags_for_role
+        config = {"models": {"mission": "opus", "fallback": "sonnet", "review_mode": ""}}
+        with patch("app.utils.load_config", return_value=config):
+            flags = get_claude_flags_for_role("mission")
+        assert "--model opus" in flags
+        assert "--fallback-model sonnet" in flags
+
+    def test_get_claude_flags_for_role_review_mode(self):
+        """Review mode blocks write tools and uses cheaper model."""
+        from app.utils import get_claude_flags_for_role
+        config = {"models": {"mission": "", "fallback": "", "review_mode": "haiku"}}
+        with patch("app.utils.load_config", return_value=config):
+            flags = get_claude_flags_for_role("mission", autonomous_mode="review")
+        assert "--model haiku" in flags
+        assert "--disallowedTools" in flags
+        assert "Bash" in flags
+        assert "Edit" in flags
+        assert "Write" in flags
+
+    def test_get_claude_flags_for_role_contemplative(self):
+        """Contemplative role uses lightweight model."""
+        from app.utils import get_claude_flags_for_role
+        config = {"models": {"lightweight": "haiku"}}
+        with patch("app.utils.load_config", return_value=config):
+            flags = get_claude_flags_for_role("contemplative")
+        assert "--model haiku" in flags
+
+    def test_get_claude_flags_for_role_chat(self):
+        """Chat role uses chat model with fallback."""
+        from app.utils import get_claude_flags_for_role
+        config = {"models": {"chat": "sonnet", "fallback": "haiku"}}
+        with patch("app.utils.load_config", return_value=config):
+            flags = get_claude_flags_for_role("chat")
+        assert "--model sonnet" in flags
+        assert "--fallback-model haiku" in flags
+
+    def test_get_claude_flags_for_role_unknown(self):
+        """Unknown role returns empty flags."""
+        from app.utils import get_claude_flags_for_role
+        with patch("app.utils.load_config", return_value={}):
+            flags = get_claude_flags_for_role("unknown_role")
+        assert flags == ""
+
+
 class TestUtilsConversationHistory:
     """Cover save/load/format conversation history edge cases."""
 

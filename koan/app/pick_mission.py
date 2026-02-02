@@ -20,6 +20,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.utils import get_model_config, build_claude_flags
+
 
 PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "system-prompts" / "pick-mission.md"
 
@@ -47,12 +49,14 @@ def build_prompt(
 
 def call_claude(prompt: str) -> str:
     """Call Claude CLI with the picker prompt. Returns raw text output."""
+    models = get_model_config()
+    extra_flags = build_claude_flags(model=models["lightweight"])
     result = subprocess.run(
         [
             "claude", "-p", prompt,
             "--max-turns", "1",
             "--output-format", "json",
-        ],
+        ] + extra_flags,
         capture_output=True,
         text=True,
         timeout=60,
