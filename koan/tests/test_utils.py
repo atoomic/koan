@@ -320,3 +320,116 @@ class TestAppendToOutbox:
             t.join()
         content = outbox.read_text()
         assert content.count("\n") == 10
+
+
+class TestCompactTelegramHistory:
+    def _write_messages(self, path, messages):
+        import json
+        with open(path, "w") as f:
+            for msg in messages:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+
+    def _make_msg(self, role, text, date="2026-02-01", time="12:00:00"):
+        return {"timestamp": f"{date}T{time}", "role": role, "text": text}
+
+    def test_skips_when_no_file(self, tmp_path):
+        from app.utils import compact_telegram_history
+        result = compact_telegram_history(
+            tmp_path / "history.jsonl", tmp_path / "topics.json"
+        )
+        assert result == 0
+
+    def test_skips_below_threshold(self, tmp_path):
+        from app.utils import compact_telegram_history
+        history = tmp_path / "history.jsonl"
+        msgs = [self._make_msg("user", f"msg {i}") for i in range(5)]
+        self._write_messages(history, msgs)
+        result = compact_telegram_history(history, tmp_path / "topics.json", min_messages=20)
+        assert result == 0
+        assert history.read_text() != ""  # Not truncated
+
+    def test_compacts_above_threshold(self, tmp_path):
+        import json
+        from app.utils import compact_telegram_history
+        history = tmp_path / "history.jsonl"
+        topics_file = tmp_path / "topics.json"
+        msgs = [self._make_msg("user", f"Discussion about topic {i}") for i in range(25)]
+        self._write_messages(history, msgs)
+        result = compact_telegram_history(history, topics_file, min_messages=20)
+        assert result == 25
+        assert history.read_text() == ""  # Truncated
+        assert topics_file.exists()
+        data = json.loads(topics_file.read_text())
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["message_count"] == 25
+        assert "topics_by_date" in data[0]
+        assert "2026-02-01" in data[0]["topics_by_date"]
+
+    def test_appends_to_existing_topics(self, tmp_path):
+        import json
+        from app.utils import compact_telegram_history
+        history = tmp_path / "history.jsonl"
+        topics_file = tmp_path / "topics.json"
+        # Pre-existing topics
+        topics_file.write_text(json.dumps([{"old": True}]))
+        msgs = [self._make_msg("user", f"New topic {i}") for i in range(25)]
+        self._write_messages(history, msgs)
+        compact_telegram_history(history, topics_file, min_messages=20)
+        data = json.loads(topics_file.read_text())
+        assert len(data) == 2
+        assert data[0]["old"] is True
+
+    def test_extracts_topics_from_user_messages_only(self, tmp_path):
+        import json
+        from app.utils import compact_telegram_history
+        history = tmp_path / "history.jsonl"
+        topics_file = tmp_path / "topics.json"
+        msgs = []
+        for i in range(15):
+            msgs.append(self._make_msg("user", f"User question about feature {i}"))
+            msgs.append(self._make_msg("assistant", f"Response about feature {i}"))
+        self._write_messages(history, msgs)
+        compact_telegram_history(history, topics_file, min_messages=20)
+        data = json.loads(topics_file.read_text())
+        topics = data[0]["topics_by_date"]["2026-02-01"]
+        # Only user messages become topics
+        assert all("User question" in t for t in topics)
+
+    def test_groups_by_date(self, tmp_path):
+        import json
+        from app.utils import compact_telegram_history
+        history = tmp_path / "history.jsonl"
+        topics_file = tmp_path / "topics.json"
+        msgs = [self._make_msg("user", f"Day1 msg {i}", date="2026-02-01") for i in range(12)]
+        msgs += [self._make_msg("user", f"Day2 msg {i}", date="2026-02-02") for i in range(12)]
+        self._write_messages(history, msgs)
+        compact_telegram_history(history, topics_file, min_messages=20)
+        data = json.loads(topics_file.read_text())
+        assert "2026-02-01" in data[0]["topics_by_date"]
+        assert "2026-02-02" in data[0]["topics_by_date"]
+        assert data[0]["date_range"]["from"] == "2026-02-01"
+        assert data[0]["date_range"]["to"] == "2026-02-02"
+
+    def test_deduplicates_topics(self, tmp_path):
+        import json
+        from app.utils import compact_telegram_history
+        history = tmp_path / "history.jsonl"
+        topics_file = tmp_path / "topics.json"
+        msgs = [self._make_msg("user", "Same question repeated")] * 25
+        self._write_messages(history, msgs)
+        compact_telegram_history(history, topics_file, min_messages=20)
+        data = json.loads(topics_file.read_text())
+        assert len(data[0]["topics_by_date"]["2026-02-01"]) == 1
+
+    def test_ignores_short_messages(self, tmp_path):
+        import json
+        from app.utils import compact_telegram_history
+        history = tmp_path / "history.jsonl"
+        topics_file = tmp_path / "topics.json"
+        msgs = [self._make_msg("user", "ok")] * 15 + [self._make_msg("user", "A real question about something")] * 10
+        self._write_messages(history, msgs)
+        compact_telegram_history(history, topics_file, min_messages=20)
+        data = json.loads(topics_file.read_text())
+        topics = data[0]["topics_by_date"]["2026-02-01"]
+        assert all(len(t) > 5 for t in topics)

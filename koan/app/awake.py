@@ -34,6 +34,7 @@ from app.utils import (
     save_telegram_message,
     load_recent_telegram_history,
     format_conversation_history,
+    compact_telegram_history,
     get_allowed_tools,
     get_tools_description,
 )
@@ -50,6 +51,7 @@ INSTANCE_DIR = KOAN_ROOT / "instance"
 MISSIONS_FILE = INSTANCE_DIR / "missions.md"
 OUTBOX_FILE = INSTANCE_DIR / "outbox.md"
 TELEGRAM_HISTORY_FILE = INSTANCE_DIR / "telegram-history.jsonl"
+TOPICS_FILE = INSTANCE_DIR / "previous-discussions-topics.json"
 PROJECT_PATH = os.environ.get("KOAN_PROJECT_PATH", "")
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -542,6 +544,10 @@ def handle_message(text: str):
 
 def main():
     check_config()
+    # Compact old conversation history to avoid context bleed across sessions
+    compacted = compact_telegram_history(TELEGRAM_HISTORY_FILE, TOPICS_FILE)
+    if compacted:
+        print(f"[awake] Compacted {compacted} old messages at startup")
     # Purge stale heartbeat so health_check doesn't report STALE on restart
     heartbeat_file = KOAN_ROOT / ".koan-heartbeat"
     heartbeat_file.unlink(missing_ok=True)
