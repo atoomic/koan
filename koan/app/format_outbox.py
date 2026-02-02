@@ -95,35 +95,19 @@ def format_for_telegram(raw_content: str, soul: str, prefs: str,
         memory_context: Recent memory (summary + learnings) for richer context
 
     Returns:
-        Formatted message (French, plain text, conversational)
+        Formatted message (plain text, conversational)
     """
-    # Build formatting prompt
-    memory_block = f"\nRecent memory context:\n{memory_context}" if memory_context else ""
-    prompt = f"""You are Kōan. Read your identity:
+    from app.prompts import load_prompt
 
-{soul}
-
-{f"Human preferences: {prefs}" if prefs else ""}
-{memory_block}
-
-Task: Format this message for Telegram (sent to Alexis via the outbox).
-
-RAW CONTENT TO FORMAT:
-{raw_content}
-
-Requirements:
-- Write in French (Alexis's language)
-- Plain text ONLY — NO markdown whatsoever. Never use **, __, ##, ```, *, >, or any formatting symbols.
-- Maximum 500 characters. This message is read on a smartphone screen.
-- Conversational tone (like texting a collaborator, not a formal report)
-- 2-4 sentences max UNLESS the content is a retrospective/summary (then be thorough but concise)
-- Natural, direct — you can be funny (dry humor), you can disagree if relevant
-- If this is a "kōan" (zen question), preserve its essence but make it conversational
-- DO NOT include metadata like "Mission ended" or generic status updates
-- Focus on WHAT was accomplished and WHY it matters, not process details
-
-Output ONLY the formatted message. No preamble, no explanation, no markdown, no asterisks, no hashtags.
-"""
+    prefs_block = f"Human preferences: {prefs}" if prefs else ""
+    memory_block = f"Recent memory context:\n{memory_context}" if memory_context else ""
+    prompt = load_prompt(
+        "format-telegram",
+        SOUL=soul,
+        PREFS=prefs_block,
+        MEMORY=memory_block,
+        RAW_CONTENT=raw_content,
+    )
 
     try:
         # Call Claude CLI to format the message

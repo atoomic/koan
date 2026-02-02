@@ -148,19 +148,21 @@ def _build_dashboard_prompt(text: str, *, lite: bool = False) -> str:
         if journal_content:
             journal_context = journal_content[-2000:] if len(journal_content) > 2000 else journal_content
 
-    tools_desc = get_tools_description()
+    from app.prompts import load_prompt
 
-    prompt_parts = [
-        f"You are Kōan. Here is your identity:\n\n{soul}\n",
-        f"{tools_desc}\n" if tools_desc else "",
-        f"Summary of past sessions:\n{summary}\n" if summary else "",
-        f"Today's journal (excerpt):\n{journal_context}\n" if journal_context else "",
-        f"{history_context}\n" if history_context else "",
-        f"The human sends you this message via the dashboard:\n\n  « {text} »\n",
-        "Respond directly. Be concise and natural. "
-        "2-3 sentences max unless the question requires more.\n"
-    ]
-    return "\n".join([p for p in prompt_parts if p])
+    tools_desc = get_tools_description()
+    summary_block = f"Summary of past sessions:\n{summary}" if summary else ""
+    journal_block = f"Today's journal (excerpt):\n{journal_context}" if journal_context else ""
+
+    return load_prompt(
+        "dashboard-chat",
+        SOUL=soul,
+        TOOLS_DESC=tools_desc or "",
+        SUMMARY=summary_block,
+        JOURNAL=journal_block,
+        HISTORY=history_context or "",
+        TEXT=text,
+    )
 
 
 # ---------------------------------------------------------------------------

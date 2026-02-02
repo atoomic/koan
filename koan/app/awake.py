@@ -310,25 +310,24 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
     # Load tools description
     tools_desc = get_tools_description()
 
-    summary_budget = 0 if lite else 1500
+    from app.prompts import load_prompt
 
-    # Build prompt with conversation history
-    prompt_parts = [
-        "You are Kōan — a sparring partner, not an assistant.",
-        f"Here is your identity:\n\n{SOUL}\n",
-        f"{tools_desc}\n" if tools_desc else "",
-        f"About the human:\n{prefs_context}\n" if prefs_context else "",
-        f"Summary of past sessions:\n{SUMMARY[:summary_budget]}\n" if SUMMARY and summary_budget else "",
-        f"Today's journal (excerpt):\n{journal_context}\n" if journal_context else "",
-        f"{history_context}\n" if history_context else "",
-        f"{time_hint}\n",
-        f"The human sends you this message on Telegram:\n\n  « {text} »\n",
-        "Respond in the human's preferred language. Be direct, concise, natural — like texting a collaborator. "
-        "You can be funny (dry humor), you can disagree, you can ask back. "
-        "2-3 sentences max unless the question requires more. "
-        "No markdown formatting — this is Telegram, keep it plain.\n"
-    ]
-    prompt = "\n".join([p for p in prompt_parts if p])
+    summary_budget = 0 if lite else 1500
+    summary_block = f"Summary of past sessions:\n{SUMMARY[:summary_budget]}" if SUMMARY and summary_budget else ""
+    prefs_block = f"About the human:\n{prefs_context}" if prefs_context else ""
+    journal_block = f"Today's journal (excerpt):\n{journal_context}" if journal_context else ""
+
+    prompt = load_prompt(
+        "chat",
+        SOUL=SOUL,
+        TOOLS_DESC=tools_desc or "",
+        PREFS=prefs_block,
+        SUMMARY=summary_block,
+        JOURNAL=journal_block,
+        HISTORY=history_context or "",
+        TIME_HINT=time_hint,
+        TEXT=text,
+    )
 
     # Hard cap: if prompt exceeds 12k chars, force lite mode
     MAX_PROMPT_CHARS = 12000

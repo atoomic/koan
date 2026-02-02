@@ -136,7 +136,7 @@ while [ $count -lt $MAX_RUNS ]; do
       CONTEMPLATE_PROMPT=$(sed \
         -e "s|{INSTANCE}|$INSTANCE|g" \
         -e "s|{PROJECT_NAME}|$PROJECT_NAME|g" \
-        "$KOAN_ROOT/koan/contemplative-prompt.md")
+        "$KOAN_ROOT/koan/system-prompts/contemplative.md")
 
       cd "$INSTANCE"
       set +e
@@ -278,7 +278,7 @@ while [ $count -lt $MAX_RUNS ]; do
     -e "s|{AUTONOMOUS_MODE}|${AUTONOMOUS_MODE:-implement}|g" \
     -e "s|{FOCUS_AREA}|${FOCUS_AREA:-General autonomous work}|g" \
     -e "s|{AVAILABLE_PCT}|${AVAILABLE_PCT:-50}|g" \
-    "$KOAN_ROOT/koan/system-prompt.md")
+    "$KOAN_ROOT/koan/system-prompts/agent.md")
 
   # Append merge policy based on config
   MERGE_POLICY=""
