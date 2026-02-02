@@ -156,6 +156,14 @@ def handle_command(text: str):
         handle_resume()
         return
 
+    if cmd == "/help":
+        _handle_help()
+        return
+
+    if cmd == "/usage":
+        _run_in_worker(_handle_usage)
+        return
+
     # Unknown command — pass to Claude as chat
     handle_chat(text)
 
@@ -202,6 +210,90 @@ def _build_status() -> str:
         parts.append(f"\nLoop: {status_file.read_text().strip()}")
 
     return "\n".join(parts)
+
+
+def _handle_help():
+    """Send the list of available commands."""
+    help_text = (
+        "Commandes disponibles :\n\n"
+        "/help — cette aide\n"
+        "/status — état rapide (missions, pause, loop)\n"
+        "/usage — status détaillé formaté par Claude (quota, missions, progression)\n"
+        "/stop — arrêter Kōan après la mission en cours\n"
+        "/pause — mettre en pause (pas de nouvelles missions)\n"
+        "/resume — reprendre après pause ou quota épuisé\n"
+        "\n"
+        "Pour envoyer une mission : commencer par \"mission:\" ou un verbe d'action (implement, fix, add...)\n"
+        "Tout autre message = conversation libre avec Kōan."
+    )
+    send_telegram(help_text)
+
+
+def _handle_usage():
+    """Build a rich status from usage.md + missions.md + pending.md, formatted by Claude."""
+    # Gather raw data
+    usage_text = "Pas de données de quota disponibles."
+    usage_path = INSTANCE_DIR / "usage.md"
+    if usage_path.exists():
+        usage_text = usage_path.read_text().strip() or usage_text
+
+    missions_text = "Aucune mission."
+    if MISSIONS_FILE.exists():
+        from app.missions import parse_sections
+        sections = parse_sections(MISSIONS_FILE.read_text())
+        parts = []
+        in_progress = sections.get("in_progress", [])
+        pending = sections.get("pending", [])
+        done = sections.get("done", [])
+        if in_progress:
+            parts.append("En cours :\n" + "\n".join(in_progress[:5]))
+        if pending:
+            parts.append(f"En attente ({len(pending)}) :\n" + "\n".join(pending[:5]))
+        if done:
+            parts.append(f"Terminées : {len(done)}")
+        if parts:
+            missions_text = "\n\n".join(parts)
+
+    pending_text = "Aucun run en cours."
+    pending_path = INSTANCE_DIR / "journal" / "pending.md"
+    if pending_path.exists():
+        content = pending_path.read_text().strip()
+        if content:
+            # Keep last 1500 chars
+            if len(content) > 1500:
+                pending_text = "...\n" + content[-1500:]
+            else:
+                pending_text = content
+
+    from app.prompts import load_prompt
+    prompt = load_prompt(
+        "usage-status",
+        SOUL=SOUL,
+        USAGE=usage_text,
+        MISSIONS=missions_text,
+        PENDING=pending_text,
+    )
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--max-turns", "1"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            response = result.stdout.strip()
+            # Clean markdown artifacts
+            response = response.replace("**", "").replace("```", "").replace("##", "")
+            response = re.sub(r'^#{1,6}\s+', '', response, flags=re.MULTILINE)
+            send_telegram(response)
+        else:
+            # Fallback: send raw data
+            fallback = f"Quota: {usage_text[:200]}\n\nMissions: {missions_text[:300]}"
+            send_telegram(fallback)
+    except subprocess.TimeoutExpired:
+        send_telegram("Timeout sur le formatage. Réessaie.")
+    except Exception as e:
+        print(f"[awake] Usage error: {e}")
+        send_telegram("Erreur lors du formatage /usage.")
 
 
 def handle_resume():
