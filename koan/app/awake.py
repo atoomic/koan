@@ -156,6 +156,14 @@ def handle_command(text: str):
         handle_resume()
         return
 
+    if cmd == "/sparring":
+        _handle_sparring()
+        return
+
+    if cmd.startswith("/reflect "):
+        _handle_reflect(text[9:].strip())
+        return
+
     # Unknown command — pass to Claude as chat
     handle_chat(text)
 
@@ -234,6 +242,92 @@ def handle_resume():
     except Exception as e:
         print(f"[awake] Error checking quota reset: {e}")
         send_telegram("Error checking quota. /status or check manually.")
+
+
+def _handle_sparring():
+    """Launch a sparring session — strategic challenge, not code talk."""
+    send_telegram("Mode sparring activé. Je réfléchis...")
+
+    from app.prompts import load_prompt
+
+    # Load context for strategic sparring
+    strategy = ""
+    strategy_file = INSTANCE_DIR / "memory" / "global" / "strategy.md"
+    if strategy_file.exists():
+        strategy = strategy_file.read_text()
+
+    emotional = ""
+    emotional_file = INSTANCE_DIR / "memory" / "global" / "emotional-memory.md"
+    if emotional_file.exists():
+        emotional = emotional_file.read_text()[:1000]
+
+    prefs = ""
+    prefs_file = INSTANCE_DIR / "memory" / "global" / "human-preferences.md"
+    if prefs_file.exists():
+        prefs = prefs_file.read_text()
+
+    # Recent missions for context
+    recent_missions = ""
+    if MISSIONS_FILE.exists():
+        from app.missions import parse_sections
+        sections = parse_sections(MISSIONS_FILE.read_text())
+        in_progress = sections.get("in_progress", [])
+        pending = sections.get("pending", [])
+        parts = []
+        if in_progress:
+            parts.append("In progress:\n" + "\n".join(in_progress[:5]))
+        if pending:
+            parts.append("Pending:\n" + "\n".join(pending[:5]))
+        recent_missions = "\n".join(parts)
+
+    hour = datetime.now().hour
+    time_hint = "It's late night." if hour >= 22 else "It's evening." if hour >= 18 else "It's afternoon." if hour >= 12 else "It's morning."
+
+    prompt = load_prompt(
+        "sparring",
+        SOUL=SOUL,
+        PREFS=prefs,
+        STRATEGY=strategy,
+        EMOTIONAL_MEMORY=emotional,
+        RECENT_MISSIONS=recent_missions,
+        TIME_HINT=time_hint,
+    )
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--max-turns", "1"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            response = result.stdout.strip()
+            # Clean markdown
+            response = response.replace("**", "").replace("```", "")
+            send_telegram(response)
+            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
+        else:
+            send_telegram("Rien de percutant à dire pour le moment. Reviens plus tard.")
+    except subprocess.TimeoutExpired:
+        send_telegram("Timeout — mon cerveau a besoin de plus de temps. Réessaie.")
+    except Exception as e:
+        print(f"[awake] Sparring error: {e}")
+        send_telegram("Erreur pendant le sparring. Réessaie.")
+
+
+def _handle_reflect(message: str):
+    """Handle /reflect command — write human's reflection to shared journal."""
+    shared_journal = INSTANCE_DIR / "shared-journal.md"
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    entry = f"\n## Alexis — {timestamp}\n\n{message}\n"
+
+    # Append to shared journal
+    import fcntl as _fcntl
+    shared_journal.parent.mkdir(parents=True, exist_ok=True)
+    with open(shared_journal, "a") as f:
+        _fcntl.flock(f, _fcntl.LOCK_EX)
+        f.write(entry)
+
+    send_telegram("Noté dans le journal partagé. J'y réfléchirai.")
 
 
 def handle_mission(text: str):
@@ -348,6 +442,18 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
     journal_block = f"Today's journal (excerpt):\n{journal_context}" if journal_context else ""
     missions_block = f"Current missions state:\n{missions_context}" if missions_context else ""
 
+    # Load emotional memory for relationship-aware responses
+    emotional_context = ""
+    if not lite:
+        emotional_path = INSTANCE_DIR / "memory" / "global" / "emotional-memory.md"
+        if emotional_path.exists():
+            content = emotional_path.read_text().strip()
+            # Take last 800 chars — enough for tone, not too heavy
+            if len(content) > 800:
+                emotional_context = "...\n" + content[-800:]
+            else:
+                emotional_context = content
+
     prompt = load_prompt(
         "chat",
         SOUL=SOUL,
@@ -360,6 +466,13 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
         TIME_HINT=time_hint,
         TEXT=text,
     )
+
+    # Inject emotional memory before the user message (if available)
+    if emotional_context:
+        prompt = prompt.replace(
+            f"« {text} »",
+            f"Emotional memory (relationship context, use to color your tone):\n{emotional_context}\n\nThe human sends you this message on Telegram:\n\n  « {text} »",
+        )
 
     # Hard cap: if prompt exceeds 12k chars, force lite mode
     MAX_PROMPT_CHARS = 12000
