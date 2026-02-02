@@ -39,6 +39,13 @@ git_auto_merge:
       auto_merge: true              # Enable auto-merge for matching branches
       delete_after_merge: true      # Clean up branch after successful merge
 
+# Usage estimation (auto-calibration from Claude JSON output)
+# Tune these limits based on your Claude plan by comparing
+# estimated % with actual /usage output in Claude CLI
+usage:
+  session_token_limit: 500000   # Tokens per 5h session window
+  weekly_token_limit: 5000000   # Tokens per 7-day window
+
 # Per-project overrides
 # Override git_auto_merge settings for specific projects
 projects:

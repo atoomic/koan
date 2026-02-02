@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""
+Kōan Usage Estimator — Track tokens from Claude JSON output, estimate usage %
+
+Two commands:
+    update <claude_json_output> <state_file> <usage_md>
+        Parse Claude JSON output, accumulate tokens, refresh usage.md
+
+    refresh <state_file> <usage_md>
+        Recalculate usage.md from current state (session/weekly resets)
+
+State is stored in instance/usage_state.json.
+Writes usage.md in the same format as manual /usage paste.
+"""
+
+import json
+import os
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app.utils import atomic_write, load_config
+
+
+# Default limits (tokens). User tunes via config.yaml → usage.session_token_limit
+DEFAULT_SESSION_LIMIT = 500_000
+DEFAULT_WEEKLY_LIMIT = 5_000_000
+SESSION_DURATION_HOURS = 5
+
+
+def _load_state(state_file: Path) -> dict:
+    """Load usage state from JSON file, or return fresh state."""
+    if state_file.exists():
+        try:
+            return json.loads(state_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return _fresh_state()
+
+
+def _fresh_state() -> dict:
+    now = datetime.now().isoformat()
+    return {
+        "session_start": now,
+        "session_tokens": 0,
+        "weekly_start": now,
+        "weekly_tokens": 0,
+        "runs": 0,
+    }
+
+
+def _save_state(state_file: Path, state: dict):
+    atomic_write(state_file, json.dumps(state, indent=2) + "\n")
+
+
+def _maybe_reset(state: dict) -> dict:
+    """Reset session/weekly counters if their windows have elapsed."""
+    now = datetime.now()
+
+    # Session reset: 5h since session_start
+    try:
+        session_start = datetime.fromisoformat(state["session_start"])
+    except (KeyError, ValueError):
+        session_start = now
+        state["session_start"] = now.isoformat()
+
+    if (now - session_start).total_seconds() > SESSION_DURATION_HOURS * 3600:
+        state["session_start"] = now.isoformat()
+        state["session_tokens"] = 0
+        state["runs"] = 0
+
+    # Weekly reset: Monday 00:00 boundary
+    try:
+        weekly_start = datetime.fromisoformat(state["weekly_start"])
+    except (KeyError, ValueError):
+        weekly_start = now
+        state["weekly_start"] = now.isoformat()
+
+    # If we've crossed a Monday since weekly_start
+    days_since_start = (now - weekly_start).days
+    if days_since_start >= 7 or (
+        days_since_start > 0 and now.weekday() < weekly_start.weekday()
+    ):
+        state["weekly_start"] = now.isoformat()
+        state["weekly_tokens"] = 0
+
+    return state
+
+
+def _extract_tokens(claude_json_path: Path) -> Optional[int]:
+    """Extract total tokens from Claude --output-format json output.
+
+    Tries multiple known field layouts:
+    - Top-level: input_tokens + output_tokens
+    - Nested: usage.input_tokens + usage.output_tokens
+    - Array: sum across multiple turns
+    """
+    try:
+        data = json.loads(claude_json_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    # Try top-level fields
+    inp = data.get("input_tokens", 0)
+    out = data.get("output_tokens", 0)
+    if inp or out:
+        return inp + out
+
+    # Try nested usage object
+    usage = data.get("usage", {})
+    if isinstance(usage, dict):
+        inp = usage.get("input_tokens", 0)
+        out = usage.get("output_tokens", 0)
+        if inp or out:
+            return inp + out
+
+    # Try stats or metadata
+    for key in ("stats", "metadata", "session"):
+        sub = data.get(key, {})
+        if isinstance(sub, dict):
+            inp = sub.get("input_tokens", 0)
+            out = sub.get("output_tokens", 0)
+            if inp or out:
+                return inp + out
+
+    return None
+
+
+def _get_limits(config: dict) -> tuple:
+    """Get session/weekly token limits from config or defaults."""
+    usage_cfg = config.get("usage", {})
+    session_limit = usage_cfg.get("session_token_limit", DEFAULT_SESSION_LIMIT)
+    weekly_limit = usage_cfg.get("weekly_token_limit", DEFAULT_WEEKLY_LIMIT)
+    return session_limit, weekly_limit
+
+
+def _estimate_reset_time(start_iso: str, duration_hours: float) -> str:
+    """Estimate time remaining until reset."""
+    try:
+        start = datetime.fromisoformat(start_iso)
+    except ValueError:
+        return "unknown"
+    now = datetime.now()
+    reset_at = start + timedelta(hours=duration_hours)
+    remaining = reset_at - now
+    if remaining.total_seconds() <= 0:
+        return "0m"
+    hours = int(remaining.total_seconds() // 3600)
+    minutes = int((remaining.total_seconds() % 3600) // 60)
+    if hours > 0:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m"
+
+
+def _write_usage_md(state: dict, usage_md: Path, config: dict):
+    """Write usage.md in the standard format that usage_tracker.py can parse."""
+    session_limit, weekly_limit = _get_limits(config)
+
+    session_pct = min(100, int(state["session_tokens"] / max(1, session_limit) * 100))
+    weekly_pct = min(100, int(state["weekly_tokens"] / max(1, weekly_limit) * 100))
+
+    session_reset = _estimate_reset_time(state["session_start"], SESSION_DURATION_HOURS)
+    # Weekly reset: days until next Monday
+    now = datetime.now()
+    days_to_monday = (7 - now.weekday()) % 7
+    if days_to_monday == 0:
+        days_to_monday = 7
+    weekly_reset = f"{days_to_monday}d"
+
+    content = f"""# Usage (estimated by koan)
+
+Session (5hr) : {session_pct}% (reset in {session_reset})
+Weekly (7 day) : {weekly_pct}% (Resets in {weekly_reset})
+
+<!-- Auto-generated by usage_estimator.py — {datetime.now().strftime('%Y-%m-%d %H:%M')} -->
+<!-- Session tokens: {state['session_tokens']:,} / {session_limit:,} -->
+<!-- Weekly tokens: {state['weekly_tokens']:,} / {weekly_limit:,} -->
+<!-- Runs this session: {state.get('runs', 0)} -->
+"""
+    atomic_write(usage_md, content)
+
+
+def cmd_update(claude_json_path: Path, state_file: Path, usage_md: Path):
+    """Update state with tokens from a Claude run, then refresh usage.md."""
+    config = load_config()
+    state = _load_state(state_file)
+    state = _maybe_reset(state)
+
+    tokens = _extract_tokens(claude_json_path)
+    if tokens is not None and tokens > 0:
+        state["session_tokens"] = state.get("session_tokens", 0) + tokens
+        state["weekly_tokens"] = state.get("weekly_tokens", 0) + tokens
+        state["runs"] = state.get("runs", 0) + 1
+
+    _save_state(state_file, state)
+    _write_usage_md(state, usage_md, config)
+
+
+def cmd_refresh(state_file: Path, usage_md: Path):
+    """Refresh usage.md from current state (handles resets)."""
+    config = load_config()
+    state = _load_state(state_file)
+    state = _maybe_reset(state)
+    _save_state(state_file, state)
+    _write_usage_md(state, usage_md, config)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: usage_estimator.py <update|refresh> ...", file=sys.stderr)
+        sys.exit(1)
+
+    command = sys.argv[1]
+
+    if command == "update":
+        if len(sys.argv) < 5:
+            print("Usage: usage_estimator.py update <claude_json> <state_file> <usage_md>", file=sys.stderr)
+            sys.exit(1)
+        cmd_update(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]))
+
+    elif command == "refresh":
+        if len(sys.argv) < 4:
+            print("Usage: usage_estimator.py refresh <state_file> <usage_md>", file=sys.stderr)
+            sys.exit(1)
+        cmd_refresh(Path(sys.argv[2]), Path(sys.argv[3]))
+
+    else:
+        print(f"Unknown command: {command}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
