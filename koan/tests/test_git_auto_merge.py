@@ -12,6 +12,8 @@ from app.git_auto_merge import (
     is_branch_pushed,
     perform_merge,
     cleanup_branch,
+    cleanup_local_branch,
+    cleanup_remote_branch,
     auto_merge_branch,
     write_merge_success_to_journal,
     write_merge_failure_to_journal,
@@ -605,7 +607,48 @@ class TestPerformMerge:
             assert "fast-forward" in err.lower()
 
 
-# --- cleanup_branch ---
+# --- cleanup_local_branch ---
+
+class TestCleanupLocalBranch:
+    def test_safe_delete_success(self):
+        """Normal delete with -d succeeds."""
+        with patch("app.git_auto_merge.run_git", return_value=(0, "", "")):
+            assert cleanup_local_branch("/tmp", "koan/fix") is True
+
+    def test_force_delete_fallback(self):
+        """When -d fails, falls back to -D."""
+        calls = [
+            (1, "", "not fully merged"),  # branch -d fails
+            (0, "", ""),   # branch -D succeeds
+        ]
+        with patch("app.git_auto_merge.run_git", side_effect=calls):
+            assert cleanup_local_branch("/tmp", "koan/fix") is True
+
+    def test_both_deletes_fail(self):
+        """When both -d and -D fail, return False."""
+        calls = [
+            (1, "", "error"),  # branch -d fails
+            (1, "", "error"),  # branch -D fails
+        ]
+        with patch("app.git_auto_merge.run_git", side_effect=calls):
+            assert cleanup_local_branch("/tmp", "koan/fix") is False
+
+
+# --- cleanup_remote_branch ---
+
+class TestCleanupRemoteBranch:
+    def test_remote_delete_success(self):
+        """Remote delete succeeds."""
+        with patch("app.git_auto_merge.run_git", return_value=(0, "", "")):
+            assert cleanup_remote_branch("/tmp", "koan/fix") is True
+
+    def test_remote_delete_fails(self):
+        """Remote delete fails."""
+        with patch("app.git_auto_merge.run_git", return_value=(1, "", "error")):
+            assert cleanup_remote_branch("/tmp", "koan/fix") is False
+
+
+# --- cleanup_branch (backward compat wrapper) ---
 
 class TestCleanupBranch:
     def test_cleanup_success(self):
@@ -618,7 +661,7 @@ class TestCleanupBranch:
             assert cleanup_branch("/tmp", "koan/fix") is True
 
     def test_force_delete_fallback(self):
-        """When -d fails, falls back to -D."""
+        """When -d fails, falls back to -D then remote."""
         calls = [
             (1, "", "not fully merged"),  # branch -d fails
             (0, "", ""),   # branch -D succeeds
@@ -628,7 +671,7 @@ class TestCleanupBranch:
             assert cleanup_branch("/tmp", "koan/fix") is True
 
     def test_both_deletes_fail(self):
-        """When both -d and -D fail, return False."""
+        """When both -d and -D fail, return False (don't try remote)."""
         calls = [
             (1, "", "error"),  # branch -d fails
             (1, "", "error"),  # branch -D fails
@@ -702,14 +745,15 @@ class TestAutoMergeBranch:
             }
         }
 
+    @patch("app.git_auto_merge.cleanup_local_branch", return_value=True)
     @patch("app.git_auto_merge.write_merge_success_to_journal")
     @patch("app.git_auto_merge.perform_merge", return_value=(True, ""))
     @patch("app.git_auto_merge.is_branch_pushed", return_value=True)
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_success_flow(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal):
-        """Happy path: config match, clean, pushed, merge ok."""
+    def test_success_flow(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_local_cleanup):
+        """Happy path: config match, clean, pushed, merge ok. Local branch always deleted."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
             "enabled": True, "base_branch": "main", "strategy": "squash",
@@ -718,6 +762,7 @@ class TestAutoMergeBranch:
         result = auto_merge_branch("/inst", "koan", "/proj", "koan/fix")
         assert result == 0
         mock_merge.assert_called_once_with("/proj", "koan/fix", "main", "squash")
+        mock_local_cleanup.assert_called_once_with("/proj", "koan/fix")  # Always delete local
         mock_journal.assert_called_once()
 
     @patch("app.git_auto_merge.get_auto_merge_config")
@@ -762,15 +807,16 @@ class TestAutoMergeBranch:
         mock_journal.assert_called_once()
         assert "not pushed" in mock_journal.call_args[0][3].lower()
 
-    @patch("app.git_auto_merge.cleanup_branch", return_value=True)
+    @patch("app.git_auto_merge.cleanup_remote_branch", return_value=True)
+    @patch("app.git_auto_merge.cleanup_local_branch", return_value=True)
     @patch("app.git_auto_merge.write_merge_success_to_journal")
     @patch("app.git_auto_merge.perform_merge", return_value=(True, ""))
     @patch("app.git_auto_merge.is_branch_pushed", return_value=True)
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_delete_after_merge(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_cleanup):
-        """delete_after_merge triggers cleanup."""
+    def test_delete_after_merge(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_local_cleanup, mock_remote_cleanup):
+        """delete_after_merge triggers both local (always) and remote (configured) cleanup."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
             "enabled": True, "base_branch": "main", "strategy": "squash",
@@ -778,7 +824,28 @@ class TestAutoMergeBranch:
         }
         result = auto_merge_branch("/inst", "koan", "/proj", "koan/fix")
         assert result == 0
-        mock_cleanup.assert_called_once_with("/proj", "koan/fix")
+        mock_local_cleanup.assert_called_once_with("/proj", "koan/fix")  # Always
+        mock_remote_cleanup.assert_called_once_with("/proj", "koan/fix")  # When configured
+
+    @patch("app.git_auto_merge.cleanup_remote_branch")
+    @patch("app.git_auto_merge.cleanup_local_branch", return_value=True)
+    @patch("app.git_auto_merge.write_merge_success_to_journal")
+    @patch("app.git_auto_merge.perform_merge", return_value=(True, ""))
+    @patch("app.git_auto_merge.is_branch_pushed", return_value=True)
+    @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
+    @patch("app.git_auto_merge.get_auto_merge_config")
+    @patch("app.git_auto_merge.load_config")
+    def test_no_remote_delete_without_config(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_local_cleanup, mock_remote_cleanup):
+        """Without delete_after_merge, local branch is deleted but remote is kept."""
+        mock_load.return_value = self._base_config()
+        mock_cfg.return_value = {
+            "enabled": True, "base_branch": "main", "strategy": "squash",
+            "rules": [{"pattern": "koan/*", "auto_merge": True, "delete_after_merge": False}]
+        }
+        result = auto_merge_branch("/inst", "koan", "/proj", "koan/fix")
+        assert result == 0
+        mock_local_cleanup.assert_called_once_with("/proj", "koan/fix")  # Always delete local
+        mock_remote_cleanup.assert_not_called()  # Remote NOT deleted
 
     @patch("app.git_auto_merge.write_merge_failure_to_journal")
     @patch("app.git_auto_merge.perform_merge", return_value=(False, "Merge conflict"))

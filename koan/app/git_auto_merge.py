@@ -179,16 +179,29 @@ class GitAutoMerger:
 
         return True, ""
 
-    def cleanup_branch(self, branch: str) -> bool:
-        """Delete branch locally and on remote."""
+    def cleanup_local_branch(self, branch: str) -> bool:
+        """Delete branch locally only.
+
+        Uses -d first (safe delete, requires branch to be merged).
+        Falls back to -D if -d fails (force delete).
+        """
         exit_code, _, _ = run_git(self.project_path, "branch", "-d", branch)
         if exit_code != 0:
             exit_code, _, _ = run_git(self.project_path, "branch", "-D", branch)
-            if exit_code != 0:
-                return False
+            return exit_code == 0
+        return True
 
+    def cleanup_remote_branch(self, branch: str) -> bool:
+        """Delete branch on remote origin."""
         exit_code, _, _ = run_git(self.project_path, "push", "origin", "--delete", branch)
         return exit_code == 0
+
+    def cleanup_branch(self, branch: str) -> bool:
+        """Delete branch locally and on remote (backward compat)."""
+        local_ok = self.cleanup_local_branch(branch)
+        if not local_ok:
+            return False
+        return self.cleanup_remote_branch(branch)
 
     def write_merge_success_to_journal(self, branch: str, base_branch: str, strategy: str):
         """Write successful merge to today's journal."""
@@ -245,11 +258,18 @@ class GitAutoMerger:
 
         print(f"[git_auto_merge] Successfully merged {branch} into {base_branch} ({strategy})")
 
+        # Always delete local branch after successful merge (stay on base_branch)
+        if self.cleanup_local_branch(branch):
+            print(f"[git_auto_merge] Deleted local branch {branch}")
+        else:
+            print(f"[git_auto_merge] Warning: Failed to delete local branch {branch}")
+
+        # Optionally delete remote branch if configured
         if rule.get("delete_after_merge", False):
-            if self.cleanup_branch(branch):
-                print(f"[git_auto_merge] Cleaned up branch {branch}")
+            if self.cleanup_remote_branch(branch):
+                print(f"[git_auto_merge] Deleted remote branch {branch}")
             else:
-                print(f"[git_auto_merge] Warning: Failed to cleanup branch {branch}")
+                print(f"[git_auto_merge] Warning: Failed to delete remote branch {branch}")
 
         self.write_merge_success_to_journal(branch, base_branch, strategy)
 
@@ -332,16 +352,31 @@ def _perform_merge_inner(project_path: str, branch: str, base_branch: str, strat
     return True, ""
 
 
-def cleanup_branch(project_path: str, branch: str) -> bool:
-    """Delete branch locally and on remote."""
+def cleanup_local_branch(project_path: str, branch: str) -> bool:
+    """Delete branch locally only.
+
+    Uses -d first (safe delete, requires branch to be merged).
+    Falls back to -D if -d fails (force delete).
+    """
     exit_code, _, _ = run_git(project_path, "branch", "-d", branch)
     if exit_code != 0:
         exit_code, _, _ = run_git(project_path, "branch", "-D", branch)
-        if exit_code != 0:
-            return False
+        return exit_code == 0
+    return True
 
+
+def cleanup_remote_branch(project_path: str, branch: str) -> bool:
+    """Delete branch on remote origin."""
     exit_code, _, _ = run_git(project_path, "push", "origin", "--delete", branch)
     return exit_code == 0
+
+
+def cleanup_branch(project_path: str, branch: str) -> bool:
+    """Delete branch locally and on remote (backward compat wrapper)."""
+    local_ok = cleanup_local_branch(project_path, branch)
+    if not local_ok:
+        return False
+    return cleanup_remote_branch(project_path, branch)
 
 
 def write_merge_success_to_journal(instance_dir: str, project_name: str, branch: str, base_branch: str, strategy: str):
@@ -400,11 +435,18 @@ def auto_merge_branch(instance_dir: str, project_name: str, project_path: str, b
 
     print(f"[git_auto_merge] Successfully merged {branch} into {base_branch} ({strategy})")
 
+    # Always delete local branch after successful merge (stay on base_branch)
+    if cleanup_local_branch(project_path, branch):
+        print(f"[git_auto_merge] Deleted local branch {branch}")
+    else:
+        print(f"[git_auto_merge] Warning: Failed to delete local branch {branch}")
+
+    # Optionally delete remote branch if configured
     if rule.get("delete_after_merge", False):
-        if cleanup_branch(project_path, branch):
-            print(f"[git_auto_merge] Cleaned up branch {branch}")
+        if cleanup_remote_branch(project_path, branch):
+            print(f"[git_auto_merge] Deleted remote branch {branch}")
         else:
-            print(f"[git_auto_merge] Warning: Failed to cleanup branch {branch}")
+            print(f"[git_auto_merge] Warning: Failed to delete remote branch {branch}")
 
     write_merge_success_to_journal(instance_dir, project_name, branch, base_branch, strategy)
 
