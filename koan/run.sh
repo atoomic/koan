@@ -20,6 +20,7 @@ GIT_SYNC="$APP_DIR/git_sync.py"
 GIT_SYNC_INTERVAL=${KOAN_GIT_SYNC_INTERVAL:-5}
 HEALTH_CHECK="$APP_DIR/health_check.py"
 SELF_REFLECTION="$APP_DIR/self_reflection.py"
+RITUALS="$APP_DIR/rituals.py"
 USAGE_TRACKER="$APP_DIR/usage_tracker.py"
 USAGE_ESTIMATOR="$APP_DIR/usage_estimator.py"
 USAGE_STATE="$INSTANCE/usage_state.json"
@@ -150,6 +151,10 @@ done
 
 # Daily report check (morning recap or evening summary)
 "$PYTHON" "$DAILY_REPORT" 2>/dev/null || true
+
+# Morning ritual: run at first iteration (before main loop starts)
+echo "[koan] Running morning ritual..."
+"$PYTHON" "$RITUALS" morning "$INSTANCE" || true
 
 ##
 # Kōan main loop - infinite, never exits unless /stop requested
@@ -587,7 +592,9 @@ Koan paused after $count runs. Auto-resume in 5h or use /resume to restart manua
 
   # Check if max runs reached — enter pause mode instead of exiting
   if [ $count -ge $MAX_RUNS ]; then
-    echo "[koan] Max runs ($MAX_RUNS) reached. Entering pause mode (auto-resume in 5h)."
+    echo "[koan] Max runs ($MAX_RUNS) reached. Running evening ritual before pause."
+    "$PYTHON" "$RITUALS" evening "$INSTANCE" || true
+    echo "[koan] Entering pause mode (auto-resume in 5h)."
     touch "$KOAN_ROOT/.koan-pause"
     echo "max_runs" > "$KOAN_ROOT/.koan-pause-reason"
     echo "$(date +%s)" >> "$KOAN_ROOT/.koan-pause-reason"
