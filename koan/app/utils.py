@@ -187,6 +187,13 @@ def get_model_config() -> dict:
     return {k: models.get(k, v) for k, v in defaults.items()}
 
 
+def get_start_on_pause() -> bool:
+    """Check if start_on_pause is enabled in config.yaml.
+
+    Returns True if koan should boot directly into pause mode.
+    """
+    config = load_config()
+    return bool(config.get("start_on_pause", False))
 def get_fast_reply_model() -> str:
     """Get model to use for fast replies (command handlers like /usage, /sparring).
 
