@@ -204,12 +204,12 @@ def _build_status() -> str:
     stop_file = KOAN_ROOT / ".koan-stop"
 
     if pause_file.exists():
-        parts.append("\n⏸️ **EN PAUSE** — Je n'exécute aucune mission")
-        parts.append("   /resume pour reprendre")
+        parts.append("\n⏸️ **PAUSED** — No missions being executed")
+        parts.append("   /resume to continue")
     elif stop_file.exists():
-        parts.append("\n⛔ **ARRÊT DEMANDÉ** — Je termine le travail en cours")
+        parts.append("\n⛔ **STOP REQUESTED** — Finishing current work")
     else:
-        parts.append("\n▶️ **ACTIF** — Run loop en cours")
+        parts.append("\n▶️ **ACTIVE** — Run loop running")
 
     status_file = KOAN_ROOT / ".koan-status"
     if status_file.exists():
