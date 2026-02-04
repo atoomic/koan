@@ -17,6 +17,7 @@ NOTIFY="$APP_DIR/notify.py"
 DAILY_REPORT="$APP_DIR/daily_report.py"
 MISSION_SUMMARY="$APP_DIR/mission_summary.py"
 GIT_SYNC="$APP_DIR/git_sync.py"
+ERROR_CONTEXT="$APP_DIR/error_context.py"
 GIT_SYNC_INTERVAL=${KOAN_GIT_SYNC_INTERVAL:-5}
 HEALTH_CHECK="$APP_DIR/health_check.py"
 SELF_REFLECTION="$APP_DIR/self_reflection.py"
@@ -566,8 +567,8 @@ Koan paused after $count runs. Auto-resume in 5h or use /resume to restart manua
     CLAUDE_OUT=""
     continue  # Go back to start of loop (will enter pause mode)
   fi
-  rm -f "$CLAUDE_OUT" "$CLAUDE_ERR"
-  CLAUDE_OUT=""
+  # NOTE: Don't clean up CLAUDE_OUT/ERR here — we need them for error context
+  # in the success/failure block below. Cleanup happens after that block.
 
   # If Claude didn't clean up pending.md, archive it to daily journal
   PENDING_FILE="$INSTANCE/journal/pending.md"
@@ -603,12 +604,35 @@ Koan paused after $count runs. Auto-resume in 5h or use /resume to restart manua
       fi
     fi
   else
-    if [ -n "$MISSION_TITLE" ]; then
-      notify "Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME] Mission failed: $MISSION_TITLE"
-    else
-      notify "Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME] Run failed"
+    # Extract error context from Claude CLI output
+    ERROR_SUMMARY=""
+    if [ -f "$CLAUDE_ERR" ] || [ -f "$CLAUDE_OUT" ]; then
+      ERROR_SUMMARY=$("$PYTHON" "$ERROR_CONTEXT" "${CLAUDE_ERR:-/dev/null}" "${CLAUDE_OUT:-/dev/null}" 2>/dev/null || echo "")
     fi
+    echo "[koan] Run failed (exit code $CLAUDE_EXIT)"
+    if [ -n "$ERROR_SUMMARY" ]; then
+      echo "[koan] Error context: $ERROR_SUMMARY"
+    fi
+
+    # Build failure notification with context
+    FAIL_MSG="Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME]"
+    if [ -n "$MISSION_TITLE" ]; then
+      FAIL_MSG="$FAIL_MSG Mission failed: $MISSION_TITLE"
+    else
+      FAIL_MSG="$FAIL_MSG Run failed"
+    fi
+    if [ -n "$ERROR_SUMMARY" ]; then
+      # Take first 2 lines max for Telegram readability
+      ERROR_SHORT=$(echo "$ERROR_SUMMARY" | head -2 | tr '\n' ' | ' | sed 's/ | $//')
+      FAIL_MSG="$FAIL_MSG
+Reason: $ERROR_SHORT"
+    fi
+    notify "$FAIL_MSG"
   fi
+
+  # Clean up temp files (after error context extraction)
+  rm -f "$CLAUDE_OUT" "$CLAUDE_ERR"
+  CLAUDE_OUT=""
 
   # Commit instance results
   cd "$INSTANCE"
