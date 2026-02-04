@@ -256,6 +256,135 @@ def _strip_project_tag(item: str) -> str:
     return first_line.strip()
 
 
+def reorder_mission(content: str, position: int, target: int = 1) -> Tuple[str, str]:
+    """Move a pending mission from one position to another.
+
+    Args:
+        content: Full missions.md content.
+        position: 1-indexed position of the mission to move (in pending list).
+        target: 1-indexed target position (default 1 = top of queue).
+
+    Returns:
+        (new_content, moved_text) where moved_text is the mission that was moved.
+
+    Raises:
+        ValueError: If position is invalid or no pending missions.
+    """
+    lines = content.splitlines()
+    boundaries = find_section_boundaries(lines)
+
+    if "pending" not in boundaries:
+        raise ValueError("No pending section found.")
+
+    start, end = boundaries["pending"]
+
+    # Collect pending items as (start_line_idx, end_line_idx, text) tuples
+    items = []
+    i = start + 1  # Skip the ## header line
+    while i < end:
+        stripped = lines[i].strip()
+        if stripped.startswith("- "):
+            item_start = i
+            i += 1
+            # Include continuation lines (indented, not a new item or header)
+            while i < end:
+                next_stripped = lines[i].strip()
+                if (next_stripped.startswith("- ") or
+                        next_stripped.startswith("## ") or
+                        next_stripped.startswith("### ") or
+                        next_stripped == ""):
+                    break
+                i += 1
+            items.append((item_start, i, "\n".join(lines[item_start:i])))
+        else:
+            i += 1
+
+    if not items:
+        raise ValueError("No pending missions to reorder.")
+
+    if position < 1 or position > len(items):
+        raise ValueError(
+            f"Invalid position: {position}. Queue has {len(items)} pending mission(s)."
+        )
+
+    if target < 1 or target > len(items):
+        raise ValueError(
+            f"Invalid target: {target}. Queue has {len(items)} pending mission(s)."
+        )
+
+    if position == target:
+        raise ValueError(f"Mission #{position} is already at position {target}.")
+
+    # Extract the item to move
+    moved_start, moved_end, moved_text = items[position - 1]
+
+    # Remove the moved item's lines
+    new_lines = lines[:moved_start] + lines[moved_end:]
+
+    # Recalculate target insertion point after removal
+    # We need to find where target position N is in the new_lines
+    # Re-scan pending section in new_lines
+    new_boundaries = find_section_boundaries(new_lines)
+    new_start, new_end = new_boundaries["pending"]
+
+    new_items = []
+    j = new_start + 1
+    while j < new_end:
+        s = new_lines[j].strip()
+        if s.startswith("- "):
+            item_start_j = j
+            j += 1
+            while j < new_end:
+                ns = new_lines[j].strip()
+                if (ns.startswith("- ") or
+                        ns.startswith("## ") or
+                        ns.startswith("### ") or
+                        ns == ""):
+                    break
+                j += 1
+            new_items.append(item_start_j)
+        else:
+            j += 1
+
+    # Determine insertion line index
+    if target == 1:
+        # Insert right after the ## header (and any blank lines after it)
+        insert_idx = new_start + 1
+        # Skip blank lines after header
+        while insert_idx < new_end and new_lines[insert_idx].strip() == "":
+            insert_idx += 1
+        # If there's a ### sub-header before any items, insert before it too
+        # Actually, insert at very top = before first item or sub-header
+    elif target - 1 < len(new_items):
+        # Insert before the item currently at target position
+        insert_idx = new_items[target - 1]
+    else:
+        # Target is after all items — append at end of section
+        if new_items:
+            # Find end of last item
+            last_start = new_items[-1]
+            insert_idx = last_start + 1
+            while insert_idx < new_end:
+                ns = new_lines[insert_idx].strip()
+                if (ns.startswith("- ") or
+                        ns.startswith("## ") or
+                        ns.startswith("### ") or
+                        ns == ""):
+                    break
+                insert_idx += 1
+        else:
+            insert_idx = new_start + 1
+
+    # Insert the moved lines
+    moved_lines = moved_text.splitlines()
+    result_lines = new_lines[:insert_idx] + moved_lines + new_lines[insert_idx:]
+
+    first_line = moved_text.split("\n")[0]
+    display = _strip_project_tag(first_line)
+
+    return "\n".join(result_lines), display
+
+
 def find_section_boundaries(lines: List[str]) -> Dict[str, Tuple[int, int]]:
     """Find line indices for each section.
 
