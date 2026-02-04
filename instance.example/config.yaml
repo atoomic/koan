@@ -5,6 +5,11 @@
 # Override via KOAN_CLI_PROVIDER env var
 cli_provider: "claude"
 
+# Messaging provider — which messaging backend to use
+# Options: "telegram" (default), "slack"
+# Override via KOAN_MESSAGING_PROVIDER env var
+messaging_provider: "telegram"
+
 # Paths
 project_path: "/path/to/anantys-back"  # Target project to analyze
 pilot_repo: "/path/to/koan"            # This repo
@@ -25,10 +30,22 @@ fast_reply: false
 # 0 = never contemplative, 10 = ~1 in 10 runs, 20 = ~1 in 5 runs
 contemplative_chance: 10
 
-# Telegram
+# Messaging — provider-specific settings
+# Only the section matching messaging_provider is used
+
+# Telegram (default)
+# Env vars: KOAN_TELEGRAM_TOKEN, KOAN_TELEGRAM_CHAT_ID
 telegram:
   bot_token: "YOUR_BOT_TOKEN"  # From @BotFather
   chat_id: "YOUR_CHAT_ID"     # From first message to bot
+
+# Slack (alternative)
+# Env vars: KOAN_SLACK_BOT_TOKEN, KOAN_SLACK_CHANNEL_ID, KOAN_SLACK_APP_TOKEN
+# Bot needs scopes: chat:write, channels:history, channels:read
+# slack:
+#   bot_token: "xoxb-YOUR-BOT-TOKEN"     # Bot User OAuth Token
+#   channel_id: "C01234ABCDE"            # Channel ID (not name)
+#   app_token: "xapp-YOUR-APP-TOKEN"     # App-Level Token (optional, for Socket Mode)
 
 # Usage thresholds
 budget:

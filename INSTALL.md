@@ -4,7 +4,7 @@
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - Python 3.8+
-- A Telegram account
+- A Telegram or Slack account (Telegram is the default)
 
 ## Setup
 
@@ -40,6 +40,24 @@ curl -s https://api.telegram.org/bot<TOKEN>/getUpdates | python3 -m json.tool
 Look for `"chat": {"id": 123456789, ...}` in the response — that number is your chat ID.
 
 > **Security note:** Your bot token grants full control of the bot. Never commit it to a public repo. If you accidentally leak it, revoke it immediately with `/revoke` in BotFather.
+
+### 3b. Alternative: Use Slack instead of Telegram
+
+If you prefer Slack, set `messaging_provider: "slack"` in `instance/config.yaml` (or `KOAN_MESSAGING_PROVIDER=slack` in `.env`).
+
+1. Create a Slack App at [api.slack.com/apps](https://api.slack.com/apps) → "Create New App" → "From Scratch"
+2. Under **OAuth & Permissions**, add these Bot Token Scopes: `chat:write`, `channels:history`, `channels:read`
+3. Install the app to your workspace — copy the **Bot User OAuth Token** (`xoxb-...`)
+4. Create a channel for Koan (e.g., `#koan`) and invite the bot (`/invite @YourBot`)
+5. Get the channel ID: right-click the channel → "View channel details" → copy the ID at the bottom (`C...`)
+
+Set these env vars in your `.env`:
+
+```bash
+KOAN_MESSAGING_PROVIDER=slack
+KOAN_SLACK_BOT_TOKEN=xoxb-your-token
+KOAN_SLACK_CHANNEL_ID=C01234ABCDE
+```
 
 ### 4. Set environment variables
 
@@ -116,9 +134,10 @@ Alternatively: **System Settings → Energy → Prevent automatic sleeping when 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `KOAN_MESSAGING_PROVIDER` | `telegram` | Messaging backend: `telegram` or `slack` |
 | `KOAN_MAX_RUNS` | 25 | Maximum runs per session |
 | `KOAN_INTERVAL` | 5 | Seconds between runs |
-| `KOAN_BRIDGE_INTERVAL` | 3 | Telegram poll interval (seconds) |
+| `KOAN_BRIDGE_INTERVAL` | 3 | Messaging poll interval (seconds) |
 | `KOAN_CHAT_TIMEOUT` | 180 | Claude CLI timeout for chat responses (seconds) |
 | `KOAN_PROJECTS` | — | Multi-project config: `name:path;name2:path2` |
 | `KOAN_PROJECT_PATH` | — | Single-project path (alternative to `KOAN_PROJECTS`) |
