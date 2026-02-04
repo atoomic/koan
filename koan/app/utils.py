@@ -289,6 +289,19 @@ def get_claude_flags_for_role(role: str, autonomous_mode: str = "") -> str:
     return " ".join(flags)
 
 
+def get_mcp_flags_for_shell() -> str:
+    """Get MCP config flags for Claude CLI, as a space-separated string.
+
+    Designed to be called from run.sh to inject MCP servers into mission execution.
+
+    Returns:
+        Space-separated CLI flags string (e.g., "--mcp-config file.json") or empty string.
+    """
+    from app.mcp_servers import build_mcp_flags
+    flags = build_mcp_flags()
+    return " ".join(flags)
+
+
 def get_auto_merge_config(config: dict, project_name: str) -> dict:
     """Get auto-merge config with per-project override support.
 
