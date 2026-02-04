@@ -12,6 +12,8 @@ from app.missions import (
     find_section_boundaries,
     format_queue,
     reorder_mission,
+    list_pending,
+    cancel_pending_mission,
     DEFAULT_SKELETON,
 )
 
@@ -684,3 +686,112 @@ class TestReorderMission:
         # Find "Complex task" line
         complex_idx = next(i for i, l in enumerate(lines) if "Complex task" in l)
         assert "extra detail" in lines[complex_idx + 1]
+
+
+# --- list_pending ---
+
+class TestListPending:
+    def test_returns_pending_missions(self):
+        content = (
+            "# Missions\n\n"
+            "## En attente\n\n"
+            "- fix auth bug\n"
+            "- add dark mode\n"
+            "- refactor tests\n\n"
+            "## En cours\n\n"
+            "- doing stuff\n"
+        )
+        result = list_pending(content)
+        assert len(result) == 3
+        assert "- fix auth bug" in result
+
+    def test_empty_pending(self):
+        content = "# Missions\n\n## En attente\n\n## En cours\n\n"
+        assert list_pending(content) == []
+
+
+# --- cancel_pending_mission ---
+
+CANCEL_CONTENT = (
+    "# Missions\n\n"
+    "## En attente\n\n"
+    "- [project:koan] fix auth bug\n"
+    "- add dark mode\n"
+    "- [project:koan] refactor tests\n\n"
+    "## En cours\n\n"
+    "- doing stuff\n\n"
+    "## Terminées\n"
+)
+
+
+class TestCancelPendingMission:
+    def test_cancel_by_number(self):
+        new_content, cancelled = cancel_pending_mission(CANCEL_CONTENT, "2")
+        assert "dark mode" in cancelled
+        assert "- add dark mode" not in new_content
+        # Other missions still present
+        assert "- [project:koan] fix auth bug" in new_content
+        assert "- [project:koan] refactor tests" in new_content
+
+    def test_cancel_by_number_first(self):
+        new_content, cancelled = cancel_pending_mission(CANCEL_CONTENT, "1")
+        assert "fix auth bug" in cancelled
+        assert "- [project:koan] fix auth bug" not in new_content
+        assert "- add dark mode" in new_content
+
+    def test_cancel_by_number_last(self):
+        new_content, cancelled = cancel_pending_mission(CANCEL_CONTENT, "3")
+        assert "refactor tests" in cancelled
+        assert "- [project:koan] refactor tests" not in new_content
+        assert "- add dark mode" in new_content
+
+    def test_cancel_by_keyword(self):
+        new_content, cancelled = cancel_pending_mission(CANCEL_CONTENT, "dark mode")
+        assert "dark mode" in cancelled
+        assert "- add dark mode" not in new_content
+
+    def test_cancel_by_keyword_case_insensitive(self):
+        new_content, cancelled = cancel_pending_mission(CANCEL_CONTENT, "DARK MODE")
+        assert "dark mode" in cancelled
+
+    def test_cancel_by_keyword_partial(self):
+        new_content, cancelled = cancel_pending_mission(CANCEL_CONTENT, "auth")
+        assert "fix auth bug" in cancelled
+
+    def test_cancel_number_out_of_range(self):
+        with pytest.raises(ValueError, match="Mission #10 not found"):
+            cancel_pending_mission(CANCEL_CONTENT, "10")
+
+    def test_cancel_number_zero(self):
+        with pytest.raises(ValueError, match="Mission #0 not found"):
+            cancel_pending_mission(CANCEL_CONTENT, "0")
+
+    def test_cancel_keyword_no_match(self):
+        with pytest.raises(ValueError, match="No pending mission matching"):
+            cancel_pending_mission(CANCEL_CONTENT, "nonexistent")
+
+    def test_cancel_empty_pending(self):
+        content = "# Missions\n\n## En attente\n\n## En cours\n\n"
+        with pytest.raises(ValueError, match="No pending missions"):
+            cancel_pending_mission(content, "1")
+
+    def test_cancel_preserves_other_sections(self):
+        new_content, _ = cancel_pending_mission(CANCEL_CONTENT, "1")
+        assert "## En cours" in new_content
+        assert "- doing stuff" in new_content
+        assert "## Terminées" in new_content
+
+    def test_cancel_with_continuation_lines(self):
+        content = (
+            "# Missions\n\n"
+            "## En attente\n\n"
+            "- fix auth bug\n"
+            "  with extra details\n"
+            "- add dark mode\n\n"
+            "## En cours\n\n"
+        )
+        new_content, cancelled = cancel_pending_mission(content, "1")
+        assert "fix auth bug" in cancelled
+        assert "fix auth bug" not in new_content
+        assert "extra details" not in new_content
+        assert "- add dark mode" in new_content

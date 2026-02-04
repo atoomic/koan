@@ -212,6 +212,14 @@ def handle_command(text: str):
         _handle_mcp()
         return
 
+    if cmd.startswith("/cancel-recurring"):
+        _handle_cancel_recurring(text[17:].strip())
+        return
+
+    if cmd.startswith("/cancel"):
+        _handle_cancel(text[7:].strip())
+        return
+
     if cmd == "/help":
         _handle_help()
         return
@@ -222,10 +230,6 @@ def handle_command(text: str):
 
     if cmd == "/recurring":
         _handle_recurring_list()
-        return
-
-    if cmd.startswith("/cancel-recurring"):
-        _handle_cancel_recurring(text[17:].strip())
         return
 
     if cmd.startswith("/pr"):
@@ -448,6 +452,52 @@ def _handle_projects():
     send_telegram("\n".join(lines))
 
 
+def _handle_cancel(identifier: str):
+    """Cancel a pending mission by number or keyword."""
+    if not identifier:
+        # Show numbered list of pending missions for easy selection
+        from app.missions import list_pending
+        if not MISSIONS_FILE.exists():
+            send_telegram("No pending missions.")
+            return
+        pending = list_pending(MISSIONS_FILE.read_text())
+        if not pending:
+            send_telegram("No pending missions.")
+            return
+        lines = ["Pending missions:"]
+        for i, m in enumerate(pending, 1):
+            # Truncate long missions and strip project tags for display
+            display = re.sub(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*', '', m)
+            if len(display) > 80:
+                display = display[:77] + "..."
+            lines.append(f"  {i}. {display}")
+        lines.append("\nUsage: /cancel 3 or /cancel fix auth")
+        send_telegram("\n".join(lines))
+        return
+
+    import fcntl as _fcntl
+    from app.missions import cancel_pending_mission
+
+    try:
+        with open(MISSIONS_FILE, "r+") as f:
+            _fcntl.flock(f, _fcntl.LOCK_EX)
+            content = f.read()
+            new_content, cancelled = cancel_pending_mission(content, identifier)
+            f.seek(0)
+            f.truncate()
+            f.write(new_content)
+        # Clean display
+        display = re.sub(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*', '', cancelled)
+        if len(display) > 120:
+            display = display[:117] + "..."
+        send_telegram(f"❌ Mission cancelled:\n{display}")
+        print(f"[awake] Cancelled mission: {display[:60]}")
+    except ValueError as e:
+        send_telegram(str(e))
+    except Exception as e:
+        print(f"[awake] Cancel error: {e}")
+        send_telegram("Error during cancellation.")
+
 def _handle_help():
     """Send the list of available commands."""
     help_text = (
@@ -457,6 +507,7 @@ def _handle_help():
         "/status — quick status (missions, pause, loop)\n"
         "/queue — full queue with numbered missions\n"
         "/priority <n> — bump mission #n to top of queue\n"
+        "/cancel — cancel a pending mission (/cancel 3 or /cancel fix auth)\n"
         "/usage — detailed status formatted by Claude (quota, missions, progress)\n"
         "/log [project] [date] — latest journal (e.g. /log koan, /log koan yesterday)\n"
         "/projects — list configured projects\n"

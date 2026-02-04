@@ -21,6 +21,7 @@ from app.awake import (
     _clean_chat_response,
     _build_status,
     _handle_help,
+    _handle_cancel,
     _handle_log,
     _handle_mcp,
     _handle_ping,
@@ -1817,3 +1818,114 @@ class TestResolveProjectPath:
     def test_no_match_returns_none(self, mock_projects):
         mock_projects.return_value = [("a", "/p/a"), ("b", "/p/b")]
         assert _resolve_project_path("unknown") is None
+
+
+# ---------------------------------------------------------------------------
+# /cancel command
+# ---------------------------------------------------------------------------
+
+class TestHandleCancel:
+    MISSIONS_CONTENT = (
+        "# Missions\n\n"
+        "## En attente\n\n"
+        "- [project:koan] fix auth bug\n"
+        "- add dark mode\n"
+        "- refactor tests\n\n"
+        "## En cours\n\n"
+        "## Terminées\n"
+    )
+
+    @patch("app.awake.send_telegram")
+    def test_cancel_by_number(self, mock_send, tmp_path):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text(self.MISSIONS_CONTENT)
+        with patch("app.awake.MISSIONS_FILE", missions_file):
+            _handle_cancel("2")
+        msg = mock_send.call_args[0][0]
+        assert "dark mode" in msg
+        assert "cancelled" in msg.lower() or "❌" in msg
+        # File updated
+        content = missions_file.read_text()
+        assert "- add dark mode" not in content
+        assert "- [project:koan] fix auth bug" in content
+
+    @patch("app.awake.send_telegram")
+    def test_cancel_by_keyword(self, mock_send, tmp_path):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text(self.MISSIONS_CONTENT)
+        with patch("app.awake.MISSIONS_FILE", missions_file):
+            _handle_cancel("auth")
+        msg = mock_send.call_args[0][0]
+        assert "auth" in msg.lower()
+        content = missions_file.read_text()
+        assert "fix auth bug" not in content
+
+    @patch("app.awake.send_telegram")
+    def test_cancel_no_match(self, mock_send, tmp_path):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text(self.MISSIONS_CONTENT)
+        with patch("app.awake.MISSIONS_FILE", missions_file):
+            _handle_cancel("nonexistent")
+        msg = mock_send.call_args[0][0]
+        assert "No pending mission matching" in msg
+
+    @patch("app.awake.send_telegram")
+    def test_cancel_empty_shows_list(self, mock_send, tmp_path):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text(self.MISSIONS_CONTENT)
+        with patch("app.awake.MISSIONS_FILE", missions_file):
+            _handle_cancel("")
+        msg = mock_send.call_args[0][0]
+        assert "1." in msg
+        assert "2." in msg
+        assert "3." in msg
+        assert "/cancel" in msg
+
+    @patch("app.awake.send_telegram")
+    def test_cancel_empty_no_missions(self, mock_send, tmp_path):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text("# Missions\n\n## En attente\n\n## En cours\n\n")
+        with patch("app.awake.MISSIONS_FILE", missions_file):
+            _handle_cancel("")
+        msg = mock_send.call_args[0][0]
+        assert "No pending" in msg
+
+    @patch("app.awake.send_telegram")
+    def test_cancel_number_out_of_range(self, mock_send, tmp_path):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text(self.MISSIONS_CONTENT)
+        with patch("app.awake.MISSIONS_FILE", missions_file):
+            _handle_cancel("99")
+        msg = mock_send.call_args[0][0]
+        assert "not found" in msg.lower() or "#99" in msg
+
+    @patch("app.awake._handle_cancel")
+    def test_handle_command_routes_cancel(self, mock_cancel):
+        handle_command("/cancel 3")
+        mock_cancel.assert_called_once_with("3")
+
+    @patch("app.awake._handle_cancel")
+    def test_handle_command_routes_cancel_keyword(self, mock_cancel):
+        handle_command("/cancel fix auth")
+        mock_cancel.assert_called_once_with("fix auth")
+
+    @patch("app.awake._handle_cancel")
+    def test_handle_command_routes_cancel_empty(self, mock_cancel):
+        handle_command("/cancel")
+        mock_cancel.assert_called_once_with("")
+
+    @patch("app.awake.send_telegram")
+    def test_cancel_strips_project_tag_in_display(self, mock_send, tmp_path):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text(self.MISSIONS_CONTENT)
+        with patch("app.awake.MISSIONS_FILE", missions_file):
+            _handle_cancel("1")
+        msg = mock_send.call_args[0][0]
+        assert "[project:koan]" not in msg
+        assert "fix auth bug" in msg
+
+    @patch("app.awake.send_telegram")
+    def test_help_mentions_cancel(self, mock_send):
+        _handle_help()
+        msg = mock_send.call_args[0][0]
+        assert "/cancel" in msg
