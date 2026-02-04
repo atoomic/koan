@@ -116,7 +116,7 @@ Alternatively: **System Settings → Energy → Prevent automatic sleeping when 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KOAN_MAX_RUNS` | 20 | Maximum runs per session |
+| `KOAN_MAX_RUNS` | 25 | Maximum runs per session |
 | `KOAN_INTERVAL` | 5 | Seconds between runs |
 | `KOAN_BRIDGE_INTERVAL` | 3 | Telegram poll interval (seconds) |
 | `KOAN_CHAT_TIMEOUT` | 180 | Claude CLI timeout for chat responses (seconds) |

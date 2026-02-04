@@ -31,7 +31,7 @@ if [ ! -d "$INSTANCE" ]; then
 fi
 
 # Config via env vars (or defaults)
-MAX_RUNS=${KOAN_MAX_RUNS:-10}
+MAX_RUNS=${KOAN_MAX_RUNS:-25}
 INTERVAL=${KOAN_INTERVAL:-5}
 
 # Parse projects configuration (bash 3.2 compatible - no associative arrays)
