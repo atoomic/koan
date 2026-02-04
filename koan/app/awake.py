@@ -111,8 +111,8 @@ def is_mission(text: str) -> bool:
     # Explicit prefix always wins
     if text.lower().startswith("mission:") or text.lower().startswith("mission :"):
         return True
-    # Long messages (>200 chars) with imperative verbs are likely missions
-    if len(text) > 200 and MISSION_RE.search(text):
+    # Long messages (>200 chars) that start with imperative verbs are likely missions
+    if len(text) > 200 and MISSION_RE.match(text):
         return True
     # Short imperative sentences
     if MISSION_RE.match(text):
@@ -136,6 +136,15 @@ def parse_project(text: str) -> Tuple[Optional[str], str]:
 def handle_command(text: str):
     """Handle /commands locally — no Claude needed."""
     cmd = text.strip().lower()
+
+    # /chat forces chat mode — bypass mission classification
+    if cmd.startswith("/chat"):
+        chat_text = text[5:].strip()
+        if not chat_text:
+            send_telegram("Usage: /chat <message>\nForces chat mode for messages that look like missions.")
+            return
+        _run_in_worker(handle_chat, chat_text)
+        return
 
     if cmd == "/stop":
         (KOAN_ROOT / ".koan-stop").write_text("STOP")
@@ -453,6 +462,7 @@ def _handle_help():
     help_text = (
         "Available commands:\n\n"
         "/help — show this help\n"
+        "/chat <msg> — force chat mode (bypass mission detection)\n"
         "/ping — check if the run loop is alive (✅/❌)\n"
         "/status — quick status (missions, pause, loop)\n"
         "/queue — full queue with numbered missions\n"
@@ -474,6 +484,7 @@ def _handle_help():
         "/cancel-recurring <n> — remove a recurring mission\n"
         "\n"
         "To send a mission: start with \"mission:\" or an action verb (implement, fix, add...)\n"
+        "To force chat: /chat <message> (useful when your message starts with an action verb)\n"
         "Anything else = free conversation with Kōan."
     )
     send_telegram(help_text)
