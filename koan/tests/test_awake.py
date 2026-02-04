@@ -24,6 +24,7 @@ from app.awake import (
     _handle_log,
     _handle_mcp,
     _handle_ping,
+    _handle_pr,
     _handle_queue,
     _handle_priority,
     _handle_projects,
@@ -31,6 +32,7 @@ from app.awake import (
     _handle_recurring_add,
     _handle_recurring_list,
     _handle_cancel_recurring,
+    _resolve_project_path,
     _run_in_worker,
     get_updates,
     check_config,
@@ -1703,3 +1705,115 @@ class TestHandleLog:
         _handle_help()
         msg = mock_send.call_args[0][0]
         assert "/log" in msg
+
+
+# ---------------------------------------------------------------------------
+# /pr command
+# ---------------------------------------------------------------------------
+
+class TestHandlePr:
+    """Test /pr command handler."""
+
+    @patch("app.awake.send_telegram")
+    def test_pr_empty_shows_usage(self, mock_send):
+        """/pr with no args shows usage."""
+        _handle_pr("")
+        msg = mock_send.call_args[0][0]
+        assert "Usage" in msg
+        assert "/pr" in msg
+
+    @patch("app.awake.send_telegram")
+    def test_pr_invalid_url(self, mock_send):
+        """/pr with invalid URL shows error."""
+        _handle_pr("not a url")
+        msg = mock_send.call_args[0][0]
+        assert "No valid GitHub PR URL" in msg
+
+    @patch("app.awake.send_telegram")
+    def test_pr_non_github_url(self, mock_send):
+        """/pr with non-GitHub URL shows error."""
+        _handle_pr("https://gitlab.com/foo/bar/pull/1")
+        msg = mock_send.call_args[0][0]
+        assert "No valid GitHub PR URL" in msg
+
+    @patch("app.awake._run_in_worker")
+    @patch("app.awake._resolve_project_path", return_value="/tmp/project")
+    @patch("app.awake.send_telegram")
+    def test_pr_valid_url_starts_worker(self, mock_send, mock_resolve, mock_worker):
+        """/pr with valid URL starts a worker."""
+        _handle_pr("https://github.com/sukria/koan/pull/29")
+        mock_worker.assert_called_once()
+        # First send_telegram call is "Starting PR review..."
+        msg = mock_send.call_args[0][0]
+        assert "Starting PR review" in msg
+        assert "#29" in msg
+
+    @patch("app.awake._run_in_worker")
+    @patch("app.awake.get_known_projects", return_value=[])
+    @patch("app.awake.send_telegram")
+    def test_pr_no_matching_project(self, mock_send, mock_projects, mock_worker):
+        """/pr fails when no local project matches repo."""
+        with patch("app.awake.PROJECT_PATH", ""):
+            _handle_pr("https://github.com/sukria/unknown-repo/pull/1")
+        mock_worker.assert_not_called()
+        msg = mock_send.call_args[0][0]
+        assert "Could not find" in msg
+
+    @patch("app.awake._run_in_worker")
+    @patch("app.awake._resolve_project_path", return_value="/tmp/project")
+    @patch("app.awake.send_telegram")
+    def test_pr_url_with_fragment(self, mock_send, mock_resolve, mock_worker):
+        """/pr handles URL with fragment (#pullrequestreview-...)."""
+        _handle_pr("https://github.com/sukria/koan/pull/29#pullrequestreview-123")
+        mock_worker.assert_called_once()
+        msg = mock_send.call_args[0][0]
+        assert "#29" in msg
+
+    @patch("app.awake._handle_pr")
+    def test_handle_command_routes_pr(self, mock_pr):
+        """handle_command routes /pr to _handle_pr."""
+        handle_command("/pr https://github.com/sukria/koan/pull/29")
+        mock_pr.assert_called_once_with("https://github.com/sukria/koan/pull/29")
+
+    @patch("app.awake.send_telegram")
+    def test_help_mentions_pr(self, mock_send):
+        """/help output includes /pr."""
+        _handle_help()
+        msg = mock_send.call_args[0][0]
+        assert "/pr" in msg
+
+
+class TestResolveProjectPath:
+    """Test _resolve_project_path helper."""
+
+    @patch("app.awake.get_known_projects")
+    def test_exact_match(self, mock_projects):
+        mock_projects.return_value = [("koan", "/home/user/koan"), ("web-app", "/home/user/web")]
+        assert _resolve_project_path("koan") == "/home/user/koan"
+
+    @patch("app.awake.get_known_projects")
+    def test_case_insensitive_match(self, mock_projects):
+        mock_projects.return_value = [("Koan", "/home/user/koan")]
+        assert _resolve_project_path("koan") == "/home/user/koan"
+
+    @patch("app.awake.get_known_projects")
+    def test_basename_match(self, mock_projects):
+        mock_projects.return_value = [("myproject", "/home/user/koan")]
+        assert _resolve_project_path("koan") == "/home/user/koan"
+
+    @patch("app.awake.get_known_projects")
+    def test_single_project_fallback(self, mock_projects):
+        mock_projects.return_value = [("myproject", "/home/user/project")]
+        assert _resolve_project_path("unknown") == "/home/user/project"
+
+    @patch("app.awake.get_known_projects")
+    @patch("app.awake.PROJECT_PATH", "/fallback/path")
+    def test_project_path_fallback(self, mock_projects):
+        mock_projects.return_value = [("a", "/p/a"), ("b", "/p/b")]
+        assert _resolve_project_path("unknown") == "/fallback/path"
+
+    @patch("app.awake.get_known_projects")
+    @patch("app.awake.PROJECT_PATH", "")
+    def test_no_match_returns_none(self, mock_projects):
+        mock_projects.return_value = [("a", "/p/a"), ("b", "/p/b")]
+        assert _resolve_project_path("unknown") is None

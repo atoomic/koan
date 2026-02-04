@@ -228,6 +228,10 @@ def handle_command(text: str):
         _handle_cancel_recurring(text[17:].strip())
         return
 
+    if cmd.startswith("/pr"):
+        _handle_pr(text[3:].strip())
+        return
+
     # Recurring mission commands: /daily, /hourly, /weekly
     for prefix in ("/daily", "/hourly", "/weekly"):
         if cmd.startswith(prefix):
@@ -456,6 +460,7 @@ def _handle_help():
         "/usage — status détaillé formaté par Claude (quota, missions, progression)\n"
         "/log [projet] [date] — dernier journal (ex: /log koan, /log koan yesterday)\n"
         "/projects — liste des projets configurés\n"
+        "/pr <url> — review et update d'une pull request GitHub\n"
         "/mcp — serveurs MCP connectés (email, calendrier, etc.)\n"
         "/stop — arrêter Kōan après la mission en cours\n"
         "/pause — mettre en pause (pas de nouvelles missions)\n"
@@ -526,6 +531,87 @@ def _handle_cancel_recurring(identifier: str):
         send_telegram(f"Recurring mission removed: {removed}")
     except ValueError as e:
         send_telegram(str(e))
+
+
+def _handle_pr(args: str):
+    """Handle /pr command — review and update a pull request.
+
+    Usage:
+        /pr https://github.com/owner/repo/pull/123
+    """
+    if not args:
+        send_telegram(
+            "Usage: /pr <github-pr-url>\n"
+            "Ex: /pr https://github.com/sukria/koan/pull/29\n\n"
+            "Reads PR reviews, implements requested changes, "
+            "runs tests, pushes, and comments."
+        )
+        return
+
+    # Extract URL from args (may contain extra text after the URL)
+    url_match = re.search(r'https?://github\.com/[^\s]+/pull/\d+', args)
+    if not url_match:
+        send_telegram("No valid GitHub PR URL found.\nEx: /pr https://github.com/owner/repo/pull/123")
+        return
+
+    pr_url = url_match.group(0)
+    # Strip any fragment (#...) for clean parsing
+    pr_url = pr_url.split("#")[0]
+
+    from app.pr_review import parse_pr_url, run_pr_review
+
+    try:
+        owner, repo, pr_number = parse_pr_url(pr_url)
+    except ValueError as e:
+        send_telegram(str(e))
+        return
+
+    # Determine project path — try to match repo name to known projects
+    project_path = _resolve_project_path(repo)
+    if not project_path:
+        send_telegram(
+            f"Could not find local project matching repo '{repo}'.\n"
+            f"Known projects: {', '.join(n for n, _ in get_known_projects()) or 'none'}"
+        )
+        return
+
+    send_telegram(f"Starting PR review for #{pr_number} ({owner}/{repo})...")
+    print(f"[awake] PR review: #{pr_number} on {owner}/{repo} at {project_path}")
+
+    def _do_pr_review():
+        try:
+            success, summary = run_pr_review(owner, repo, pr_number, project_path)
+            if success:
+                send_telegram(f"PR #{pr_number} updated.\n\n{summary[:400]}")
+            else:
+                send_telegram(f"PR #{pr_number} review failed: {summary[:400]}")
+        except Exception as e:
+            print(f"[awake] PR review error: {e}")
+            send_telegram(f"PR review error: {str(e)[:300]}")
+
+    _run_in_worker(_do_pr_review)
+
+
+def _resolve_project_path(repo_name: str) -> Optional[str]:
+    """Find local project path matching a repository name.
+
+    Tries known projects first, then falls back to KOAN_PROJECT_PATH.
+    """
+    projects = get_known_projects()
+    # Try exact match on project name
+    for name, path in projects:
+        if name.lower() == repo_name.lower():
+            return path
+    # Try matching repo name against directory basename
+    for name, path in projects:
+        if Path(path).name.lower() == repo_name.lower():
+            return path
+    # Fallback to PROJECT_PATH if only one project
+    if len(projects) == 1:
+        return projects[0][1]
+    if PROJECT_PATH:
+        return PROJECT_PATH
+    return None
 
 
 def _handle_usage():
