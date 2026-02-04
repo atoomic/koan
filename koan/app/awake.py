@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Kōan Telegram Bridge — v2
+Kōan Messaging Bridge — v3
 
 Fast-response architecture:
-- Polls Telegram every 3s (configurable)
+- Polls messaging provider every 3s (configurable)
 - Chat messages → lightweight Claude call → instant reply
 - Mission-like messages → written to missions.md → ack sent immediately
 - Outbox flushed every cycle (no more waiting for next poll)
 - /stop, /status handled locally (no Claude needed)
+
+Supports multiple messaging backends (Telegram, Slack) via messaging_provider.py.
 """
 
 import fcntl
@@ -22,11 +24,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 
-import requests
-
 from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
 from app.health_check import write_heartbeat
-from app.notify import send_telegram
+from app.messaging_provider import get_messaging_provider, send_message
+from app.notify import send_telegram  # backward compat alias
 from app.utils import (
     load_dotenv,
     parse_project as _parse_project,
@@ -45,8 +46,6 @@ from app.utils import (
 
 load_dotenv()
 
-BOT_TOKEN = os.environ.get("KOAN_TELEGRAM_TOKEN", "")
-CHAT_ID = os.environ.get("KOAN_TELEGRAM_CHAT_ID", "")
 POLL_INTERVAL = int(os.environ.get("KOAN_BRIDGE_INTERVAL", "3"))
 CHAT_TIMEOUT = int(os.environ.get("KOAN_CHAT_TIMEOUT", "180"))
 
@@ -57,8 +56,6 @@ OUTBOX_FILE = INSTANCE_DIR / "outbox.md"
 TELEGRAM_HISTORY_FILE = INSTANCE_DIR / "telegram-history.jsonl"
 TOPICS_FILE = INSTANCE_DIR / "previous-discussions-topics.json"
 PROJECT_PATH = os.environ.get("KOAN_PROJECT_PATH", "")
-
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # Context loaded once at startup
 SOUL = ""
@@ -73,25 +70,19 @@ if summary_path.exists():
 
 
 def check_config():
-    if not BOT_TOKEN or not CHAT_ID:
-        print("Error: Set KOAN_TELEGRAM_TOKEN and KOAN_TELEGRAM_CHAT_ID env vars.")
-        sys.exit(1)
+    provider = get_messaging_provider()
+    provider.check_config()
     if not INSTANCE_DIR.exists():
         print("Error: No instance/ directory. Run: cp -r instance.example instance")
         sys.exit(1)
 
 
 def get_updates(offset=None):
-    params = {"timeout": 30}
-    if offset:
-        params["offset"] = offset
-    try:
-        resp = requests.get(f"{TELEGRAM_API}/getUpdates", params=params, timeout=35)
-        data = resp.json()
-        return data.get("result", [])
-    except (requests.RequestException, ValueError) as e:
-        print(f"[awake] Telegram error: {e}")
-        return []
+    """Poll the messaging provider for new messages.
+
+    Returns normalized updates: list of dicts with text, chat_id, update_id.
+    """
+    return get_messaging_provider().get_updates(offset)
 
 
 # ---------------------------------------------------------------------------
@@ -1189,6 +1180,10 @@ def handle_message(text: str):
 
 def main():
     check_config()
+    provider = get_messaging_provider()
+    provider_name = provider.get_provider_name()
+    chat_id = provider.get_chat_id()
+
     # Compact old conversation history to avoid context bleed across sessions
     compacted = compact_telegram_history(TELEGRAM_HISTORY_FILE, TOPICS_FILE)
     if compacted:
@@ -1197,8 +1192,8 @@ def main():
     heartbeat_file = KOAN_ROOT / ".koan-heartbeat"
     heartbeat_file.unlink(missing_ok=True)
     write_heartbeat(str(KOAN_ROOT))
-    print(f"[awake] Token: ...{BOT_TOKEN[-8:]}")
-    print(f"[awake] Chat ID: {CHAT_ID}")
+    print(f"[awake] Provider: {provider_name}")
+    print(f"[awake] Chat ID: {chat_id}")
     print(f"[awake] Soul: {len(SOUL)} chars loaded")
     print(f"[awake] Summary: {len(SUMMARY)} chars loaded")
     print(f"[awake] Polling every {POLL_INTERVAL}s (chat mode: fast reply)")
@@ -1208,10 +1203,9 @@ def main():
         updates = get_updates(offset)
         for update in updates:
             offset = update["update_id"] + 1
-            msg = update.get("message", {})
-            text = msg.get("text", "")
-            chat_id = str(msg.get("chat", {}).get("id", ""))
-            if chat_id == CHAT_ID and text:
+            text = update.get("text", "")
+            msg_chat_id = str(update.get("chat_id", ""))
+            if msg_chat_id == chat_id and text:
                 print(f"[awake] Received: {text[:60]}")
                 handle_message(text)
 

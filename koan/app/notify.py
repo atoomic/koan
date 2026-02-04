@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-Kōan — Telegram notification helper
+Kōan — Messaging notification helper
 
-Standalone module to send messages to Telegram from any process
-(awake.py, run.sh, workers).
+Standalone module to send messages via the configured messaging provider
+(Telegram, Slack, etc.) from any process (awake.py, run.sh, workers).
 
 Usage from shell:
     python3 notify.py "Mission completed: security audit"
 
 Usage from Python:
+    from app.notify import send_message
+    send_message("Mission completed: security audit")
+
+    # Legacy alias (backward compatible):
     from app.notify import send_telegram
     send_telegram("Mission completed: security audit")
 """
@@ -18,46 +22,25 @@ import subprocess
 import sys
 from pathlib import Path
 
-import requests
-
 from app.utils import load_dotenv
 
 
-def send_telegram(text: str) -> bool:
-    """Send a message to the configured Telegram chat. Returns True on success."""
+def send_message(text: str) -> bool:
+    """Send a message via the configured messaging provider. Returns True on success."""
     load_dotenv()
+    from app.messaging_provider import get_messaging_provider
+    return get_messaging_provider().send_message(text)
 
-    BOT_TOKEN = os.environ.get("KOAN_TELEGRAM_TOKEN", "")
-    CHAT_ID = os.environ.get("KOAN_TELEGRAM_CHAT_ID", "")
 
-    if not BOT_TOKEN or not CHAT_ID:
-        print("[notify] KOAN_TELEGRAM_TOKEN or KOAN_TELEGRAM_CHAT_ID not set.", file=sys.stderr)
-        return False
-
-    TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-    ok = True
-    for chunk in [text[i:i + 4000] for i in range(0, len(text), 4000)]:
-        try:
-            resp = requests.post(
-                f"{TELEGRAM_API}/sendMessage",
-                json={"chat_id": CHAT_ID, "text": chunk},
-                timeout=10,
-            )
-            data = resp.json()
-            if not data.get("ok"):
-                print(f"[notify] Telegram API error: {resp.text[:200]}", file=sys.stderr)
-                ok = False
-        except (requests.RequestException, ValueError) as e:
-            print(f"[notify] Send error: {e}", file=sys.stderr)
-            ok = False
-    return ok
+# Backward-compatible alias — all existing callers use send_telegram()
+send_telegram = send_message
 
 
 def format_and_send(raw_message: str, instance_dir: str = None,
                      project_name: str = "") -> bool:
-    """Format a message through Claude with Kōan's personality, then send to Telegram.
+    """Format a message through Claude with Kōan's personality, then send.
 
-    Every message sent to Telegram should go through this function to ensure
+    Every message sent should go through this function to ensure
     consistent personality, language (French), and readability on mobile.
 
     Args:
@@ -80,7 +63,7 @@ def format_and_send(raw_message: str, instance_dir: str = None,
             instance_dir = str(Path(koan_root) / "instance")
         else:
             # Can't format without instance dir — send raw with basic cleanup
-            return send_telegram(fallback_format(raw_message))
+            return send_message(fallback_format(raw_message))
 
     instance_path = Path(instance_dir)
     try:
@@ -88,10 +71,10 @@ def format_and_send(raw_message: str, instance_dir: str = None,
         prefs = load_human_prefs(instance_path)
         memory = load_memory_context(instance_path, project_name)
         formatted = format_for_telegram(raw_message, soul, prefs, memory)
-        return send_telegram(formatted)
+        return send_message(formatted)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         print(f"[notify] Format error, sending fallback: {e}", file=sys.stderr)
-        return send_telegram(fallback_format(raw_message))
+        return send_message(fallback_format(raw_message))
 
 
 if __name__ == "__main__":
@@ -116,5 +99,5 @@ if __name__ == "__main__":
         project_name = os.environ.get("KOAN_CURRENT_PROJECT", "")
         success = format_and_send(message, project_name=project_name)
     else:
-        success = send_telegram(message)
+        success = send_message(message)
     sys.exit(0 if success else 1)
