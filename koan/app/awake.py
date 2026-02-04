@@ -181,6 +181,10 @@ def handle_command(text: str):
     if cmd.startswith("/reflect "):
         _handle_reflect(text[9:].strip())
 
+    if cmd == "/queue":
+        _handle_queue()
+        return
+
     if cmd == "/help":
         _handle_help()
         return
@@ -239,13 +243,13 @@ def _build_status() -> str:
 
     return "\n".join(parts)
 
-
 def _handle_help():
     """Send the list of available commands."""
     help_text = (
         "Commandes disponibles :\n\n"
         "/help — cette aide\n"
         "/status — état rapide (missions, pause, loop)\n"
+        "/queue — file d'attente complète avec numéros\n"
         "/usage — status détaillé formaté par Claude (quota, missions, progression)\n"
         "/stop — arrêter Kōan après la mission en cours\n"
         "/pause — mettre en pause (pas de nouvelles missions)\n"
