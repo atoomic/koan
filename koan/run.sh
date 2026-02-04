@@ -30,9 +30,10 @@ if [ ! -d "$INSTANCE" ]; then
   exit 1
 fi
 
-# Config via env vars (or defaults)
-MAX_RUNS=${KOAN_MAX_RUNS:-10}
-INTERVAL=${KOAN_INTERVAL:-5}
+# Config is loaded from config.yaml (see instance/config.yaml)
+# These are placeholder defaults; actual values set after PYTHONPATH is configured.
+MAX_RUNS=20
+INTERVAL=300
 
 # Parse projects configuration (bash 3.2 compatible - no associative arrays)
 PROJECT_NAMES=()
@@ -76,6 +77,10 @@ PYTHON="python3"
 
 # Set PYTHONPATH so Python scripts can import from app/
 export PYTHONPATH="$KOAN_ROOT/koan"
+
+# Load config from config.yaml (source of truth for behavioral settings)
+MAX_RUNS=$("$PYTHON" -c "from app.utils import get_max_runs; print(get_max_runs())" 2>/dev/null || echo "20")
+INTERVAL=$("$PYTHON" -c "from app.utils import get_interval_seconds; print(get_interval_seconds())" 2>/dev/null || echo "300")
 
 # Set git identity for koan commits (overrides local git config)
 if [ -n "${KOAN_EMAIL:-}" ]; then

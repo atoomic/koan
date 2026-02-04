@@ -200,11 +200,12 @@ Alternatively: **System Settings → Energy → Prevent automatic sleeping when 
 |----------|---------|-------------|
 | `KOAN_ROOT` | (auto-detected) | Path to koan repo (set by Makefile) |
 | `KOAN_EMAIL` | — | Git author email for koan's commits |
-| `KOAN_MAX_RUNS` | 20 | Maximum runs before auto-pause |
-| `KOAN_INTERVAL` | 5 | Seconds between runs |
 | `KOAN_BRIDGE_INTERVAL` | 3 | Telegram poll interval (seconds) |
 | `KOAN_CHAT_TIMEOUT` | 180 | Claude CLI timeout for chat responses (seconds) |
 | `KOAN_GIT_SYNC_INTERVAL` | 5 | Runs between git sync checks |
+
+> **Note:** `max_runs_per_day` and `interval_seconds` are now configured in `config.yaml`, not `.env`.
+> The env vars `KOAN_MAX_RUNS` and `KOAN_INTERVAL` are deprecated and ignored.
 
 ## Multi-Project Setup
 
