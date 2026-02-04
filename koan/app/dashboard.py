@@ -287,9 +287,14 @@ def chat_send():
         models = get_model_config()
         chat_flags = build_claude_flags(model=models["chat"], fallback=models["fallback"])
 
+        # Add MCP config flags if MCP servers are available
+        from app.mcp_servers import build_mcp_flags
+        mcp_flags = build_mcp_flags()
+        max_turns = "3" if mcp_flags else "1"
+
         try:
             result = subprocess.run(
-                ["claude", "-p", prompt, "--allowedTools", allowed_tools, "--max-turns", "1"] + chat_flags,
+                ["claude", "-p", prompt, "--allowedTools", allowed_tools, "--max-turns", max_turns] + chat_flags + mcp_flags,
                 capture_output=True, text=True, timeout=CHAT_TIMEOUT,
                 cwd=project_path,
             )

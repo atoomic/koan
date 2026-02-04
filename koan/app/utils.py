@@ -596,3 +596,16 @@ def append_to_outbox(outbox_path: Path, content: str):
         fcntl.flock(f, fcntl.LOCK_EX)
         f.write(content)
         fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def get_mcp_flags_for_shell() -> str:
+    """Get MCP config flags for Claude CLI, as a space-separated string.
+
+    Designed to be called from run.sh to inject MCP servers into mission execution.
+
+    Returns:
+        Space-separated CLI flags string (e.g., "--mcp-config file.json") or empty string.
+    """
+    from app.mcp_servers import build_mcp_flags
+    flags = build_mcp_flags()
+    return " ".join(flags)

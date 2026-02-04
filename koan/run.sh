@@ -534,9 +534,10 @@ EOF
   CLAUDE_OUT="$(mktemp)"
   CLAUDE_ERR="$(mktemp)"
   MISSION_FLAGS=$("$PYTHON" -c "from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('mission', '$AUTONOMOUS_MODE'))" 2>/dev/null || echo "")
+  MCP_FLAGS=$("$PYTHON" -c "from app.utils import get_mcp_flags_for_shell; print(get_mcp_flags_for_shell())" 2>/dev/null || echo "")
   set +e  # Don't exit on error, we need to check the output
   # shellcheck disable=SC2086
-  claude -p "$PROMPT" --allowedTools Bash,Read,Write,Glob,Grep,Edit --output-format json $MISSION_FLAGS > "$CLAUDE_OUT" 2>"$CLAUDE_ERR"
+  claude -p "$PROMPT" --allowedTools Bash,Read,Write,Glob,Grep,Edit --output-format json $MISSION_FLAGS $MCP_FLAGS > "$CLAUDE_OUT" 2>"$CLAUDE_ERR"
   CLAUDE_EXIT=$?
   set -e
 

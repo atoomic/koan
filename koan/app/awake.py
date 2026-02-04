@@ -185,6 +185,10 @@ def handle_command(text: str):
         _handle_ping()
         return
 
+    if cmd == "/mcp":
+        _handle_mcp()
+        return
+
     if cmd == "/help":
         _handle_help()
         return
@@ -271,14 +275,24 @@ def _handle_ping():
         send_telegram("❌ Run loop is not running.\n\nTo restart:\n  make run &")
 
 
+def _handle_mcp():
+    """Send the list of configured MCP servers."""
+    from app.mcp_servers import list_mcp_servers, get_mcp_capabilities, format_mcp_list
+
+    servers = list_mcp_servers()
+    capabilities = get_mcp_capabilities()
+    send_telegram(format_mcp_list(servers, capabilities))
+
+
 def _handle_help():
     """Send the list of available commands."""
     help_text = (
         "Available commands:\n\n"
         "/help — this help\n"
-        "/ping — check if run loop is alive (✅/❌)\n"      
+        "/ping — check if run loop is alive (✅/❌)\n"
         "/status — quick status (missions, pause, loop)\n"
         "/usage — detailed status formatted by Claude (quota, missions, progress)\n"
+        "/mcp — connected MCP servers (email, calendar, etc.)\n"
         "/stop — stop Kōan after current mission\n"
         "/pause — pause (no new missions)\n"
         "/resume — resume after pause or quota exhausted\n"
@@ -636,6 +650,12 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
     # Load tools description
     tools_desc = get_tools_description()
 
+    # Add MCP capabilities to tools description
+    from app.mcp_servers import get_mcp_prompt_context
+    mcp_context = get_mcp_prompt_context()
+    if mcp_context:
+        tools_desc = (tools_desc + "\n\n" + mcp_context) if tools_desc else mcp_context
+
     from app.prompts import load_prompt
 
     summary_budget = 0 if lite else 1500
@@ -719,9 +739,16 @@ def handle_chat(text: str):
     models = get_model_config()
     chat_flags = build_claude_flags(model=models["chat"], fallback=models["fallback"])
 
+    # Add MCP config flags if MCP servers are available
+    from app.mcp_servers import build_mcp_flags
+    mcp_flags = build_mcp_flags()
+
+    # Allow more turns when MCP is available (tools need round-trips)
+    max_turns = "3" if mcp_flags else "1"
+
     try:
         result = subprocess.run(
-            ["claude", "-p", prompt, "--allowedTools", allowed_tools, "--max-turns", "1"] + chat_flags,
+            ["claude", "-p", prompt, "--allowedTools", allowed_tools, "--max-turns", max_turns] + chat_flags + mcp_flags,
             capture_output=True, text=True, timeout=CHAT_TIMEOUT,
             cwd=PROJECT_PATH or str(KOAN_ROOT),
         )
