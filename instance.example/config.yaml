@@ -68,6 +68,22 @@ usage:
   session_token_limit: 500000   # Tokens per 5h session window
   weekly_token_limit: 5000000   # Tokens per 7-day window
 
+# MCP (Model Context Protocol) server configuration
+# Extends Kōan's capabilities beyond coding — email, calendar, search, etc.
+# Servers must first be added to Claude Code: claude mcp add <name> <command>
+mcp:
+  # External config files or JSON strings to pass via --mcp-config
+  # These are injected into all Claude CLI calls (chat + missions)
+  configs: []
+    # - "/path/to/mcp-servers.json"
+
+  # Human-readable descriptions of what each MCP server provides
+  # Used in /mcp display and injected into prompts so Claude knows what's available
+  capabilities: {}
+    # gmail: "Read and send emails via Gmail"
+    # google-calendar: "Access Google Calendar — list events, create meetings"
+    # slack: "Read and send Slack messages"
+
 # Per-project overrides
 # Override git_auto_merge settings for specific projects
 projects:

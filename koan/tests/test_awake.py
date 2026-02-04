@@ -21,6 +21,7 @@ from app.awake import (
     _clean_chat_response,
     _build_status,
     _handle_help,
+    _handle_mcp,
     _handle_ping,
     _handle_queue,
     _handle_projects,
@@ -469,7 +470,9 @@ class TestHandleChat:
     @patch("app.awake.get_allowed_tools", return_value="")
     @patch("app.awake.send_telegram", return_value=True)
     @patch("app.awake.subprocess.run")
-    def test_chat_reads_journal_flat_fallback(self, mock_run, mock_send, mock_tools,
+    @patch("app.mcp_servers.build_mcp_flags", return_value=[])
+    @patch("app.mcp_servers.get_mcp_prompt_context", return_value="")
+    def test_chat_reads_journal_flat_fallback(self, mock_mcp_ctx, mock_mcp_flags, mock_run, mock_send, mock_tools,
                                               mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
         """Falls back to flat journal if nested dir doesn't exist."""
         mock_run.return_value = MagicMock(stdout="ok", returncode=0)
@@ -865,7 +868,9 @@ class TestChatLiteRetryErrors:
     @patch("app.awake.get_allowed_tools", return_value="")
     @patch("app.awake.send_telegram")
     @patch("app.awake.subprocess.run")
-    def test_lite_retry_non_timeout_error(self, mock_run, mock_send, mock_tools,
+    @patch("app.mcp_servers.build_mcp_flags", return_value=[])
+    @patch("app.mcp_servers.get_mcp_prompt_context", return_value="")
+    def test_lite_retry_non_timeout_error(self, mock_mcp_ctx, mock_mcp_flags, mock_run, mock_send, mock_tools,
                                            mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
         """Non-timeout error on lite retry should say 'something went wrong', not 'timeout'."""
         mock_run.side_effect = [
@@ -889,7 +894,9 @@ class TestChatLiteRetryErrors:
     @patch("app.awake.get_allowed_tools", return_value="")
     @patch("app.awake.send_telegram")
     @patch("app.awake.subprocess.run")
-    def test_lite_retry_timeout_says_timeout(self, mock_run, mock_send, mock_tools,
+    @patch("app.mcp_servers.build_mcp_flags", return_value=[])
+    @patch("app.mcp_servers.get_mcp_prompt_context", return_value="")
+    def test_lite_retry_timeout_says_timeout(self, mock_mcp_ctx, mock_mcp_flags, mock_run, mock_send, mock_tools,
                                               mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
         """Timeout on lite retry should still say 'timeout'."""
         mock_run.side_effect = [
@@ -1333,3 +1340,132 @@ class TestHandleQueue:
         _handle_help()
         msg = mock_send.call_args[0][0]
         assert "/queue" in msg
+
+
+# ---------------------------------------------------------------------------
+# /mcp command
+# ---------------------------------------------------------------------------
+
+class TestHandleMcp:
+    """Test /mcp command handler."""
+
+    @patch("app.awake.send_telegram")
+    @patch("app.mcp_servers.list_mcp_servers", return_value=[])
+    @patch("app.mcp_servers.get_mcp_capabilities", return_value={})
+    def test_mcp_no_servers(self, mock_caps, mock_list, mock_send):
+        """No MCP servers shows setup instructions."""
+        _handle_mcp()
+        msg = mock_send.call_args[0][0]
+        assert "Aucun serveur MCP" in msg
+        assert "claude mcp add" in msg
+
+    @patch("app.awake.send_telegram")
+    @patch("app.mcp_servers.get_mcp_capabilities", return_value={"gmail": "Read emails"})
+    @patch("app.mcp_servers.list_mcp_servers", return_value=[
+        {"name": "gmail", "type": "stdio", "status": "connected"},
+    ])
+    def test_mcp_with_servers(self, mock_list, mock_caps, mock_send):
+        """MCP with servers shows them."""
+        _handle_mcp()
+        msg = mock_send.call_args[0][0]
+        assert "gmail" in msg
+        assert "Read emails" in msg
+
+    @patch("app.awake._handle_mcp")
+    def test_handle_command_routes_mcp(self, mock_mcp):
+        """handle_command routes /mcp to _handle_mcp."""
+        handle_command("/mcp")
+        mock_mcp.assert_called_once()
+
+    @patch("app.awake.send_telegram")
+    def test_help_mentions_mcp(self, mock_send):
+        """/help output includes /mcp."""
+        _handle_help()
+        msg = mock_send.call_args[0][0]
+        assert "/mcp" in msg
+
+    @patch("app.awake.send_telegram")
+    @patch("app.mcp_servers.list_mcp_servers", return_value=[
+        {"name": "gmail", "type": "stdio"},
+        {"name": "calendar", "type": "http"},
+    ])
+    @patch("app.mcp_servers.get_mcp_capabilities", return_value={})
+    def test_mcp_multiple_servers(self, mock_caps, mock_list, mock_send):
+        """Multiple servers listed properly."""
+        _handle_mcp()
+        msg = mock_send.call_args[0][0]
+        assert "gmail" in msg
+        assert "calendar" in msg
+
+
+class TestMcpInChat:
+    """Test MCP integration in chat handler."""
+
+    @patch("app.awake.save_telegram_message")
+    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.send_telegram")
+    @patch("subprocess.run")
+    @patch("app.mcp_servers.build_mcp_flags", return_value=["--mcp-config", "/test.json"])
+    @patch("app.mcp_servers.get_mcp_prompt_context", return_value="")
+    def test_chat_includes_mcp_flags(self, mock_ctx, mock_mcp, mock_run, mock_send,
+                                      mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+        """Chat handler includes MCP flags in Claude CLI call."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="response text")
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.PROJECT_PATH", ""), \
+             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.SOUL", ""), \
+             patch("app.awake.SUMMARY", ""):
+            handle_chat("summarize my emails")
+        cmd = mock_run.call_args[0][0]
+        assert "--mcp-config" in cmd
+        assert "/test.json" in cmd
+
+    @patch("app.awake.save_telegram_message")
+    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.send_telegram")
+    @patch("subprocess.run")
+    @patch("app.mcp_servers.build_mcp_flags", return_value=["--mcp-config", "/test.json"])
+    @patch("app.mcp_servers.get_mcp_prompt_context", return_value="")
+    def test_chat_with_mcp_uses_more_turns(self, mock_ctx, mock_mcp, mock_run, mock_send,
+                                            mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+        """Chat handler uses max-turns 3 when MCP is available."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="response")
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.PROJECT_PATH", ""), \
+             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.SOUL", ""), \
+             patch("app.awake.SUMMARY", ""):
+            handle_chat("list my meetings")
+        cmd = mock_run.call_args[0][0]
+        turns_idx = cmd.index("--max-turns")
+        assert cmd[turns_idx + 1] == "3"
+
+    @patch("app.awake.save_telegram_message")
+    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.send_telegram")
+    @patch("subprocess.run")
+    @patch("app.mcp_servers.build_mcp_flags", return_value=[])
+    @patch("app.mcp_servers.get_mcp_prompt_context", return_value="")
+    def test_chat_without_mcp_uses_one_turn(self, mock_ctx, mock_mcp, mock_run, mock_send,
+                                             mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+        """Chat handler uses max-turns 1 when no MCP."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="response")
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.PROJECT_PATH", ""), \
+             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.SOUL", ""), \
+             patch("app.awake.SUMMARY", ""):
+            handle_chat("hello")
+        cmd = mock_run.call_args[0][0]
+        turns_idx = cmd.index("--max-turns")
+        assert cmd[turns_idx + 1] == "1"
