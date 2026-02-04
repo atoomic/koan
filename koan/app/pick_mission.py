@@ -157,7 +157,7 @@ def pick_mission(
         missions_content=missions_content,
         projects_str=projects_str,
         run_num=run_num,
-        max_runs="20",  # Reasonable default, not critical for picking
+        max_runs="25",  # Reasonable default, not critical for picking
         autonomous_mode=autonomous_mode,
         last_project=last_project,
     )

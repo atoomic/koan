@@ -5,7 +5,7 @@ project_path: "/path/to/anantys-back"  # Target project to analyze
 pilot_repo: "/path/to/koan"            # This repo
 
 # Budget & Scheduling
-max_runs_per_day: 20
+max_runs_per_day: 25
 interval_seconds: 300  # 5 minutes between runs
 
 # Fast reply mode — use lightweight model (Haiku) for command handlers

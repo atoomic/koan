@@ -280,7 +280,7 @@ services:
       CLAUDE_AUTH_TOKEN: ${{secret.CLAUDE_AUTH_TOKEN}}
       GITHUB_TOKEN: ${{secret.GITHUB_TOKEN}}
       KOAN_PROJECTS: "koan:/app/repos/koan;anantys-back:/app/repos/anantys-back"
-      KOAN_MAX_RUNS: "20"
+      KOAN_MAX_RUNS: "25"
       KOAN_INTERVAL: "300"
     healthCheck:
       path: /health
