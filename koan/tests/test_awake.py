@@ -888,9 +888,9 @@ class TestCleanChatResponse:
         assert "Content" in result
 
     def test_truncates_long_messages(self):
-        text = "x" * 600
+        text = "x" * 2500
         result = _clean_chat_response(text)
-        assert len(result) <= 500
+        assert len(result) <= 2000
         assert result.endswith("...")
 
     def test_empty_after_cleanup(self):

@@ -702,9 +702,9 @@ def _clean_chat_response(text: str) -> str:
     # Strip heading markers
     cleaned = re.sub(r'^#{1,6}\s+', '', cleaned, flags=re.MULTILINE)
 
-    # Truncate for smartphone
-    if len(cleaned) > 500:
-        cleaned = cleaned[:497] + "..."
+    # Truncate for smartphone (Telegram limit is 4096, keep 2000 for readability)
+    if len(cleaned) > 2000:
+        cleaned = cleaned[:1997] + "..."
 
     return cleaned.strip()
 
