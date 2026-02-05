@@ -20,7 +20,9 @@ from app.awake import (
     _format_outbox_message,
     _clean_chat_response,
     _build_status,
+    _build_chat_prompt,
     _handle_help,
+    _handle_language,
     _handle_usage,
     _run_in_worker,
     get_updates,
@@ -1154,3 +1156,111 @@ class TestPauseAwareness:
 
         # Prompt should mention running status
         assert "RUNNING" in prompt or "▶️" in prompt
+
+
+# ---------------------------------------------------------------------------
+# /language command
+# ---------------------------------------------------------------------------
+
+class TestHandleLanguage:
+    @patch("app.awake.send_telegram")
+    @patch("app.awake.get_language", return_value="")
+    def test_bare_language_no_override(self, mock_get, mock_send):
+        _handle_language("")
+        mock_send.assert_called_once()
+        msg = mock_send.call_args[0][0]
+        assert "No language override" in msg
+
+    @patch("app.awake.send_telegram")
+    @patch("app.awake.get_language", return_value="english")
+    def test_bare_language_shows_current(self, mock_get, mock_send):
+        _handle_language("")
+        mock_send.assert_called_once()
+        msg = mock_send.call_args[0][0]
+        assert "english" in msg
+
+    @patch("app.awake.send_telegram")
+    @patch("app.awake.set_language")
+    def test_set_language(self, mock_set, mock_send):
+        _handle_language("French")
+        mock_set.assert_called_once_with("French")
+        msg = mock_send.call_args[0][0]
+        assert "french" in msg.lower()
+
+    @patch("app.awake.send_telegram")
+    @patch("app.awake.reset_language")
+    def test_reset_language(self, mock_reset, mock_send):
+        _handle_language("reset")
+        mock_reset.assert_called_once()
+        msg = mock_send.call_args[0][0]
+        assert "reset" in msg.lower() or "same language" in msg.lower()
+
+    @patch("app.awake._handle_language")
+    def test_handle_command_routes_language(self, mock_lang):
+        handle_command("/language english")
+        mock_lang.assert_called_once_with("english")
+
+    @patch("app.awake._handle_language")
+    def test_handle_command_routes_bare_language(self, mock_lang):
+        handle_command("/language")
+        mock_lang.assert_called_once_with("")
+
+
+class TestLanguageInChatPrompt:
+    """Test that language preference is injected into chat prompts."""
+
+    @patch("app.awake.save_telegram_message")
+    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.get_allowed_tools", return_value="")
+    @patch("app.awake.send_telegram", return_value=True)
+    @patch("app.awake.subprocess.run")
+    @patch("app.awake.get_language_instruction", return_value="IMPORTANT: You MUST reply in spanish.")
+    def test_chat_prompt_includes_language_override(
+        self, mock_lang, mock_run, mock_send, mock_tools, mock_tools_desc, mock_fmt,
+        mock_hist, mock_save, tmp_path
+    ):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text("# Missions\n\n## En attente\n\n## En cours\n\n")
+
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.MISSIONS_FILE", missions_file), \
+             patch("app.awake.SOUL", "test soul"), \
+             patch("app.awake.SUMMARY", ""):
+            prompt = _build_chat_prompt("hello")
+
+        assert "MUST reply in spanish" in prompt
+
+    @patch("app.awake.save_telegram_message")
+    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.get_allowed_tools", return_value="")
+    @patch("app.awake.send_telegram", return_value=True)
+    @patch("app.awake.subprocess.run")
+    @patch("app.awake.get_language_instruction", return_value="")
+    def test_chat_prompt_no_language_when_not_set(
+        self, mock_lang, mock_run, mock_send, mock_tools, mock_tools_desc, mock_fmt,
+        mock_hist, mock_save, tmp_path
+    ):
+        missions_file = tmp_path / "missions.md"
+        missions_file.write_text("# Missions\n\n## En attente\n\n## En cours\n\n")
+
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.MISSIONS_FILE", missions_file), \
+             patch("app.awake.SOUL", "test soul"), \
+             patch("app.awake.SUMMARY", ""):
+            prompt = _build_chat_prompt("hello")
+
+        assert "MUST reply in" not in prompt
+
+
+class TestHelpIncludesLanguage:
+    @patch("app.awake.send_telegram")
+    def test_help_mentions_language_command(self, mock_send):
+        _handle_help()
+        msg = mock_send.call_args[0][0]
+        assert "/language" in msg
