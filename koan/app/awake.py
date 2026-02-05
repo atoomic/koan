@@ -1179,10 +1179,14 @@ def handle_message(text: str):
 
 
 def main():
+    from app.banners import print_bridge_banner
+
     check_config()
     provider = get_messaging_provider()
     provider_name = provider.get_provider_name()
     chat_id = provider.get_chat_id()
+
+    print_bridge_banner(f"messaging bridge — {provider_name.lower()}")
 
     # Compact old conversation history to avoid context bleed across sessions
     compacted = compact_telegram_history(TELEGRAM_HISTORY_FILE, TOPICS_FILE)
