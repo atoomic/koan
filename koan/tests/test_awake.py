@@ -415,6 +415,8 @@ class TestHandleChat:
         mock_send.assert_called_once()
         assert "couldn't formulate" in mock_send.call_args[0][0]
 
+    @patch("app.mcp_servers.build_mcp_flags", return_value=[])
+    @patch("app.mcp_servers.get_mcp_prompt_context", return_value="")
     @patch("app.awake.save_telegram_message")
     @patch("app.awake.load_recent_telegram_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
@@ -423,7 +425,8 @@ class TestHandleChat:
     @patch("app.awake.send_telegram", return_value=True)
     @patch("app.awake.subprocess.run")
     def test_chat_reads_journal_flat_fallback(self, mock_run, mock_send, mock_tools,
-                                              mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+                                              mock_tools_desc, mock_fmt, mock_hist, mock_save,
+                                              mock_mcp_ctx, mock_mcp_flags, tmp_path):
         """Falls back to flat journal if nested dir doesn't exist."""
         mock_run.return_value = MagicMock(stdout="ok", returncode=0)
         # No nested journal dir — create flat file
@@ -817,6 +820,8 @@ class TestPauseCommand:
 # ---------------------------------------------------------------------------
 
 class TestChatLiteRetryErrors:
+    @patch("app.mcp_servers.build_mcp_flags", return_value=[])
+    @patch("app.mcp_servers.get_mcp_prompt_context", return_value="")
     @patch("app.awake.save_telegram_message")
     @patch("app.awake.load_recent_telegram_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
@@ -825,7 +830,8 @@ class TestChatLiteRetryErrors:
     @patch("app.awake.send_telegram")
     @patch("app.awake.subprocess.run")
     def test_lite_retry_non_timeout_error(self, mock_run, mock_send, mock_tools,
-                                           mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+                                           mock_tools_desc, mock_fmt, mock_hist, mock_save,
+                                           mock_mcp_ctx, mock_mcp_flags, tmp_path):
         """Non-timeout error on lite retry should say 'something went wrong', not 'timeout'."""
         mock_run.side_effect = [
             subprocess.TimeoutExpired("claude", 180),
@@ -841,6 +847,8 @@ class TestChatLiteRetryErrors:
             handle_chat("complex question")
         assert "went wrong" in mock_send.call_args[0][0].lower()
 
+    @patch("app.mcp_servers.build_mcp_flags", return_value=[])
+    @patch("app.mcp_servers.get_mcp_prompt_context", return_value="")
     @patch("app.awake.save_telegram_message")
     @patch("app.awake.load_recent_telegram_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
@@ -849,7 +857,8 @@ class TestChatLiteRetryErrors:
     @patch("app.awake.send_telegram")
     @patch("app.awake.subprocess.run")
     def test_lite_retry_timeout_says_timeout(self, mock_run, mock_send, mock_tools,
-                                              mock_tools_desc, mock_fmt, mock_hist, mock_save, tmp_path):
+                                              mock_tools_desc, mock_fmt, mock_hist, mock_save,
+                                              mock_mcp_ctx, mock_mcp_flags, tmp_path):
         """Timeout on lite retry should still say 'timeout'."""
         mock_run.side_effect = [
             subprocess.TimeoutExpired("claude", 180),
