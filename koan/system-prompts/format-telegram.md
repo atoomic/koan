@@ -14,9 +14,9 @@ RAW CONTENT TO FORMAT:
 Requirements:
 - Write in the human's preferred language (check preferences above, or default to English)
 - Plain text ONLY — NO markdown whatsoever. Never use **, __, ##, ```, *, >, or any formatting symbols.
-- Maximum 500 characters. This message is read on a smartphone screen.
+- Maximum 2000 characters. Keep it concise but complete — don't truncate important details.
 - Conversational tone (like texting a collaborator, not a formal report)
-- 2-4 sentences max UNLESS the content is a retrospective/summary (then be thorough but concise)
+- 2-6 sentences for simple updates, more for retrospectives/summaries
 - Natural, direct — match the personality from your identity above
 - If this is a "kōan" (zen question), preserve its essence but make it conversational
 - DO NOT include metadata like "Mission ended" or generic status updates
