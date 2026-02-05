@@ -634,14 +634,16 @@ class TestMainLoop:
         provider.get_chat_id.return_value = chat_id
         return provider
 
+    @patch("app.awake.compact_telegram_history", return_value=0)
     @patch("app.awake.write_heartbeat")
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates")
     @patch("app.awake.get_messaging_provider")
+    @patch("app.awake.check_config")
     @patch("app.awake.time.sleep", side_effect=StopIteration)  # Break after first iteration
-    def test_main_processes_updates(self, mock_sleep, mock_provider_fn, mock_updates,
-                                    mock_handle, mock_flush, mock_heartbeat):
+    def test_main_processes_updates(self, mock_sleep, mock_check, mock_provider_fn, mock_updates,
+                                    mock_handle, mock_flush, mock_heartbeat, mock_compact):
         """main() fetches updates, dispatches messages, flushes outbox, writes heartbeat."""
         from app.awake import main
         mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
@@ -655,14 +657,16 @@ class TestMainLoop:
         mock_flush.assert_called_once()
         mock_heartbeat.assert_called()
 
+    @patch("app.awake.compact_telegram_history", return_value=0)
     @patch("app.awake.write_heartbeat")
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates")
     @patch("app.awake.get_messaging_provider")
+    @patch("app.awake.check_config")
     @patch("app.awake.time.sleep", side_effect=StopIteration)
-    def test_main_ignores_wrong_chat_id(self, mock_sleep, mock_provider_fn, mock_updates,
-                                         mock_handle, mock_flush, mock_heartbeat):
+    def test_main_ignores_wrong_chat_id(self, mock_sleep, mock_check, mock_provider_fn, mock_updates,
+                                         mock_handle, mock_flush, mock_heartbeat, mock_compact):
         """Messages from other chat IDs are ignored."""
         from app.awake import main
         mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
@@ -673,14 +677,16 @@ class TestMainLoop:
             main()
         mock_handle.assert_not_called()
 
+    @patch("app.awake.compact_telegram_history", return_value=0)
     @patch("app.awake.write_heartbeat")
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates")
     @patch("app.awake.get_messaging_provider")
+    @patch("app.awake.check_config")
     @patch("app.awake.time.sleep")
-    def test_main_updates_offset(self, mock_sleep, mock_provider_fn, mock_updates,
-                                  mock_handle, mock_flush, mock_heartbeat):
+    def test_main_updates_offset(self, mock_sleep, mock_check, mock_provider_fn, mock_updates,
+                                  mock_handle, mock_flush, mock_heartbeat, mock_compact):
         """Offset advances to update_id + 1 after processing."""
         from app.awake import main
         mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
@@ -697,14 +703,16 @@ class TestMainLoop:
         assert mock_updates.call_count == 2
         mock_updates.assert_called_with(43)
 
+    @patch("app.awake.compact_telegram_history", return_value=0)
     @patch("app.awake.write_heartbeat")
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates", return_value=[])
     @patch("app.awake.get_messaging_provider")
+    @patch("app.awake.check_config")
     @patch("app.awake.time.sleep", side_effect=StopIteration)
-    def test_main_empty_updates_still_flushes(self, mock_sleep, mock_provider_fn, mock_updates,
-                                               mock_handle, mock_flush, mock_heartbeat):
+    def test_main_empty_updates_still_flushes(self, mock_sleep, mock_check, mock_provider_fn, mock_updates,
+                                               mock_handle, mock_flush, mock_heartbeat, mock_compact):
         """Even with no updates, outbox is flushed and heartbeat written."""
         from app.awake import main
         mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
@@ -714,14 +722,16 @@ class TestMainLoop:
         mock_flush.assert_called_once()
         mock_heartbeat.assert_called()
 
+    @patch("app.awake.compact_telegram_history", return_value=0)
     @patch("app.awake.write_heartbeat")
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates")
     @patch("app.awake.get_messaging_provider")
+    @patch("app.awake.check_config")
     @patch("app.awake.time.sleep", side_effect=StopIteration)
-    def test_main_skips_updates_without_text(self, mock_sleep, mock_provider_fn, mock_updates,
-                                              mock_handle, mock_flush, mock_heartbeat):
+    def test_main_skips_updates_without_text(self, mock_sleep, mock_check, mock_provider_fn, mock_updates,
+                                              mock_handle, mock_flush, mock_heartbeat, mock_compact):
         """Updates without text field (e.g., photo, sticker) are ignored."""
         from app.awake import main
         mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
