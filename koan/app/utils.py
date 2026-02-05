@@ -214,6 +214,7 @@ def get_interval_seconds() -> int:
     """
     config = load_config()
     return int(config.get("interval_seconds", 300))
+
 def get_fast_reply_model() -> str:
     """Get model to use for fast replies (command handlers like /usage, /sparring).
 
@@ -604,6 +605,30 @@ def compact_telegram_history(history_file: Path, topics_file: Path, min_messages
     count = len(messages)
     print(f"[utils] Compacted {count} messages → {topics_file.name}")
     return count
+
+
+def get_known_projects() -> list:
+    """Return sorted list of (name, path) tuples from KOAN_PROJECTS env var.
+
+    Format: name:path;name2:path2
+    Falls back to KOAN_PROJECT_PATH with name "default" for single-project mode.
+    Returns empty list if neither is set.
+    """
+    projects_str = os.environ.get("KOAN_PROJECTS", "")
+    if projects_str:
+        result = []
+        for pair in projects_str.split(";"):
+            pair = pair.strip()
+            if ":" in pair:
+                name, path = pair.split(":", 1)
+                result.append((name.strip(), path.strip()))
+        return sorted(result, key=lambda x: x[0].lower())
+
+    single_path = os.environ.get("KOAN_PROJECT_PATH", "")
+    if single_path:
+        return [("default", single_path)]
+
+    return []
 
 
 def append_to_outbox(outbox_path: Path, content: str):
