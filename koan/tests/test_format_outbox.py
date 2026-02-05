@@ -58,9 +58,9 @@ class TestFallbackFormat:
         assert "> " not in result
 
     def test_truncates_long_content(self):
-        long_text = "a" * 600
+        long_text = "a" * 2500
         result = fallback_format(long_text)
-        assert len(result) == 500  # 497 + "..."
+        assert len(result) == 2000  # 1997 + "..."
         assert result.endswith("...")
 
     def test_strips_whitespace(self):

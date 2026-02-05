@@ -199,9 +199,9 @@ def fallback_format(raw_content: str) -> str:
         cleaned = cleaned.replace(symbol, "")
     # Strip list markers at line start
     cleaned = re.sub(r'^[\-\*>]\s+', '', cleaned, flags=re.MULTILINE)
-    # Truncate for smartphone
-    if len(cleaned) > 500:
-        cleaned = cleaned[:497] + "..."
+    # Truncate for smartphone (Telegram limit is 4096, keep 2000 for readability)
+    if len(cleaned) > 2000:
+        cleaned = cleaned[:1997] + "..."
     return cleaned.strip()
 
 
