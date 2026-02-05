@@ -23,6 +23,11 @@ from typing import Optional, Tuple, Dict, List
 # Import config utilities
 from app.utils import load_config, get_auto_merge_config
 
+# The official repository URL. Auto-merge is only allowed when origin
+# matches this URL. Forks must not auto-merge to avoid accidental pushes
+# to the user's main branch.
+OFFICIAL_REPO_URL = "github.com/sukria/koan"
+
 
 # ---------------------------------------------------------------------------
 # Low-level git helpers (stateless)
@@ -142,6 +147,21 @@ def is_upstream_origin(cwd: str, upstream_url: str) -> bool:
     return normalize_git_url(origin_url) == normalize_git_url(upstream_url)
 
 
+def is_official_repo(cwd: str) -> bool:
+    """Check if origin remote points to the official sukria/koan repository.
+
+    Auto-merge is only safe on the official repo. Forks should never
+    auto-merge to avoid accidental pushes to the user's local main branch.
+
+    Returns:
+        True if origin matches OFFICIAL_REPO_URL, False otherwise.
+    """
+    origin_url = get_origin_url(cwd)
+    if not origin_url:
+        return False
+    return normalize_git_url(origin_url) == OFFICIAL_REPO_URL
+
+
 def create_pull_request(cwd: str, branch: str, base_branch: str, upstream_url: str) -> Tuple[bool, str]:
     """Create a pull request on the upstream repository using gh CLI.
 
@@ -180,6 +200,9 @@ def create_pull_request(cwd: str, branch: str, base_branch: str, upstream_url: s
     body = "\n".join(f"- {s}" for s in subjects) if subjects else "Auto-generated PR from koan branch."
 
     try:
+        from app.github_auth import get_gh_env
+        gh_env = get_gh_env()
+        run_env = {**os.environ, **gh_env} if gh_env else None
         result = subprocess.run(
             ["gh", "pr", "create",
              "--repo", upstream_repo,
@@ -191,6 +214,7 @@ def create_pull_request(cwd: str, branch: str, base_branch: str, upstream_url: s
             capture_output=True,
             text=True,
             timeout=30,
+            env=run_env,
         )
         if result.returncode != 0:
             return False, result.stderr.strip() or "gh pr create failed"
@@ -366,6 +390,11 @@ class GitAutoMerger:
             0 = success or skip (non-blocking)
             1 = error (logged but non-blocking)
         """
+        # Safety: auto-merge is only allowed on the official repo
+        if not is_official_repo(self.project_path):
+            print(f"[git_auto_merge] Auto-merge disabled: origin is not {OFFICIAL_REPO_URL}")
+            return 0
+
         config = load_config()
         merge_config = get_auto_merge_config(config, self.project_name)
 
@@ -565,6 +594,11 @@ def auto_merge_branch(instance_dir: str, project_name: str, project_path: str, b
     Orchestrates the complete auto-merge flow using module-level functions.
     This preserves backward compatibility with tests that patch at module level.
     """
+    # Safety: auto-merge is only allowed on the official repo
+    if not is_official_repo(project_path):
+        print(f"[git_auto_merge] Auto-merge disabled: origin is not {OFFICIAL_REPO_URL}")
+        return 0
+
     config = load_config()
     merge_config = get_auto_merge_config(config, project_name)
 

@@ -1180,8 +1180,10 @@ def handle_message(text: str):
 
 def main():
     from app.banners import print_bridge_banner
+    from app.github_auth import setup_github_auth
 
     check_config()
+    setup_github_auth()
     provider = get_messaging_provider()
     provider_name = provider.get_provider_name()
     chat_id = provider.get_chat_id()
