@@ -15,7 +15,6 @@ INSTANCE="$KOAN_ROOT/instance"
 APP_DIR="$KOAN_ROOT/koan/app"
 NOTIFY="$APP_DIR/notify.py"
 DAILY_REPORT="$APP_DIR/daily_report.py"
-MISSION_SUMMARY="$APP_DIR/mission_summary.py"
 GIT_SYNC="$APP_DIR/git_sync.py"
 GIT_SYNC_INTERVAL=${KOAN_GIT_SYNC_INTERVAL:-5}
 HEALTH_CHECK="$APP_DIR/health_check.py"
@@ -55,12 +54,6 @@ else
   exit 1
 fi
 
-# Validate project configuration
-if [ ${#PROJECT_NAMES[@]} -gt 5 ]; then
-  echo "[koan] Error: Max 5 projects allowed. You have ${#PROJECT_NAMES[@]}."
-  exit 1
-fi
-
 for i in "${!PROJECT_NAMES[@]}"; do
   name="${PROJECT_NAMES[$i]}"
   path="${PROJECT_PATHS[$i]}"
@@ -92,6 +85,34 @@ export KOAN_CURRENT_PROJECT_PATH="${PROJECT_PATHS[0]}"
 
 notify() {
   "$PYTHON" "$NOTIFY" --format "$@" 2>/dev/null || true
+}
+
+commit_instance() {
+  # Commit and push instance changes (journal, memory, outbox, missions)
+  local msg="${1:-koan: $(date +%Y-%m-%d-%H:%M)}"
+  cd "$INSTANCE"
+  git add -A
+  git diff --cached --quiet || \
+    git commit -m "$msg" && \
+    git push origin main 2>/dev/null || true
+}
+
+run_contemplative_session() {
+  # Build contemplative prompt from template
+  local project="$1"
+  local prompt
+  prompt=$(sed \
+    -e "s|{INSTANCE}|$INSTANCE|g" \
+    -e "s|{PROJECT_NAME}|$project|g" \
+    "$KOAN_ROOT/koan/system-prompts/contemplative.md")
+
+  cd "$INSTANCE"
+  local flags
+  flags=$("$PYTHON" -c "from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('contemplative'))" 2>/dev/null || echo "")
+  set +e
+  # shellcheck disable=SC2086
+  claude -p "$prompt" --allowedTools Read,Write,Glob,Grep --max-turns 3 $flags 2>/dev/null
+  set -e
 }
 
 # Temp file for Claude output (set early so trap can clean it)
@@ -235,17 +256,7 @@ while true; do
       export KOAN_CURRENT_PROJECT="$PROJECT_NAME"
       export KOAN_CURRENT_PROJECT_PATH="$PROJECT_PATH"
 
-      CONTEMPLATE_PROMPT=$(sed \
-        -e "s|{INSTANCE}|$INSTANCE|g" \
-        -e "s|{PROJECT_NAME}|$PROJECT_NAME|g" \
-        "$KOAN_ROOT/koan/system-prompts/contemplative.md")
-
-      cd "$INSTANCE"
-      CONTEMPLATE_FLAGS=$("$PYTHON" -c "from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('contemplative'))" 2>/dev/null || echo "")
-      set +e
-      # shellcheck disable=SC2086
-      claude -p "$CONTEMPLATE_PROMPT" --allowedTools Read,Write,Glob,Grep --max-turns 3 $CONTEMPLATE_FLAGS 2>/dev/null
-      set -e
+      run_contemplative_session "$PROJECT_NAME"
     fi
 
     # Sleep in 5s increments — allows /resume or auto-resume to take effect quickly
@@ -349,18 +360,7 @@ $KNOWN_PROJECTS"
         echo ""
         notify "🪷 Run $RUN_NUM/$MAX_RUNS — Contemplative mode (rolled $CONTEMPLATE_ROLL < $CONTEMPLATIVE_CHANCE%)"
 
-        # Run contemplative session (same as pause mode contemplation, but doesn't enter pause)
-        CONTEMPLATE_PROMPT=$(sed \
-          -e "s|{INSTANCE}|$INSTANCE|g" \
-          -e "s|{PROJECT_NAME}|$PROJECT_NAME|g" \
-          "$KOAN_ROOT/koan/system-prompts/contemplative.md")
-
-        cd "$INSTANCE"
-        CONTEMPLATE_FLAGS=$("$PYTHON" -c "from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('contemplative'))" 2>/dev/null || echo "")
-        set +e
-        # shellcheck disable=SC2086
-        claude -p "$CONTEMPLATE_PROMPT" --allowedTools Read,Write,Glob,Grep --max-turns 3 $CONTEMPLATE_FLAGS 2>/dev/null
-        set -e
+        run_contemplative_session "$PROJECT_NAME"
 
         # Contemplative session done — increment counter and loop
         count=$((count + 1))
@@ -594,12 +594,7 @@ EOF
     echo "$RESET_TIMESTAMP" >> "$KOAN_ROOT/.koan-pause-reason"
     echo "$RESET_DISPLAY" >> "$KOAN_ROOT/.koan-pause-reason"
 
-    # Commit journal update
-    cd "$INSTANCE"
-    git add -A
-    git diff --cached --quiet || \
-      git commit -m "koan: quota exhausted $(date +%Y-%m-%d-%H:%M)" && \
-      git push origin main 2>/dev/null || true
+    commit_instance "koan: quota exhausted $(date +%Y-%m-%d-%H:%M)"
 
     notify "⚠️ Claude quota exhausted. $RESET_DISPLAY
 
@@ -652,12 +647,7 @@ Koan paused after $count runs. $RESUME_MSG or use /resume to restart manually."
     fi
   fi
 
-  # Commit instance results
-  cd "$INSTANCE"
-  git add -A
-  git diff --cached --quiet || \
-    git commit -m "koan: $(date +%Y-%m-%d-%H:%M)" && \
-    git push origin main 2>/dev/null || true
+  commit_instance
 
   count=$((count + 1))
 

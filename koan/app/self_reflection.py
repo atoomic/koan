@@ -9,6 +9,7 @@ with genuine observations.
 Usage: python -m app.self_reflection <instance_dir> [--force]
 """
 
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -33,7 +34,6 @@ def should_reflect(instance_dir: Path, interval: int = 10) -> bool:
 
     content = summary_file.read_text()
     # Count session lines (format: "Session N (project: X) : ...")
-    import re
     sessions = re.findall(r"Session (\d+)", content)
     if not sessions:
         return False
