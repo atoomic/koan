@@ -180,6 +180,9 @@ def create_pull_request(cwd: str, branch: str, base_branch: str, upstream_url: s
     body = "\n".join(f"- {s}" for s in subjects) if subjects else "Auto-generated PR from koan branch."
 
     try:
+        from app.github_auth import get_gh_env
+        gh_env = get_gh_env()
+        run_env = {**os.environ, **gh_env} if gh_env else None
         result = subprocess.run(
             ["gh", "pr", "create",
              "--repo", upstream_repo,
@@ -191,6 +194,7 @@ def create_pull_request(cwd: str, branch: str, base_branch: str, upstream_url: s
             capture_output=True,
             text=True,
             timeout=30,
+            env=run_env,
         )
         if result.returncode != 0:
             return False, result.stderr.strip() or "gh pr create failed"

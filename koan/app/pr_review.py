@@ -282,9 +282,13 @@ def _build_summary(claude_output: str, has_changes: bool) -> str:
 
 def _gh(cmd: list, timeout: int = 30) -> str:
     """Run a gh CLI command and return stdout."""
+    from app.github_auth import get_gh_env
+    gh_env = get_gh_env()
+    run_env = {**os.environ, **gh_env} if gh_env else None
     result = subprocess.run(
         cmd,
         capture_output=True, text=True, timeout=timeout,
+        env=run_env,
     )
     if result.returncode != 0:
         raise RuntimeError(f"gh command failed: {' '.join(cmd[:4])}... — {result.stderr[:200]}")
