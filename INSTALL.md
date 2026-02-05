@@ -16,7 +16,7 @@ This launches a web-based wizard that guides you through Telegram setup, project
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - Python 3.8+
-- A Telegram account (for the Telegram bridge)
+- A Telegram or Slack account (Telegram is the default)
 
 ## Manual Setup
 
@@ -46,6 +46,21 @@ curl -s "https://api.telegram.org/botYOUR_TOKEN/getUpdates" | python3 -m json.to
 Look for `"chat": {"id": 123456789, ...}` in the response — that number is your chat ID.
 
 > **Security note:** Your bot token grants full control of the bot. Never commit it to a public repo. If you accidentally leak it, revoke it immediately with `/revoke` in BotFather.
+
+### 2b. Alternative: Use Slack instead of Telegram
+
+If you prefer Slack over Telegram:
+
+1. Create a Slack App at [api.slack.com/apps](https://api.slack.com/apps)
+2. Add bot scopes: `chat:write`, `channels:history`, `channels:read`
+3. Install the app to your workspace
+4. Set environment variables:
+
+```bash
+KOAN_MESSAGING_PROVIDER=slack
+KOAN_SLACK_BOT_TOKEN=xoxb-your-bot-token
+KOAN_SLACK_CHANNEL_ID=C01234ABCDE
+```
 
 ### 3. Set environment variables
 
@@ -202,7 +217,8 @@ Alternatively: **System Settings → Energy → Prevent automatic sleeping when 
 | `KOAN_EMAIL` | — | Git author email for koan's commits |
 | `KOAN_MAX_RUNS` | 20 | Maximum runs before auto-pause |
 | `KOAN_INTERVAL` | 5 | Seconds between runs |
-| `KOAN_BRIDGE_INTERVAL` | 3 | Telegram poll interval (seconds) |
+| `KOAN_MESSAGING_PROVIDER` | telegram | Messaging backend: telegram or slack |
+| `KOAN_BRIDGE_INTERVAL` | 3 | Messaging poll interval (seconds) |
 | `KOAN_CHAT_TIMEOUT` | 180 | Claude CLI timeout for chat responses (seconds) |
 | `KOAN_GIT_SYNC_INTERVAL` | 5 | Runs between git sync checks |
 

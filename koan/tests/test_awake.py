@@ -554,33 +554,36 @@ class TestHandleMessage:
 # ---------------------------------------------------------------------------
 
 class TestGetUpdates:
-    @patch("app.awake.requests.get")
-    def test_returns_results(self, mock_get):
-        mock_get.return_value = MagicMock()
-        mock_get.return_value.json.return_value = {"ok": True, "result": [{"update_id": 1}]}
+    @patch("app.awake.get_messaging_provider")
+    def test_returns_results(self, mock_provider_fn):
+        mock_provider = MagicMock()
+        mock_provider.get_updates.return_value = [{"update_id": 1, "text": "hi", "chat_id": "42"}]
+        mock_provider_fn.return_value = mock_provider
         result = get_updates()
         assert len(result) == 1
         assert result[0]["update_id"] == 1
 
-    @patch("app.awake.requests.get")
-    def test_passes_offset(self, mock_get):
-        mock_get.return_value = MagicMock()
-        mock_get.return_value.json.return_value = {"ok": True, "result": []}
+    @patch("app.awake.get_messaging_provider")
+    def test_passes_offset(self, mock_provider_fn):
+        mock_provider = MagicMock()
+        mock_provider.get_updates.return_value = []
+        mock_provider_fn.return_value = mock_provider
         get_updates(offset=42)
-        _, kwargs = mock_get.call_args
-        assert kwargs["params"]["offset"] == 42
+        mock_provider.get_updates.assert_called_once_with(42)
 
-    @patch("app.awake.requests.get")
-    def test_handles_network_error(self, mock_get):
-        import requests as req
-        mock_get.side_effect = req.RequestException("timeout")
+    @patch("app.awake.get_messaging_provider")
+    def test_handles_error(self, mock_provider_fn):
+        mock_provider = MagicMock()
+        mock_provider.get_updates.return_value = []
+        mock_provider_fn.return_value = mock_provider
         result = get_updates()
         assert result == []
 
-    @patch("app.awake.requests.get")
-    def test_handles_json_error(self, mock_get):
-        mock_get.return_value = MagicMock()
-        mock_get.return_value.json.side_effect = ValueError("bad json")
+    @patch("app.awake.get_messaging_provider")
+    def test_empty_updates(self, mock_provider_fn):
+        mock_provider = MagicMock()
+        mock_provider.get_updates.return_value = []
+        mock_provider_fn.return_value = mock_provider
         result = get_updates()
         assert result == []
 
@@ -590,32 +593,29 @@ class TestGetUpdates:
 # ---------------------------------------------------------------------------
 
 class TestCheckConfig:
-    def test_exits_without_token(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("KOAN_TELEGRAM_TOKEN", "")
-        with patch("app.awake.BOT_TOKEN", ""), \
-             patch("app.awake.CHAT_ID", "123"), \
+    @patch("app.awake.get_messaging_provider")
+    def test_exits_without_config(self, mock_provider_fn):
+        mock_provider = MagicMock()
+        mock_provider.check_config.side_effect = SystemExit(1)
+        mock_provider_fn.return_value = mock_provider
+        with pytest.raises(SystemExit):
+            check_config()
+
+    @patch("app.awake.get_messaging_provider")
+    def test_exits_without_instance_dir(self, mock_provider_fn, tmp_path):
+        mock_provider = MagicMock()
+        mock_provider_fn.return_value = mock_provider
+        with patch("app.awake.INSTANCE_DIR", tmp_path / "nonexistent"), \
              pytest.raises(SystemExit):
             check_config()
 
-    def test_exits_without_chat_id(self, monkeypatch, tmp_path):
-        with patch("app.awake.BOT_TOKEN", "token"), \
-             patch("app.awake.CHAT_ID", ""), \
-             pytest.raises(SystemExit):
-            check_config()
-
-    def test_exits_without_instance_dir(self, tmp_path):
-        with patch("app.awake.BOT_TOKEN", "token"), \
-             patch("app.awake.CHAT_ID", "123"), \
-             patch("app.awake.INSTANCE_DIR", tmp_path / "nonexistent"), \
-             pytest.raises(SystemExit):
-            check_config()
-
-    def test_passes_with_valid_config(self, tmp_path):
+    @patch("app.awake.get_messaging_provider")
+    def test_passes_with_valid_config(self, mock_provider_fn, tmp_path):
+        mock_provider = MagicMock()
+        mock_provider_fn.return_value = mock_provider
         inst = tmp_path / "instance"
         inst.mkdir()
-        with patch("app.awake.BOT_TOKEN", "token"), \
-             patch("app.awake.CHAT_ID", "123"), \
-             patch("app.awake.INSTANCE_DIR", inst):
+        with patch("app.awake.INSTANCE_DIR", inst):
             check_config()  # Should not raise
 
 
@@ -628,23 +628,28 @@ class TestMainLoop:
 
     TEST_CHAT_ID = "123456789"
 
+    def _mock_provider(self, chat_id="123456789"):
+        provider = MagicMock()
+        provider.get_provider_name.return_value = "telegram"
+        provider.get_chat_id.return_value = chat_id
+        return provider
+
     @patch("app.awake.write_heartbeat")
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates")
-    @patch("app.awake.check_config")
-    @patch("app.awake.CHAT_ID", TEST_CHAT_ID)
+    @patch("app.awake.get_messaging_provider")
     @patch("app.awake.time.sleep", side_effect=StopIteration)  # Break after first iteration
-    def test_main_processes_updates(self, mock_sleep, mock_config, mock_updates,
+    def test_main_processes_updates(self, mock_sleep, mock_provider_fn, mock_updates,
                                     mock_handle, mock_flush, mock_heartbeat):
         """main() fetches updates, dispatches messages, flushes outbox, writes heartbeat."""
         from app.awake import main
+        mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
         mock_updates.return_value = [
-            {"update_id": 100, "message": {"text": "hello", "chat": {"id": int(self.TEST_CHAT_ID)}}}
+            {"update_id": 100, "text": "hello", "chat_id": self.TEST_CHAT_ID}
         ]
         with pytest.raises(StopIteration):
             main()
-        mock_config.assert_called_once()
         mock_updates.assert_called_once_with(None)
         mock_handle.assert_called_once_with("hello")
         mock_flush.assert_called_once()
@@ -654,14 +659,15 @@ class TestMainLoop:
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates")
-    @patch("app.awake.check_config")
+    @patch("app.awake.get_messaging_provider")
     @patch("app.awake.time.sleep", side_effect=StopIteration)
-    def test_main_ignores_wrong_chat_id(self, mock_sleep, mock_config, mock_updates,
+    def test_main_ignores_wrong_chat_id(self, mock_sleep, mock_provider_fn, mock_updates,
                                          mock_handle, mock_flush, mock_heartbeat):
         """Messages from other chat IDs are ignored."""
         from app.awake import main
+        mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
         mock_updates.return_value = [
-            {"update_id": 100, "message": {"text": "hello", "chat": {"id": 999999}}}
+            {"update_id": 100, "text": "hello", "chat_id": "999999"}
         ]
         with pytest.raises(StopIteration):
             main()
@@ -671,19 +677,18 @@ class TestMainLoop:
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates")
-    @patch("app.awake.check_config")
-    @patch("app.awake.CHAT_ID", TEST_CHAT_ID)
+    @patch("app.awake.get_messaging_provider")
     @patch("app.awake.time.sleep")
-    def test_main_updates_offset(self, mock_sleep, mock_config, mock_updates,
+    def test_main_updates_offset(self, mock_sleep, mock_provider_fn, mock_updates,
                                   mock_handle, mock_flush, mock_heartbeat):
         """Offset advances to update_id + 1 after processing."""
         from app.awake import main
-        test_chat_id = self.TEST_CHAT_ID
+        mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
         call_count = [0]
         def side_effect(offset=None):
             call_count[0] += 1
             if call_count[0] == 1:
-                return [{"update_id": 42, "message": {"text": "hi", "chat": {"id": int(test_chat_id)}}}]
+                return [{"update_id": 42, "text": "hi", "chat_id": self.TEST_CHAT_ID}]
             raise StopIteration  # Stop on second get_updates call
         mock_updates.side_effect = side_effect
 
@@ -696,12 +701,13 @@ class TestMainLoop:
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates", return_value=[])
-    @patch("app.awake.check_config")
+    @patch("app.awake.get_messaging_provider")
     @patch("app.awake.time.sleep", side_effect=StopIteration)
-    def test_main_empty_updates_still_flushes(self, mock_sleep, mock_config, mock_updates,
+    def test_main_empty_updates_still_flushes(self, mock_sleep, mock_provider_fn, mock_updates,
                                                mock_handle, mock_flush, mock_heartbeat):
         """Even with no updates, outbox is flushed and heartbeat written."""
         from app.awake import main
+        mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
         with pytest.raises(StopIteration):
             main()
         mock_handle.assert_not_called()
@@ -712,15 +718,15 @@ class TestMainLoop:
     @patch("app.awake.flush_outbox")
     @patch("app.awake.handle_message")
     @patch("app.awake.get_updates")
-    @patch("app.awake.check_config")
-    @patch("app.awake.CHAT_ID", TEST_CHAT_ID)
+    @patch("app.awake.get_messaging_provider")
     @patch("app.awake.time.sleep", side_effect=StopIteration)
-    def test_main_skips_updates_without_text(self, mock_sleep, mock_config, mock_updates,
+    def test_main_skips_updates_without_text(self, mock_sleep, mock_provider_fn, mock_updates,
                                               mock_handle, mock_flush, mock_heartbeat):
         """Updates without text field (e.g., photo, sticker) are ignored."""
         from app.awake import main
+        mock_provider_fn.return_value = self._mock_provider(self.TEST_CHAT_ID)
         mock_updates.return_value = [
-            {"update_id": 100, "message": {"chat": {"id": int(self.TEST_CHAT_ID)}}}  # no text
+            {"update_id": 100, "text": "", "chat_id": self.TEST_CHAT_ID}  # no text
         ]
         with pytest.raises(StopIteration):
             main()

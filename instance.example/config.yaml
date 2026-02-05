@@ -27,10 +27,27 @@ contemplative_chance: 10
 
 # Telegram
 # NOTE: Prefer setting these in .env (KOAN_TELEGRAM_TOKEN, KOAN_TELEGRAM_CHAT_ID)
+# Messaging provider — which messaging backend to use
+# Options: "telegram" (default), "slack"
+# Override via KOAN_MESSAGING_PROVIDER env var
+messaging_provider: "telegram"
+
+# Messaging — provider-specific settings
+# Only the section matching messaging_provider is used.
+
+# Telegram (default)
 # These config values are only used if the env vars are not set.
 telegram:
   bot_token: ""   # Set via KOAN_TELEGRAM_TOKEN in .env (recommended)
   chat_id: ""     # Set via KOAN_TELEGRAM_CHAT_ID in .env (recommended)
+
+# Slack (alternative)
+# Env vars: KOAN_SLACK_BOT_TOKEN, KOAN_SLACK_CHANNEL_ID, KOAN_SLACK_APP_TOKEN
+# Bot needs scopes: chat:write, channels:history, channels:read
+# slack:
+#   bot_token: "xoxb-YOUR-BOT-TOKEN"
+#   channel_id: "C01234ABCDE"
+#   app_token: "xapp-YOUR-APP-TOKEN"
 
 # Usage thresholds
 budget:
