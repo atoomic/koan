@@ -193,6 +193,15 @@ def handle_command(text: str):
         _run_in_worker(_handle_usage)
         return
 
+    if cmd.startswith("/cost") or cmd.startswith("/budget"):
+        # Extract args: /cost [project] [days]
+        if cmd.startswith("/budget"):
+            args = text[7:].strip()
+        else:
+            args = text[5:].strip()
+        _handle_cost(args)
+        return
+
     # Unknown command — pass to Claude as chat
     handle_chat(text)
 
@@ -279,6 +288,7 @@ def _handle_help():
         "/ping — check if run loop is alive (✅/❌)\n"      
         "/status — quick status (missions, pause, loop)\n"
         "/usage — detailed status formatted by Claude (quota, missions, progress)\n"
+        "/cost [project] [days] — per-mission token costs (e.g. /cost, /cost koan 30)\n"
         "/stop — stop Kōan after current mission\n"
         "/pause — pause (no new missions)\n"
         "/resume — resume after pause or quota exhausted\n"
@@ -287,6 +297,31 @@ def _handle_help():
         "Any other message = free conversation with Kōan."
     )
     send_telegram(help_text)
+
+
+def _handle_cost(args: str):
+    """Show per-mission token cost summary.
+
+    Usage:
+        /cost              — last 7 days, all projects
+        /cost koan         — last 7 days, project koan
+        /cost koan 30      — last 30 days, project koan
+        /budget            — alias for /cost
+    """
+    from app.cost_tracker import get_cost_summary
+
+    parts = args.split() if args else []
+    project = None
+    days = 7
+
+    for part in parts:
+        if part.isdigit():
+            days = min(int(part), 90)
+        else:
+            project = part
+
+    result = get_cost_summary(INSTANCE_DIR, project=project, days=days)
+    send_telegram(result)
 
 
 def _handle_usage():

@@ -23,6 +23,7 @@ SELF_REFLECTION="$APP_DIR/self_reflection.py"
 RITUALS="$APP_DIR/rituals.py"
 USAGE_TRACKER="$APP_DIR/usage_tracker.py"
 USAGE_ESTIMATOR="$APP_DIR/usage_estimator.py"
+COST_TRACKER="$APP_DIR/cost_tracker.py"
 USAGE_STATE="$INSTANCE/usage_state.json"
 
 if [ ! -d "$INSTANCE" ]; then
@@ -551,6 +552,9 @@ EOF
 
   # Update token usage state from JSON output
   "$PYTHON" "$USAGE_ESTIMATOR" update "$CLAUDE_OUT" "$USAGE_STATE" "$INSTANCE/usage.md" 2>/dev/null || true
+
+  # Record per-mission cost for /cost command
+  "$PYTHON" "$COST_TRACKER" record "$CLAUDE_OUT" "$INSTANCE" "$PROJECT_NAME" "$MISSION_TITLE" 2>/dev/null || true
 
   # Check for quota exhaustion (in both text output and stderr)
   CLAUDE_COMBINED="$(cat "$CLAUDE_ERR" 2>/dev/null; echo "$CLAUDE_TEXT")"
