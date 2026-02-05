@@ -95,7 +95,7 @@ def test_contemplative_prompt_requires_output():
     # Must describe output options
     assert "Option 1: Learning" in prompt
     assert "Option 2: Mission Proposal" in prompt
-    assert "Option 3: Question for Alexis" in prompt
+    assert "Option 3: Question for the human" in prompt
     assert "Option 4: Kōan" in prompt
 
     # Must reference outbox for output delivery
