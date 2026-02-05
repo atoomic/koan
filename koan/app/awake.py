@@ -31,6 +31,7 @@ from app.utils import (
     load_dotenv,
     parse_project as _parse_project,
     insert_pending_mission,
+    get_known_projects,
     save_telegram_message,
     load_recent_telegram_history,
     format_conversation_history,
@@ -194,6 +195,10 @@ def handle_command(text: str):
         _run_in_worker(_handle_usage)
         return
 
+    if cmd.startswith("/mission"):
+        _handle_mission_command(text)
+        return
+
     # Unknown command — pass to Claude as chat
     handle_chat(text)
 
@@ -295,13 +300,15 @@ def _handle_help():
         "/help — this help\n"
         "\n"
         "MISSIONS\n"
+        "/mission <desc> — create a mission (asks for project if ambiguous)\n"
         '"mission:" prefix or an action verb:\n'
         "  fix the login bug\n"
         "  implement dark mode\n"
         "  mission: refactor the auth module\n"
         "\n"
         "To target a project:\n"
-        "  [project:myproject] fix the login bug\n"
+        "  /mission [project:koan] fix the login bug\n"
+        "  [project:koan] fix the login bug\n"
         "\n"
         "Any other message = free conversation."
     )
@@ -532,6 +539,50 @@ def _handle_reflect(message: str):
         f.write(entry)
 
     send_telegram("Noted in the shared journal. I'll reflect on it.")
+
+
+def _handle_mission_command(text: str):
+    """Handle /mission <text> command — parity with 'mission:' keyword.
+
+    Strips the /mission prefix, checks for project tag, and either queues
+    the mission directly or asks the user to specify a project.
+    """
+    raw = text.strip()
+    lower = raw.lower()
+    if lower.startswith("/mission:"):
+        mission_text = raw[9:].strip()
+    elif lower.startswith("/mission "):
+        mission_text = raw[9:].strip()
+    elif lower == "/mission":
+        mission_text = ""
+    else:
+        mission_text = raw[8:].strip()
+
+    if not mission_text:
+        send_telegram(
+            "Usage: /mission <description>\n\n"
+            "Examples:\n"
+            "  /mission fix the login bug\n"
+            "  /mission [project:koan] add retry logic\n"
+        )
+        return
+
+    # Check if the text already has a project tag
+    project, _ = parse_project(mission_text)
+
+    if not project:
+        known = get_known_projects()
+        if len(known) > 1:
+            project_list = "\n".join(f"  - {name}" for name in known)
+            send_telegram(
+                f"Which project for this mission?\n\n"
+                f"{project_list}\n\n"
+                f"Reply with the tag, e.g.:\n"
+                f"  /mission [project:{known[0]}] {mission_text[:80]}"
+            )
+            return
+
+    handle_mission(mission_text)
 
 
 def handle_mission(text: str):

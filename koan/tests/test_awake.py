@@ -22,6 +22,7 @@ from app.awake import (
     _build_status,
     _handle_help,
     _handle_usage,
+    _handle_mission_command,
     _run_in_worker,
     get_updates,
     check_config,
@@ -1154,3 +1155,68 @@ class TestPauseAwareness:
 
         # Prompt should mention running status
         assert "RUNNING" in prompt or "▶️" in prompt
+
+
+# ---------------------------------------------------------------------------
+# /mission command
+# ---------------------------------------------------------------------------
+
+class TestHandleMissionCommand:
+    """Test /mission command — parity with 'mission:' keyword."""
+
+    @patch("app.awake.send_telegram")
+    def test_bare_mission_shows_usage(self, mock_send):
+        _handle_mission_command("/mission")
+        msg = mock_send.call_args[0][0]
+        assert "Usage" in msg
+
+    @patch("app.awake.handle_mission")
+    @patch("app.awake.get_known_projects", return_value=["koan"])
+    def test_single_project_auto_proceeds(self, mock_projects, mock_mission):
+        _handle_mission_command("/mission fix the login bug")
+        mock_mission.assert_called_once_with("fix the login bug")
+
+    @patch("app.awake.send_telegram")
+    @patch("app.awake.get_known_projects", return_value=["koan", "webapp"])
+    def test_multi_project_asks_user(self, mock_projects, mock_send):
+        _handle_mission_command("/mission fix the login bug")
+        msg = mock_send.call_args[0][0]
+        assert "Which project" in msg
+        assert "koan" in msg
+        assert "webapp" in msg
+
+    @patch("app.awake.handle_mission")
+    @patch("app.awake.get_known_projects", return_value=["koan", "webapp"])
+    def test_project_tag_bypasses_ask(self, mock_projects, mock_mission):
+        _handle_mission_command("/mission [project:koan] fix the login bug")
+        mock_mission.assert_called_once_with("[project:koan] fix the login bug")
+
+    @patch("app.awake.handle_mission")
+    def test_mission_colon_format(self, mock_mission):
+        _handle_mission_command("/mission: fix the login bug")
+        mock_mission.assert_called_once_with("fix the login bug")
+
+    @patch("app.awake._handle_mission_command")
+    def test_handle_command_routes_mission(self, mock_handler):
+        handle_command("/mission fix the bug")
+        mock_handler.assert_called_once_with("/mission fix the bug")
+
+    @patch("app.awake.send_telegram")
+    def test_whitespace_only_shows_usage(self, mock_send):
+        _handle_mission_command("/mission   ")
+        msg = mock_send.call_args[0][0]
+        assert "Usage" in msg
+
+    @patch("app.awake.handle_mission")
+    @patch("app.awake.get_known_projects", return_value=[])
+    def test_no_known_projects_proceeds(self, mock_projects, mock_mission):
+        _handle_mission_command("/mission fix the login bug")
+        mock_mission.assert_called_once_with("fix the login bug")
+
+
+class TestHandleHelpIncludesMission:
+    @patch("app.awake.send_telegram")
+    def test_help_mentions_mission_command(self, mock_send):
+        _handle_help()
+        msg = mock_send.call_args[0][0]
+        assert "/mission" in msg
