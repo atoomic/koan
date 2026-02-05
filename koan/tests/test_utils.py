@@ -435,6 +435,58 @@ class TestCompactTelegramHistory:
         assert all(len(t) > 5 for t in topics)
 
 
+class TestGetMaxRuns:
+    def test_returns_config_value(self, tmp_path, monkeypatch):
+        from app import utils
+        monkeypatch.setattr(utils, "KOAN_ROOT", tmp_path)
+        config_dir = tmp_path / "instance"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("max_runs_per_day: 30\n")
+        from app.utils import get_max_runs
+        assert get_max_runs() == 30
+
+    def test_returns_default_when_missing(self, tmp_path, monkeypatch):
+        from app import utils
+        monkeypatch.setattr(utils, "KOAN_ROOT", tmp_path)
+        config_dir = tmp_path / "instance"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("other_setting: value\n")
+        from app.utils import get_max_runs
+        assert get_max_runs() == 20
+
+    def test_returns_default_when_no_config(self, tmp_path, monkeypatch):
+        from app import utils
+        monkeypatch.setattr(utils, "KOAN_ROOT", tmp_path)
+        from app.utils import get_max_runs
+        assert get_max_runs() == 20
+
+
+class TestGetIntervalSeconds:
+    def test_returns_config_value(self, tmp_path, monkeypatch):
+        from app import utils
+        monkeypatch.setattr(utils, "KOAN_ROOT", tmp_path)
+        config_dir = tmp_path / "instance"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("interval_seconds: 600\n")
+        from app.utils import get_interval_seconds
+        assert get_interval_seconds() == 600
+
+    def test_returns_default_when_missing(self, tmp_path, monkeypatch):
+        from app import utils
+        monkeypatch.setattr(utils, "KOAN_ROOT", tmp_path)
+        config_dir = tmp_path / "instance"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text("other_setting: value\n")
+        from app.utils import get_interval_seconds
+        assert get_interval_seconds() == 300
+
+    def test_returns_default_when_no_config(self, tmp_path, monkeypatch):
+        from app import utils
+        monkeypatch.setattr(utils, "KOAN_ROOT", tmp_path)
+        from app.utils import get_interval_seconds
+        assert get_interval_seconds() == 300
+
+
 class TestGetStartOnPause:
     def test_returns_true_when_enabled(self, tmp_path, monkeypatch):
         from app import utils

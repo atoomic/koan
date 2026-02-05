@@ -10,8 +10,11 @@
 # pilot_repo: "/path/to/koan"
 
 # Budget & Scheduling
+# These are the primary source of truth for run loop configuration.
+# max_runs_per_day: Maximum runs before auto-pause (resets on /resume or quota reset)
+# interval_seconds: Seconds between runs (how often the loop iterates)
 max_runs_per_day: 20
-interval_seconds: 300  # 5 minutes between runs
+interval_seconds: 300
 
 # Fast reply mode — use lightweight model (Haiku) for command handlers
 # When true, /usage, /sparring, and similar commands use Haiku instead of default model

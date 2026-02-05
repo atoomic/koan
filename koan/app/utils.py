@@ -194,6 +194,26 @@ def get_start_on_pause() -> bool:
     """
     config = load_config()
     return bool(config.get("start_on_pause", False))
+
+
+def get_max_runs() -> int:
+    """Get maximum runs per day from config.yaml.
+
+    This is the primary source of truth for max_runs configuration.
+    Returns default of 20 if not configured.
+    """
+    config = load_config()
+    return int(config.get("max_runs_per_day", 20))
+
+
+def get_interval_seconds() -> int:
+    """Get interval between runs in seconds from config.yaml.
+
+    This is the primary source of truth for run interval configuration.
+    Returns default of 300 (5 minutes) if not configured.
+    """
+    config = load_config()
+    return int(config.get("interval_seconds", 300))
 def get_fast_reply_model() -> str:
     """Get model to use for fast replies (command handlers like /usage, /sparring).
 
