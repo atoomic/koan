@@ -78,3 +78,35 @@ def print_bridge_banner(version_info: str = "") -> None:
     else:
         print()
     print()
+
+
+def colorize_startup(art: str) -> str:
+    """Apply ANSI colors to the combined startup banner."""
+    lines = art.split("\n")
+    colored = []
+    for line in lines:
+        # Agent robot: eyes glow cyan, radioactive yellow
+        line = line.replace("◉", f"{CYAN}◉{RESET}{DIM}{BLUE}")
+        line = line.replace("☢", f"{YELLOW}☢{RESET}{DIM}{BLUE}")
+        # Bridge signals: diamonds in cyan, arrows in green
+        line = line.replace("◇", f"{CYAN}◇{RESET}{DIM}{BLUE}")
+        line = line.replace("◆", f"{CYAN}◆{RESET}{DIM}{BLUE}")
+        line = line.replace("→", f"{GREEN}→{RESET}{DIM}{BLUE}")
+        line = line.replace("←", f"{GREEN}←{RESET}{DIM}{BLUE}")
+        line = line.replace("↔", f"{GREEN}↔{RESET}{DIM}{BLUE}")
+        # Box frame in bold cyan
+        for ch in "╔╗╚╝═║":
+            line = line.replace(ch, f"{BOLD}{CYAN}{ch}{RESET}{DIM}{BLUE}")
+        # KOAN title in bold white
+        if "K   Ō   A   N" in line:
+            line = line.replace("K   Ō   A   N", f"{BOLD}{WHITE}K   Ō   A   N{RESET}{DIM}{BLUE}")
+        colored.append(f"{DIM}{BLUE}{line}{RESET}")
+    return "\n".join(colored)
+
+
+def print_startup_banner() -> None:
+    """Print the combined startup banner (used by unified launcher)."""
+    art = _read_art("startup.txt")
+    if not art:
+        return
+    print(colorize_startup(art))
