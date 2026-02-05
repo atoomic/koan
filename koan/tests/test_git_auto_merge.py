@@ -12,6 +12,8 @@ from app.git_auto_merge import (
     get_origin_url,
     normalize_git_url,
     is_upstream_origin,
+    is_official_repo,
+    OFFICIAL_REPO_URL,
     create_pull_request,
     is_working_tree_clean,
     is_branch_pushed,
@@ -472,6 +474,44 @@ class TestIsUpstreamOrigin:
         """When origin URL is empty (no remote), returns False."""
         with patch("app.git_auto_merge.get_origin_url", return_value=""):
             assert is_upstream_origin("/tmp", "https://github.com/sukria/koan.git") is False
+
+
+# --- is_official_repo ---
+
+class TestIsOfficialRepo:
+    def test_official_repo_https(self):
+        """HTTPS URL matching sukria/koan returns True."""
+        with patch("app.git_auto_merge.get_origin_url", return_value="https://github.com/sukria/koan.git"):
+            assert is_official_repo("/tmp") is True
+
+    def test_official_repo_ssh(self):
+        """SSH URL matching sukria/koan returns True."""
+        with patch("app.git_auto_merge.get_origin_url", return_value="git@github.com:sukria/koan.git"):
+            assert is_official_repo("/tmp") is True
+
+    def test_fork_repo(self):
+        """Fork URL (different owner) returns False."""
+        with patch("app.git_auto_merge.get_origin_url", return_value="https://github.com/atoomic/koan.git"):
+            assert is_official_repo("/tmp") is False
+
+    def test_no_origin(self):
+        """No origin remote returns False."""
+        with patch("app.git_auto_merge.get_origin_url", return_value=""):
+            assert is_official_repo("/tmp") is False
+
+    def test_different_repo(self):
+        """Completely different repo returns False."""
+        with patch("app.git_auto_merge.get_origin_url", return_value="https://github.com/sukria/other-project.git"):
+            assert is_official_repo("/tmp") is False
+
+    def test_official_repo_no_git_suffix(self):
+        """HTTPS URL without .git suffix still matches."""
+        with patch("app.git_auto_merge.get_origin_url", return_value="https://github.com/sukria/koan"):
+            assert is_official_repo("/tmp") is True
+
+    def test_constant_value(self):
+        """OFFICIAL_REPO_URL constant has expected value."""
+        assert OFFICIAL_REPO_URL == "github.com/sukria/koan"
 
 
 # --- create_pull_request ---
@@ -983,6 +1023,7 @@ class TestJournalWriters:
 
 # --- auto_merge_branch (orchestrator) ---
 
+@patch("app.git_auto_merge.is_official_repo", return_value=True)
 class TestAutoMergeBranch:
     def _base_config(self):
         return {
@@ -1001,7 +1042,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_success_flow(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_local_cleanup):
+    def test_success_flow(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_local_cleanup, _mock_official):
         """Happy path: config match, clean, pushed, merge ok. Local branch always deleted."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1016,7 +1057,7 @@ class TestAutoMergeBranch:
 
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_not_configured(self, mock_load, mock_cfg):
+    def test_not_configured(self, mock_load, mock_cfg, _mock_official):
         """Branch not matching any rule returns 0 (skip)."""
         mock_load.return_value = {}
         mock_cfg.return_value = {"enabled": True, "base_branch": "main", "strategy": "squash", "rules": []}
@@ -1027,7 +1068,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=False)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_dirty_tree(self, mock_load, mock_cfg, mock_clean, mock_journal):
+    def test_dirty_tree(self, mock_load, mock_cfg, mock_clean, mock_journal, _mock_official):
         """Dirty working tree fails with journal entry."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1044,7 +1085,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_not_pushed(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_journal):
+    def test_not_pushed(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_journal, _mock_official):
         """Branch not pushed fails with journal entry."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1064,7 +1105,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_delete_after_merge(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_local_cleanup, mock_remote_cleanup):
+    def test_delete_after_merge(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_local_cleanup, mock_remote_cleanup, _mock_official):
         """delete_after_merge triggers both local (always) and remote (configured) cleanup."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1084,7 +1125,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_no_remote_delete_without_config(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_local_cleanup, mock_remote_cleanup):
+    def test_no_remote_delete_without_config(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, mock_local_cleanup, mock_remote_cleanup, _mock_official):
         """Without delete_after_merge, local branch is deleted but remote is kept."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1102,7 +1143,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_merge_failure(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal):
+    def test_merge_failure(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_merge, mock_journal, _mock_official):
         """Merge failure returns 1 with journal entry."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1120,7 +1161,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_fork_creates_pr(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_upstream, mock_pr, mock_journal):
+    def test_fork_creates_pr(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_upstream, mock_pr, mock_journal, _mock_official):
         """Fork detected: create PR instead of merge."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1140,7 +1181,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_fork_pr_failure(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_upstream, mock_pr, mock_journal):
+    def test_fork_pr_failure(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_upstream, mock_pr, mock_journal, _mock_official):
         """Fork detected but PR creation fails."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1161,7 +1202,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_upstream_origin_merges_normally(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_upstream, mock_journal, mock_local_cleanup, mock_merge):
+    def test_upstream_origin_merges_normally(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_upstream, mock_journal, mock_local_cleanup, mock_merge, _mock_official):
         """When origin IS upstream, proceed with normal merge."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1181,7 +1222,7 @@ class TestAutoMergeBranch:
     @patch("app.git_auto_merge.is_working_tree_clean", return_value=True)
     @patch("app.git_auto_merge.get_auto_merge_config")
     @patch("app.git_auto_merge.load_config")
-    def test_no_upstream_url_merges_normally(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_journal, mock_local_cleanup, mock_merge):
+    def test_no_upstream_url_merges_normally(self, mock_load, mock_cfg, mock_clean, mock_pushed, mock_journal, mock_local_cleanup, mock_merge, _mock_official):
         """When no upstream_url configured, merge normally (backward compat)."""
         mock_load.return_value = self._base_config()
         mock_cfg.return_value = {
@@ -1192,3 +1233,40 @@ class TestAutoMergeBranch:
         result = auto_merge_branch("/inst", "koan", "/proj", "koan/fix")
         assert result == 0
         mock_merge.assert_called_once()
+
+
+# --- auto_merge_branch: fork safety ---
+
+class TestAutoMergeBranchForkSafety:
+    """Tests for the is_official_repo safety check in auto_merge_branch."""
+
+    @patch("app.git_auto_merge.is_official_repo", return_value=False)
+    def test_fork_skips_auto_merge(self, mock_official):
+        """When origin is not the official repo, auto-merge is skipped entirely."""
+        result = auto_merge_branch("/inst", "koan", "/proj", "koan/fix")
+        assert result == 0
+        mock_official.assert_called_once_with("/proj")
+
+    @patch("app.git_auto_merge.is_official_repo", return_value=False)
+    @patch("app.git_auto_merge.load_config")
+    def test_fork_does_not_load_config(self, mock_load, mock_official):
+        """Fork safety check happens before config loading."""
+        result = auto_merge_branch("/inst", "koan", "/proj", "koan/fix")
+        assert result == 0
+        mock_load.assert_not_called()
+
+    @patch("app.git_auto_merge.is_official_repo", return_value=False)
+    @patch("app.git_auto_merge.perform_merge")
+    def test_fork_does_not_merge(self, mock_merge, mock_official):
+        """Fork safety prevents any merge from happening."""
+        result = auto_merge_branch("/inst", "koan", "/proj", "koan/fix")
+        assert result == 0
+        mock_merge.assert_not_called()
+
+    @patch("app.git_auto_merge.is_official_repo", return_value=False)
+    @patch("app.git_auto_merge.create_pull_request")
+    def test_fork_does_not_create_pr(self, mock_pr, mock_official):
+        """Fork safety prevents PR creation too."""
+        result = auto_merge_branch("/inst", "koan", "/proj", "koan/fix")
+        assert result == 0
+        mock_pr.assert_not_called()
