@@ -111,8 +111,8 @@ def is_mission(text: str) -> bool:
     # Explicit prefix always wins
     if text.lower().startswith("mission:") or text.lower().startswith("mission :"):
         return True
-    # Long messages (>200 chars) with imperative verbs are likely missions
-    if len(text) > 200 and MISSION_RE.search(text):
+    # Long messages (>200 chars) that start with imperative verbs are likely missions
+    if len(text) > 200 and MISSION_RE.match(text):
         return True
     # Short imperative sentences
     if MISSION_RE.match(text):
@@ -136,6 +136,15 @@ def parse_project(text: str) -> Tuple[Optional[str], str]:
 def handle_command(text: str):
     """Handle /commands locally — no Claude needed."""
     cmd = text.strip().lower()
+
+    # /chat forces chat mode — bypass mission classification
+    if cmd.startswith("/chat"):
+        chat_text = text[5:].strip()
+        if not chat_text:
+            send_telegram("Usage: /chat <message>\nForces chat mode for messages that look like missions.")
+            return
+        _run_in_worker(handle_chat, chat_text)
+        return
 
     if cmd == "/stop":
         (KOAN_ROOT / ".koan-stop").write_text("STOP")
@@ -185,6 +194,15 @@ def handle_command(text: str):
 
     if cmd == "/ping":
         _handle_ping()
+        return
+
+    if cmd.startswith("/log") or cmd.startswith("/journal"):
+        # Extract args after command name
+        if cmd.startswith("/journal"):
+            args = text[8:].strip()
+        else:
+            args = text[4:].strip()
+        _handle_log(args)
         return
 
     if cmd == "/help":
@@ -278,6 +296,42 @@ def _handle_ping():
         send_telegram("❌ Run loop is not running.\n\nTo restart:\n  make run &")
 
 
+def _handle_log(args: str):
+    """Show the latest journal entry for a project.
+
+    Usage:
+        /log              — today's journal (all projects)
+        /log koan         — today's journal for project koan
+        /log koan yesterday — yesterday's journal for koan
+        /log koan 2026-02-03 — specific date
+    """
+    from datetime import date as _date, timedelta
+    from app.utils import get_latest_journal
+
+    parts = args.split() if args else []
+    project = None
+    target_date = None
+
+    if len(parts) >= 1:
+        # First arg: project name (unless it looks like a date)
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', parts[0]):
+            target_date = parts[0]
+        elif parts[0] == "yesterday":
+            target_date = (_date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            project = parts[0]
+
+    if len(parts) >= 2 and target_date is None:
+        # Second arg: date
+        if parts[1] == "yesterday":
+            target_date = (_date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        elif re.match(r'^\d{4}-\d{2}-\d{2}$', parts[1]):
+            target_date = parts[1]
+
+    result = get_latest_journal(INSTANCE_DIR, project=project, target_date=target_date)
+    send_telegram(result)
+
+
 def _handle_help():
     """Send the list of available commands."""
     help_text = (
@@ -291,11 +345,13 @@ def _handle_help():
         "MONITORING\n"
         "/status — quick status (missions, pause, loop)\n"
         "/usage — detailed status (quota, progress)\n"
+        "/log [project] [date] — latest journal entry\n"
         "/ping — check if run loop is alive (✅/❌)\n"
         "/verbose — receive every progress update\n"
         "/silent — mute updates (default mode)\n"
         "\n"
         "INTERACTION\n"
+        "/chat <msg> — force chat mode (bypass mission detection)\n"
         "/sparring — start a strategic sparring session\n"
         "/reflect <text> — note a reflection in the shared journal\n"
         "/pr <url> — review and update a GitHub PR (full pipeline)\n"
@@ -309,6 +365,8 @@ def _handle_help():
         "\n"
         "To target a project:\n"
         "  [project:myproject] fix the login bug\n"
+        "\n"
+        "To force chat: /chat <message> (useful when your message looks like a mission)\n"
         "\n"
         "Any other message = free conversation."
     )
