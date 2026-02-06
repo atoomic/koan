@@ -1154,3 +1154,102 @@ class TestPauseAwareness:
 
         # Prompt should mention running status
         assert "RUNNING" in prompt or "▶️" in prompt
+
+
+# ---------------------------------------------------------------------------
+# /x command handler
+# ---------------------------------------------------------------------------
+
+class TestHandleX:
+    @patch("app.awake.send_telegram")
+    @patch("app.x_post.get_x_stats", return_value={"enabled": False})
+    def test_status_disabled(self, _stats, mock_send):
+        from app.awake import _handle_x
+        _handle_x("")
+        mock_send.assert_called_once()
+        assert "disabled" in mock_send.call_args[0][0]
+
+    @patch("app.awake.send_telegram")
+    @patch("app.x_post.get_x_stats", return_value={
+        "enabled": True, "posted_24h": 1, "max_per_day": 3,
+        "remaining": 2, "pending": 0, "require_approval": True,
+        "circuit_breaker_active": False, "last_posted": None,
+    })
+    def test_status_enabled(self, _stats, mock_send):
+        from app.awake import _handle_x
+        _handle_x("status")
+        mock_send.assert_called_once()
+        msg = mock_send.call_args[0][0]
+        assert "1/3" in msg
+        assert "Remaining: 2" in msg
+
+    @patch("app.awake.send_telegram")
+    @patch("app.x_post.post_approved_tweet", return_value=("posted", "12345"))
+    @patch("app.x_post.get_next_pending", return_value={
+        "trigger": "koan", "queued_at": "2026-02-05", "text": "Zen tweet"
+    })
+    def test_approve_posts(self, _pending, _post, mock_send):
+        from app.awake import _handle_x
+        _handle_x("approve")
+        assert mock_send.call_count == 2  # Preview + confirmation
+        last_msg = mock_send.call_args_list[-1][0][0]
+        assert "12345" in last_msg
+
+    @patch("app.awake.send_telegram")
+    @patch("app.x_post.get_next_pending", return_value=None)
+    def test_approve_empty(self, _pending, mock_send):
+        from app.awake import _handle_x
+        _handle_x("approve")
+        mock_send.assert_called_once()
+        assert "No pending" in mock_send.call_args[0][0]
+
+    @patch("app.awake.send_telegram")
+    @patch("app.x_post.reject_pending_tweet", return_value=("rejected", "Rejected: Bad tweet"))
+    def test_reject(self, _reject, mock_send):
+        from app.awake import _handle_x
+        _handle_x("reject")
+        mock_send.assert_called_once()
+        assert "Rejected" in mock_send.call_args[0][0]
+
+    @patch("app.awake.send_telegram")
+    @patch("app.x_post.get_next_pending", return_value={
+        "trigger": "koan", "queued_at": "2026-02-05", "text": "Preview me"
+    })
+    def test_peek(self, _pending, mock_send):
+        from app.awake import _handle_x
+        _handle_x("peek")
+        mock_send.assert_called_once()
+        assert "Preview me" in mock_send.call_args[0][0]
+
+    @patch("app.awake.send_telegram")
+    @patch("app.x_post.delete_tweet", return_value=(True, "Tweet 999 deleted"))
+    def test_delete(self, _delete, mock_send):
+        from app.awake import _handle_x
+        _handle_x("delete 999")
+        mock_send.assert_called_once()
+        assert "999" in mock_send.call_args[0][0]
+
+    @patch("app.awake.send_telegram")
+    def test_help(self, mock_send):
+        from app.awake import _handle_x
+        _handle_x("unknown_command")
+        mock_send.assert_called_once()
+        msg = mock_send.call_args[0][0]
+        assert "/x approve" in msg
+        assert "/x reject" in msg
+
+    @patch("app.awake.handle_chat")
+    def test_x_routing_in_handle_command(self, mock_chat):
+        """Ensure /x is routed to _handle_x, not to chat."""
+        with patch("app.awake._handle_x") as mock_x:
+            handle_command("/x status")
+            mock_x.assert_called_once_with("status")
+        mock_chat.assert_not_called()
+
+    @patch("app.awake.handle_chat")
+    def test_bare_x_routes_correctly(self, mock_chat):
+        """Ensure bare /x is routed to _handle_x."""
+        with patch("app.awake._handle_x") as mock_x:
+            handle_command("/x")
+            mock_x.assert_called_once_with("")
+        mock_chat.assert_not_called()

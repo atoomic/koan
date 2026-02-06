@@ -194,6 +194,10 @@ def handle_command(text: str):
         _run_in_worker(_handle_usage)
         return
 
+    if cmd.startswith("/x"):
+        _handle_x(text[2:].strip())
+        return
+
     # Unknown command — pass to Claude as chat
     handle_chat(text)
 
@@ -247,6 +251,99 @@ def _build_status() -> str:
 
     return "\n".join(parts)
 
+def _handle_x(args: str):
+    """Handle /x command — X (Twitter) posting management."""
+    from app.x_post import (
+        get_x_stats, post_approved_tweet, reject_pending_tweet,
+        get_next_pending, delete_tweet,
+    )
+
+    if not args or args == "status":
+        stats = get_x_stats()
+        if not stats["enabled"]:
+            send_telegram("X posting: disabled in config.yaml")
+            return
+        parts = ["🐦 X Status"]
+        parts.append(f"  Posted (24h): {stats['posted_24h']}/{stats['max_per_day']}")
+        parts.append(f"  Remaining: {stats['remaining']}")
+        parts.append(f"  Pending: {stats['pending']}")
+        parts.append(f"  Approval: {'required' if stats['require_approval'] else 'auto'}")
+        if stats["circuit_breaker_active"]:
+            parts.append("  ⚠️ Circuit breaker active")
+        if stats["last_posted"]:
+            ts = datetime.fromtimestamp(stats["last_posted"]).strftime("%H:%M")
+            parts.append(f"  Last posted: {ts}")
+        send_telegram("\n".join(parts))
+        return
+
+    if args == "approve":
+        pending = get_next_pending()
+        if not pending:
+            send_telegram("🐦 No pending tweets.")
+            return
+        send_telegram(f"🐦 Posting:\n\n{pending['text']}")
+        def _approve():
+            status, msg = post_approved_tweet()
+            if status == "posted":
+                send_telegram(f"✅ Posted (ID: {msg})")
+            else:
+                send_telegram(f"❌ {status}: {msg}")
+        _run_in_worker(_approve)
+        return
+
+    if args == "reject":
+        status, msg = reject_pending_tweet()
+        if status == "empty":
+            send_telegram("🐦 No pending tweets to reject.")
+        else:
+            send_telegram(f"🐦 Rejected: {msg}")
+        return
+
+    if args == "peek":
+        pending = get_next_pending()
+        if not pending:
+            send_telegram("🐦 No pending tweets.")
+            return
+        send_telegram(
+            f"🐦 Next pending tweet:\n\n"
+            f"Trigger: {pending.get('trigger', '?')}\n"
+            f"Queued: {pending.get('queued_at', '?')}\n\n"
+            f"{pending['text']}"
+        )
+        return
+
+    if args.startswith("delete "):
+        tweet_id = args[7:].strip()
+        if not tweet_id:
+            send_telegram("🐦 Usage: /x delete <tweet_id>")
+            return
+        def _delete():
+            ok, msg = delete_tweet(tweet_id)
+            if ok:
+                send_telegram(f"✅ {msg}")
+            else:
+                send_telegram(f"❌ {msg}")
+        _run_in_worker(_delete)
+        return
+
+    if args == "disable":
+        send_telegram(
+            "🐦 To disable X posting, set x.enabled: false in config.yaml.\n"
+            "The circuit breaker auto-disables on consecutive failures."
+        )
+        return
+
+    send_telegram(
+        "🐦 /x commands:\n"
+        "  /x — show posting status\n"
+        "  /x peek — preview next pending tweet\n"
+        "  /x approve — post next pending tweet\n"
+        "  /x reject — reject next pending tweet\n"
+        "  /x delete <id> — delete a posted tweet\n"
+        "  /x disable — disable posting\n"
+    )
+
+
 def _handle_ping():
     """Check if the run loop (make run) is alive and report status."""
     # Check if run.sh process is running
@@ -292,6 +389,7 @@ def _handle_help():
         "INTERACTION\n"
         "/sparring — start a strategic sparring session\n"
         "/reflect <text> — note a reflection in the shared journal\n"
+        "/x — manage X (Twitter) posting (status, approve, reject)\n"
         "/help — this help\n"
         "\n"
         "MISSIONS\n"

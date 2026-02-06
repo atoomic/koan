@@ -682,6 +682,27 @@ Koan paused after $count runs. $RESUME_MSG or use /resume to restart manually."
     fi
   fi
 
+  # Queue session kōan for X posting (if enabled)
+  "$PYTHON" -c "
+from app.x_post import queue_tweet
+from app.utils import get_journal_file
+from datetime import date
+from pathlib import Path
+import sys, os
+instance = Path(os.environ.get('KOAN_ROOT', '.')) / 'instance'
+journal = get_journal_file(instance, date.today(), '$PROJECT_NAME')
+if journal.exists():
+    content = journal.read_text()
+    # Extract kōan from journal (last blockquote after 'Kōan' header)
+    import re
+    m = re.search(r'[Kk][oō]an.*?\n+>\s*\*(.+?)\*', content, re.DOTALL)
+    if m:
+        koan_text = m.group(1).strip()
+        if len(koan_text) > 20:
+            status, msg = queue_tweet('koan', koan_text)
+            print(f'[x] Koan queued: {status} — {msg}', file=sys.stderr)
+" 2>/dev/null || true
+
   # Commit instance results
   cd "$INSTANCE"
   git add -A
