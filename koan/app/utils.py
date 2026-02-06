@@ -414,6 +414,31 @@ def atomic_write(path: Path, content: str):
         raise
 
 
+def get_known_projects() -> List[str]:
+    """Return list of known project names from KOAN_PROJECTS or KOAN_PROJECT_PATH.
+
+    Parses the KOAN_PROJECTS env var (format: 'name:path;name2:path2').
+    Falls back to KOAN_PROJECT_PATH with name 'default'.
+    Returns empty list if neither is set.
+    """
+    projects_env = os.environ.get("KOAN_PROJECTS", "")
+    if projects_env:
+        names = []
+        for pair in projects_env.split(";"):
+            pair = pair.strip()
+            if ":" in pair:
+                name = pair.split(":")[0].strip()
+                if name:
+                    names.append(name)
+        return sorted(names)
+
+    project_path = os.environ.get("KOAN_PROJECT_PATH", "")
+    if project_path:
+        return ["default"]
+
+    return []
+
+
 def insert_pending_mission(missions_path: Path, entry: str):
     """Insert a mission entry into the pending section of missions.md.
 

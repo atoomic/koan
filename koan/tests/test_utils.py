@@ -594,3 +594,32 @@ class TestGetStartOnPause:
         # No config file at all
         from app.utils import get_start_on_pause
         assert get_start_on_pause() is False
+
+
+class TestGetKnownProjects:
+    def test_from_koan_projects_env(self, monkeypatch):
+        from app.utils import get_known_projects
+        monkeypatch.setenv("KOAN_PROJECTS", "beta:/b;alpha:/a;gamma:/g")
+        assert get_known_projects() == ["alpha", "beta", "gamma"]
+
+    def test_fallback_to_project_path(self, monkeypatch):
+        from app.utils import get_known_projects
+        monkeypatch.delenv("KOAN_PROJECTS", raising=False)
+        monkeypatch.setenv("KOAN_PROJECT_PATH", "/some/path")
+        assert get_known_projects() == ["default"]
+
+    def test_empty_when_no_env(self, monkeypatch):
+        from app.utils import get_known_projects
+        monkeypatch.delenv("KOAN_PROJECTS", raising=False)
+        monkeypatch.delenv("KOAN_PROJECT_PATH", raising=False)
+        assert get_known_projects() == []
+
+    def test_strips_whitespace(self, monkeypatch):
+        from app.utils import get_known_projects
+        monkeypatch.setenv("KOAN_PROJECTS", " koan : /k ; webapp : /w ")
+        assert get_known_projects() == ["koan", "webapp"]
+
+    def test_skips_malformed_entries(self, monkeypatch):
+        from app.utils import get_known_projects
+        monkeypatch.setenv("KOAN_PROJECTS", "koan:/k;;:/empty;webapp:/w")
+        assert get_known_projects() == ["koan", "webapp"]
