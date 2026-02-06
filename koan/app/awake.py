@@ -27,6 +27,7 @@ import requests
 from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
 from app.health_check import write_heartbeat
 from app.notify import send_telegram
+from app.outbox_scanner import scan_and_log
 from app.utils import (
     load_dotenv,
     parse_project as _parse_project,
@@ -803,6 +804,22 @@ def flush_outbox():
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             content = f.read().strip()
             if content:
+                # Scan for potential data leakage before sending
+                scan_result = scan_and_log(content)
+                if scan_result.blocked:
+                    # Write blocked content to quarantine file for human review
+                    quarantine = INSTANCE_DIR / "outbox-quarantine.md"
+                    with open(quarantine, "a") as qf:
+                        from datetime import datetime as _dt
+                        qf.write(f"\n---\n[{_dt.now().isoformat()}] BLOCKED: {scan_result.reason}\n")
+                        qf.write(content[:500])
+                        qf.write("\n")
+                    f.seek(0)
+                    f.truncate()
+                    print(f"[awake] Outbox BLOCKED by scanner: {scan_result.reason}")
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                    return
+
                 # Format through Claude before sending
                 formatted = _format_outbox_message(content)
                 if send_telegram(formatted):
