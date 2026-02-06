@@ -151,13 +151,13 @@ def handle_command(text: str):
         send_telegram("Stop requested. Current mission will complete, then Kōan will stop.")
         return
 
-    if cmd == "/pause":
+    if cmd in ("/pause", "/sleep"):
         pause_file = KOAN_ROOT / ".koan-pause"
         if pause_file.exists():
-            send_telegram("Already paused. /resume to unpause.")
+            send_telegram("Already sleeping. /resume to wake up.")
         else:
             pause_file.write_text("PAUSE")
-            send_telegram("Paused. No missions will run. /resume to unpause.")
+            send_telegram("💤 Sleeping. No missions will run. I'm still listening.\n/resume to wake up.")
         return
 
     if cmd == "/status":
@@ -165,7 +165,7 @@ def handle_command(text: str):
         send_telegram(status)
         return
 
-    if cmd == "/resume":
+    if cmd in ("/resume", "/work", "/awake", "/restart", "/start"):
         handle_resume()
         return
 
@@ -227,17 +227,26 @@ def _build_status() -> str:
 
     parts = ["📊 Kōan Status"]
 
-    # Run loop status — FIRST, most important info
+    # Server mode — FIRST, most important info
     pause_file = KOAN_ROOT / ".koan-pause"
     stop_file = KOAN_ROOT / ".koan-stop"
+    pause_reason_file = KOAN_ROOT / ".koan-pause-reason"
 
-    if pause_file.exists():
-        parts.append("\n⏸️ **PAUSED** — No missions being executed")
-        parts.append("   /resume to continue")
-    elif stop_file.exists():
-        parts.append("\n⛔ **STOP REQUESTED** — Finishing current work")
+    if stop_file.exists():
+        parts.append("\n⛔ Mode: Stopping")
+    elif pause_file.exists():
+        reason = ""
+        if pause_reason_file.exists():
+            reason = pause_reason_file.read_text().strip().split("\n")[0]
+        if reason == "quota":
+            parts.append("\n💤 Mode: Sleeping (quota exhausted)")
+        elif reason == "max_runs":
+            parts.append("\n💤 Mode: Sleeping (max runs reached)")
+        else:
+            parts.append("\n💤 Mode: Sleeping")
+        parts.append("  /resume or /work to wake up")
     else:
-        parts.append("\n▶️ **ACTIVE** — Run loop running")
+        parts.append("\n🟢 Mode: Working")
 
     status_file = KOAN_ROOT / ".koan-status"
     if status_file.exists():
@@ -337,12 +346,12 @@ def _handle_help():
         "Kōan — Commands\n"
         "\n"
         "CONTROL\n"
-        "/pause — pause (no new missions)\n"
-        "/resume — resume after pause or quota exhausted\n"
+        "/sleep — put to sleep (alias: /pause)\n"
+        "/resume — wake up and resume work (alias: /work, /awake, /start, /restart)\n"
         "/stop — stop Kōan after current mission\n"
         "\n"
         "MONITORING\n"
-        "/status — quick status (missions, pause, loop)\n"
+        "/status — quick status (missions, mode)\n"
         "/usage — detailed status (quota, progress)\n"
         "/log [project] [date] — latest journal entry\n"
         "/ping — check if run loop is alive (✅/❌)\n"

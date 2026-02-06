@@ -303,7 +303,7 @@ class TestBuildStatus:
              patch("app.awake.KOAN_ROOT", tmp_path):
             status = _build_status()
 
-        assert "ARRÊT DEMANDÉ" in status or "stop" in status.lower()
+        assert "Stopping" in status
 
     @patch("app.awake.MISSIONS_FILE")
     def test_status_with_loop_status(self, mock_file, tmp_path):
@@ -339,6 +339,26 @@ class TestHandleCommand:
     @patch("app.awake.handle_resume")
     def test_resume_delegates(self, mock_resume):
         handle_command("/resume")
+        mock_resume.assert_called_once()
+
+    @patch("app.awake.handle_resume")
+    def test_work_delegates_to_resume(self, mock_resume):
+        handle_command("/work")
+        mock_resume.assert_called_once()
+
+    @patch("app.awake.handle_resume")
+    def test_awake_delegates_to_resume(self, mock_resume):
+        handle_command("/awake")
+        mock_resume.assert_called_once()
+
+    @patch("app.awake.handle_resume")
+    def test_restart_delegates_to_resume(self, mock_resume):
+        handle_command("/restart")
+        mock_resume.assert_called_once()
+
+    @patch("app.awake.handle_resume")
+    def test_start_delegates_to_resume(self, mock_resume):
+        handle_command("/start")
         mock_resume.assert_called_once()
 
     @patch("app.awake.send_telegram")
@@ -839,14 +859,29 @@ class TestPauseCommand:
             handle_command("/pause")
         assert (tmp_path / ".koan-pause").exists()
         mock_send.assert_called_once()
-        assert "paused" in mock_send.call_args[0][0].lower()
+        assert "sleeping" in mock_send.call_args[0][0].lower()
+
+    @patch("app.awake.send_telegram")
+    def test_sleep_creates_file(self, mock_send, tmp_path):
+        with patch("app.awake.KOAN_ROOT", tmp_path):
+            handle_command("/sleep")
+        assert (tmp_path / ".koan-pause").exists()
+        mock_send.assert_called_once()
+        assert "sleeping" in mock_send.call_args[0][0].lower()
 
     @patch("app.awake.send_telegram")
     def test_pause_already_paused(self, mock_send, tmp_path):
         (tmp_path / ".koan-pause").write_text("PAUSE")
         with patch("app.awake.KOAN_ROOT", tmp_path):
             handle_command("/pause")
-        assert "already paused" in mock_send.call_args[0][0].lower()
+        assert "already sleeping" in mock_send.call_args[0][0].lower()
+
+    @patch("app.awake.send_telegram")
+    def test_sleep_already_paused(self, mock_send, tmp_path):
+        (tmp_path / ".koan-pause").write_text("PAUSE")
+        with patch("app.awake.KOAN_ROOT", tmp_path):
+            handle_command("/sleep")
+        assert "already sleeping" in mock_send.call_args[0][0].lower()
 
     @patch("app.awake.send_telegram")
     def test_resume_clears_pause(self, mock_send, tmp_path):
@@ -900,7 +935,7 @@ class TestPauseCommand:
         assert "unpaused" in mock_send.call_args[0][0].lower()
 
     @patch("app.awake.send_telegram")
-    def test_status_shows_pause(self, mock_send, tmp_path):
+    def test_status_shows_sleeping(self, mock_send, tmp_path):
         (tmp_path / ".koan-pause").write_text("PAUSE")
         instance = tmp_path / "instance"
         instance.mkdir()
@@ -909,7 +944,33 @@ class TestPauseCommand:
         with patch("app.awake.KOAN_ROOT", tmp_path), \
              patch("app.awake.MISSIONS_FILE", missions):
             status = _build_status()
-        assert "PAUSE" in status or "pause" in status.lower()
+        assert "Sleeping" in status
+        assert "/resume" in status
+
+    @patch("app.awake.send_telegram")
+    def test_status_shows_sleeping_with_quota_reason(self, mock_send, tmp_path):
+        (tmp_path / ".koan-pause").write_text("PAUSE")
+        (tmp_path / ".koan-pause-reason").write_text("quota\n1234567890")
+        instance = tmp_path / "instance"
+        instance.mkdir()
+        missions = instance / "missions.md"
+        missions.write_text("# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n")
+        with patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.MISSIONS_FILE", missions):
+            status = _build_status()
+        assert "Sleeping" in status
+        assert "quota" in status.lower()
+
+    @patch("app.awake.send_telegram")
+    def test_status_shows_working_when_active(self, mock_send, tmp_path):
+        instance = tmp_path / "instance"
+        instance.mkdir()
+        missions = instance / "missions.md"
+        missions.write_text("# Missions\n\n## En attente\n\n## En cours\n\n## Terminées\n")
+        with patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.MISSIONS_FILE", missions):
+            status = _build_status()
+        assert "Working" in status
 
 
 # ---------------------------------------------------------------------------
@@ -1149,16 +1210,16 @@ class TestPauseAwareness:
             status = _build_status()
 
         lines = status.split("\n")
-        # Find where pause is mentioned
-        pause_line_idx = next(i for i, l in enumerate(lines) if "PAUSE" in l or "pause" in l.lower())
+        # Find where sleeping mode is mentioned
+        pause_line_idx = next(i for i, l in enumerate(lines) if "Sleeping" in l)
         # Find where missions are mentioned
         mission_line_idx = next((i for i, l in enumerate(lines) if "fix bug" in l), len(lines))
-        # Pause should come BEFORE missions
-        assert pause_line_idx < mission_line_idx, "Pause status should appear before mission details"
+        # Sleeping status should come BEFORE missions
+        assert pause_line_idx < mission_line_idx, "Sleeping status should appear before mission details"
 
     @patch("app.awake.MISSIONS_FILE")
-    def test_status_shows_active_when_running(self, mock_file, tmp_path):
-        """When not paused, status shows ACTIF/RUNNING."""
+    def test_status_shows_working_when_running(self, mock_file, tmp_path):
+        """When not paused, status shows Working."""
         missions_file = tmp_path / "missions.md"
         missions_file.write_text(
             "# Missions\n\n## En attente\n\n## En cours\n\n"
@@ -1169,7 +1230,7 @@ class TestPauseAwareness:
              patch("app.awake.KOAN_ROOT", tmp_path):
             status = _build_status()
 
-        assert "ACTIVE" in status
+        assert "Working" in status
 
     @patch("app.awake.save_telegram_message")
     @patch("app.awake.load_recent_telegram_history", return_value=[])
