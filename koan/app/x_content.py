@@ -93,9 +93,9 @@ def _get_project_names() -> List[str]:
     except Exception:
         pass
 
-    # Always screen for "koan" itself
-    names.append("koan")
-    _project_names_cache = list(set(names))
+    # "koan" is excluded — it's the agent's identity and a real English word
+    # (zen koan). The agent's primary tweet content is koans.
+    _project_names_cache = [n for n in set(names) if n.lower() != "koan"]
     return _project_names_cache
 
 

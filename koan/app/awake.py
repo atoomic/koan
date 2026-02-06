@@ -194,7 +194,7 @@ def handle_command(text: str):
         _run_in_worker(_handle_usage)
         return
 
-    if cmd.startswith("/x"):
+    if cmd == "/x" or cmd.startswith("/x "):
         _handle_x(text[2:].strip())
         return
 

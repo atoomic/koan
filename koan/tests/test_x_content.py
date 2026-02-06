@@ -156,6 +156,18 @@ class TestScreenContentEdgeCases:
         assert ok is False
         assert "project name" in reason
 
+    def test_koan_word_allowed(self):
+        """'koan' is the agent's identity and a real English word — never blocked."""
+        ok, _ = screen_content("A koan for builders: what is shipped is real.")
+        assert ok is True
+
+    def test_koan_not_in_project_names(self, monkeypatch):
+        """Even when koan is a configured project, the word is excluded from blocking."""
+        monkeypatch.setenv("KOAN_PROJECTS", "koan:/path/to/koan;other:/path")
+        reset_project_cache()
+        ok, _ = screen_content("This koan came from a session about testing.")
+        assert ok is True
+
 
 # ---------------------------------------------------------------------------
 # sanitize_for_tweet

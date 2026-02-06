@@ -1253,3 +1253,11 @@ class TestHandleX:
             handle_command("/x")
             mock_x.assert_called_once_with("")
         mock_chat.assert_not_called()
+
+    @patch("app.awake.handle_chat")
+    def test_x_prefix_no_false_positive(self, mock_chat):
+        """Ensure /xray does NOT route to _handle_x."""
+        with patch("app.awake._handle_x") as mock_x:
+            handle_command("/xray")
+            mock_x.assert_not_called()
+        mock_chat.assert_called_once()
