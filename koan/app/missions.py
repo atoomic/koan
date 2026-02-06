@@ -235,6 +235,116 @@ def normalize_content(content: str) -> str:
     return "\n".join(result) + "\n" if result else ""
 
 
+def parse_ideas(content: str) -> List[str]:
+    """Parse the ## Ideas section and return a list of idea items.
+
+    Items are simple "- ..." lines. The Ideas section is intentionally
+    not part of _SECTION_MAP — ideas are never picked up by the agent loop.
+    """
+    ideas = []
+    in_ideas = False
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("## "):
+            section_name = stripped[3:].strip().lower()
+            if section_name == "ideas":
+                in_ideas = True
+            elif in_ideas:
+                break  # Left the Ideas section
+            continue
+
+        if not in_ideas:
+            continue
+
+        if stripped.startswith("- "):
+            ideas.append(stripped)
+
+    return ideas
+
+
+def insert_idea(content: str, entry: str) -> str:
+    """Insert an idea entry into the Ideas section of missions.md.
+
+    Creates the section if it doesn't exist (right after # Missions header).
+    Returns the updated content string.
+    """
+    if not content:
+        content = DEFAULT_SKELETON
+
+    # Find ## Ideas marker
+    for line in content.splitlines():
+        if line.strip().lower() == "## ideas":
+            marker = line.strip()
+            idx = content.index(marker) + len(marker)
+            while idx < len(content) and content[idx] == "\n":
+                idx += 1
+            content = content[:idx] + f"\n{entry}\n" + content[idx:]
+            return normalize_content(content)
+
+    # No Ideas section — create one after # Missions
+    if "# Missions" in content:
+        idx = content.index("# Missions") + len("# Missions")
+        while idx < len(content) and content[idx] == "\n":
+            idx += 1
+        content = content[:idx] + f"\n## Ideas\n\n{entry}\n\n" + content[idx:]
+    else:
+        content = f"# Missions\n\n## Ideas\n\n{entry}\n\n" + content
+
+    return normalize_content(content)
+
+
+def delete_idea(content: str, index: int) -> Tuple[str, Optional[str]]:
+    """Delete an idea by 1-based index from the Ideas section.
+
+    Returns (updated_content, deleted_text) or (original_content, None) if
+    the index is out of range.
+    """
+    ideas = parse_ideas(content)
+    if index < 1 or index > len(ideas):
+        return content, None
+
+    target = ideas[index - 1]
+
+    # Find and remove the line from content
+    lines = content.splitlines()
+    idea_count = 0
+    in_ideas = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.lower().startswith("## "):
+            section_name = stripped[3:].strip().lower()
+            if section_name == "ideas":
+                in_ideas = True
+            elif in_ideas:
+                break
+            continue
+
+        if in_ideas and stripped.startswith("- "):
+            idea_count += 1
+            if idea_count == index:
+                lines.pop(i)
+                return normalize_content("\n".join(lines)), target
+
+    return content, None
+
+
+def promote_idea(content: str, index: int) -> Tuple[str, Optional[str]]:
+    """Promote an idea (by 1-based index) to the Pending section.
+
+    Removes the idea from Ideas, adds it to Pending.
+    Returns (updated_content, promoted_text) or (original_content, None).
+    """
+    updated, deleted = delete_idea(content, index)
+    if deleted is None:
+        return content, None
+
+    # Insert the deleted idea into the pending section
+    updated = insert_mission(updated, deleted)
+    return updated, deleted
+
+
 def find_section_boundaries(lines: List[str]) -> Dict[str, Tuple[int, int]]:
     """Find line indices for each section.
 
