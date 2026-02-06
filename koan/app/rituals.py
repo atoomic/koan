@@ -14,7 +14,8 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from app.utils import atomic_write, read_all_journals
+from app.journal import read_all_journals
+from app.utils import atomic_write
 
 
 def load_template(template_name: str, instance_dir: Path) -> str:

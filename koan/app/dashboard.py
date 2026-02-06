@@ -26,16 +26,20 @@ from pathlib import Path
 from typing import Optional
 
 from flask import Flask, Response, jsonify, redirect, render_template, request, url_for
-from app.utils import (
-    parse_project,
-    insert_pending_mission,
-    save_telegram_message,
-    load_recent_telegram_history,
-    format_conversation_history,
+from app.config import (
     get_allowed_tools,
     get_tools_description,
     get_model_config,
     build_claude_flags,
+)
+from app.telegram_history import (
+    save_telegram_message,
+    load_recent_telegram_history,
+    format_conversation_history,
+)
+from app.utils import (
+    parse_project,
+    insert_pending_mission,
 )
 
 # ---------------------------------------------------------------------------
@@ -160,7 +164,7 @@ def _build_dashboard_prompt(text: str, *, lite: bool = False) -> str:
         text: The user's message.
         lite: If True, strip heavy context (journal, summary) to reduce prompt size.
     """
-    from app.utils import read_all_journals
+    from app.journal import read_all_journals
 
     history = load_recent_telegram_history(TELEGRAM_HISTORY_FILE, max_messages=10)
     history_context = format_conversation_history(history)

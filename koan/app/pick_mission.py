@@ -20,7 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from app.utils import get_model_config, build_claude_flags
+from app.config import get_model_config, build_claude_flags
 
 
 PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "system-prompts" / "pick-mission.md"

@@ -146,7 +146,7 @@ class GitSync:
 
     def write_sync_to_journal(self, report: str):
         """Append git sync report to today's journal."""
-        from app.utils import append_to_journal
+        from app.journal import append_to_journal
         entry = f"\n## Git Sync — {datetime.now().strftime('%H:%M')}\n\n{report}\n"
         append_to_journal(Path(self.instance_dir), self.project_name, entry)
 

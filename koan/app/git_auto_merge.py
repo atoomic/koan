@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, List
 
 # Import config utilities
-from app.utils import load_config, get_auto_merge_config
+from app.config import get_auto_merge_config
+from app.utils import load_config
 
 
 # ---------------------------------------------------------------------------
@@ -226,14 +227,14 @@ class GitAutoMerger:
 
     def write_merge_success_to_journal(self, branch: str, base_branch: str, strategy: str):
         """Write successful merge to today's journal."""
-        from app.utils import append_to_journal
+        from app.journal import append_to_journal
         timestamp = datetime.now().strftime("%H:%M")
         entry = f"\n## Auto-Merge — {timestamp}\n\n✓ Merged `{branch}` into `{base_branch}` ({strategy})\n"
         append_to_journal(Path(self.instance_dir), self.project_name, entry)
 
     def write_merge_failure_to_journal(self, branch: str, error: str):
         """Write failed merge to today's journal."""
-        from app.utils import append_to_journal
+        from app.journal import append_to_journal
         timestamp = datetime.now().strftime("%H:%M")
         entry = f"\n## Auto-Merge Failed — {timestamp}\n\n✗ Failed to merge `{branch}`: {error}\nManual intervention required.\n"
         append_to_journal(Path(self.instance_dir), self.project_name, entry)
@@ -402,7 +403,7 @@ def cleanup_branch(project_path: str, branch: str) -> bool:
 
 def write_merge_success_to_journal(instance_dir: str, project_name: str, branch: str, base_branch: str, strategy: str):
     """Write successful merge to today's journal."""
-    from app.utils import append_to_journal
+    from app.journal import append_to_journal
     timestamp = datetime.now().strftime("%H:%M")
     entry = f"\n## Auto-Merge — {timestamp}\n\n✓ Merged `{branch}` into `{base_branch}` ({strategy})\n"
     append_to_journal(Path(instance_dir), project_name, entry)
@@ -410,7 +411,7 @@ def write_merge_success_to_journal(instance_dir: str, project_name: str, branch:
 
 def write_merge_failure_to_journal(instance_dir: str, project_name: str, branch: str, error: str):
     """Write failed merge to today's journal."""
-    from app.utils import append_to_journal
+    from app.journal import append_to_journal
     timestamp = datetime.now().strftime("%H:%M")
     entry = f"\n## Auto-Merge Failed — {timestamp}\n\n✗ Failed to merge `{branch}`: {error}\nManual intervention required.\n"
     append_to_journal(Path(instance_dir), project_name, entry)

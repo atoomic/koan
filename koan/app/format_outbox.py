@@ -21,7 +21,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from app.utils import get_model_config, build_claude_flags
+from app.config import get_model_config, build_claude_flags
 
 
 def load_soul(instance_dir: Path) -> str:

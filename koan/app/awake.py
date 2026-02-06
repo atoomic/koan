@@ -24,23 +24,27 @@ from typing import Optional, Tuple, List, Dict
 
 import requests
 
-from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
-from app.health_check import write_heartbeat
-from app.notify import send_telegram
-from app.utils import (
-    load_dotenv,
-    parse_project as _parse_project,
-    insert_pending_mission,
-    get_known_projects,
-    save_telegram_message,
-    load_recent_telegram_history,
-    format_conversation_history,
-    compact_telegram_history,
+from app.config import (
     get_chat_tools,
     get_tools_description,
     get_model_config,
     build_claude_flags,
     get_fast_reply_model,
+)
+from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
+from app.health_check import write_heartbeat
+from app.notify import send_telegram
+from app.telegram_history import (
+    save_telegram_message,
+    load_recent_telegram_history,
+    format_conversation_history,
+    compact_telegram_history,
+)
+from app.utils import (
+    load_dotenv,
+    parse_project as _parse_project,
+    insert_pending_mission,
+    get_known_projects,
 )
 
 load_dotenv()
@@ -305,7 +309,7 @@ def _handle_log(args: str):
         /log koan 2026-02-03 — specific date
     """
     from datetime import date as _date, timedelta
-    from app.utils import get_latest_journal
+    from app.journal import get_latest_journal
 
     parts = args.split() if args else []
     project = None
@@ -690,7 +694,7 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
     journal_context = ""
     if not lite:
         # Load today's journal for recent context
-        from app.utils import read_all_journals
+        from app.journal import read_all_journals
         journal_content = read_all_journals(INSTANCE_DIR, date.today())
         if journal_content:
             if len(journal_content) > 2000:
