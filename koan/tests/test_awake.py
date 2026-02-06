@@ -25,6 +25,8 @@ from app.awake import (
     _handle_log,
     _handle_usage,
     _handle_mission_command,
+    _handle_pr,
+    _resolve_project_path,
     _run_in_worker,
     get_updates,
     check_config,
@@ -1276,6 +1278,8 @@ class TestChatToolsSecurity:
         tools_arg = call_args[allowed_idx + 1]
         assert tools_arg == "Read,Glob,Grep"
         assert "Bash" not in tools_arg
+
+
 # ---------------------------------------------------------------------------
 # /mission command
 # ---------------------------------------------------------------------------
@@ -1290,13 +1294,13 @@ class TestHandleMissionCommand:
         assert "Usage" in msg
 
     @patch("app.awake.handle_mission")
-    @patch("app.awake.get_known_projects", return_value=["koan"])
+    @patch("app.awake.get_known_projects", return_value=[("koan", "/k")])
     def test_single_project_auto_proceeds(self, mock_projects, mock_mission):
         _handle_mission_command("/mission fix the login bug")
         mock_mission.assert_called_once_with("fix the login bug")
 
     @patch("app.awake.send_telegram")
-    @patch("app.awake.get_known_projects", return_value=["koan", "webapp"])
+    @patch("app.awake.get_known_projects", return_value=[("koan", "/k"), ("webapp", "/w")])
     def test_multi_project_asks_user(self, mock_projects, mock_send):
         _handle_mission_command("/mission fix the login bug")
         msg = mock_send.call_args[0][0]
@@ -1305,7 +1309,7 @@ class TestHandleMissionCommand:
         assert "webapp" in msg
 
     @patch("app.awake.handle_mission")
-    @patch("app.awake.get_known_projects", return_value=["koan", "webapp"])
+    @patch("app.awake.get_known_projects", return_value=[("koan", "/k"), ("webapp", "/w")])
     def test_project_tag_bypasses_ask(self, mock_projects, mock_mission):
         _handle_mission_command("/mission [project:koan] fix the login bug")
         mock_mission.assert_called_once_with("[project:koan] fix the login bug")
@@ -1339,6 +1343,9 @@ class TestHandleHelpIncludesMission:
         _handle_help()
         msg = mock_send.call_args[0][0]
         assert "/mission" in msg
+
+
+# ---------------------------------------------------------------------------
 # /log command
 # ---------------------------------------------------------------------------
 
@@ -1459,6 +1466,96 @@ class TestHandleLog:
 
 
 # ---------------------------------------------------------------------------
+# _resolve_project_path
+# ---------------------------------------------------------------------------
+
+class TestResolveProjectPath:
+    @patch("app.awake.get_known_projects")
+    @patch("app.awake.PROJECT_PATH", "")
+    def test_exact_match(self, mock_projects):
+        mock_projects.return_value = [("koan", "/home/user/koan"), ("web", "/home/user/web")]
+        assert _resolve_project_path("koan") == "/home/user/koan"
+
+    @patch("app.awake.get_known_projects")
+    @patch("app.awake.PROJECT_PATH", "")
+    def test_case_insensitive(self, mock_projects):
+        mock_projects.return_value = [("Koan", "/home/user/koan")]
+        assert _resolve_project_path("koan") == "/home/user/koan"
+
+    @patch("app.awake.get_known_projects")
+    @patch("app.awake.PROJECT_PATH", "")
+    def test_basename_match(self, mock_projects):
+        mock_projects.return_value = [("myproject", "/home/user/koan")]
+        assert _resolve_project_path("koan") == "/home/user/koan"
+
+    @patch("app.awake.get_known_projects")
+    @patch("app.awake.PROJECT_PATH", "")
+    def test_single_project_fallback(self, mock_projects):
+        mock_projects.return_value = [("only", "/home/user/only")]
+        assert _resolve_project_path("unknown") == "/home/user/only"
+
+    @patch("app.awake.get_known_projects")
+    @patch("app.awake.PROJECT_PATH", "/fallback/path")
+    def test_project_path_fallback(self, mock_projects):
+        mock_projects.return_value = [("a", "/a"), ("b", "/b")]
+        assert _resolve_project_path("unknown") == "/fallback/path"
+
+    @patch("app.awake.get_known_projects")
+    @patch("app.awake.PROJECT_PATH", "")
+    def test_no_match_returns_none(self, mock_projects):
+        mock_projects.return_value = [("a", "/a"), ("b", "/b")]
+        assert _resolve_project_path("unknown") is None
+
+
+# ---------------------------------------------------------------------------
+# /pr command
+# ---------------------------------------------------------------------------
+
+class TestHandlePr:
+    @patch("app.awake.send_telegram")
+    def test_no_args_shows_usage(self, mock_send):
+        _handle_pr("")
+        mock_send.assert_called_once()
+        assert "Usage" in mock_send.call_args[0][0]
+
+    @patch("app.awake.send_telegram")
+    def test_invalid_url_shows_error(self, mock_send):
+        _handle_pr("not a url")
+        mock_send.assert_called_once()
+        assert "No valid GitHub PR URL" in mock_send.call_args[0][0]
+
+    @patch("app.awake._run_in_worker")
+    @patch("app.awake._resolve_project_path", return_value="/home/user/koan")
+    @patch("app.awake.send_telegram")
+    def test_valid_url_starts_review(self, mock_send, mock_resolve, mock_worker):
+        _handle_pr("https://github.com/sukria/koan/pull/42")
+        mock_worker.assert_called_once()
+        mock_send.assert_called()
+        assert "Starting PR review" in mock_send.call_args_list[-1][0][0]
+
+    @patch("app.awake.get_known_projects", return_value=[])
+    @patch("app.awake._resolve_project_path", return_value=None)
+    @patch("app.awake.send_telegram")
+    def test_no_matching_project(self, mock_send, mock_resolve, mock_projects):
+        _handle_pr("https://github.com/sukria/unknown-repo/pull/1")
+        mock_send.assert_called()
+        assert "Could not find local project" in mock_send.call_args[0][0]
+
+    @patch("app.awake._handle_pr")
+    def test_handle_command_routes_pr(self, mock_pr):
+        handle_command("/pr https://github.com/sukria/koan/pull/1")
+        mock_pr.assert_called_once_with("https://github.com/sukria/koan/pull/1")
+
+    @patch("app.awake._handle_pr")
+    def test_handle_command_routes_pr_no_args(self, mock_pr):
+        handle_command("/pr")
+        mock_pr.assert_called_once_with("")
+
+    @patch("app.awake.send_telegram")
+    def test_help_includes_pr(self, mock_send):
+        _handle_help()
+        msg = mock_send.call_args[0][0]
+        assert "/pr" in msg
 # /language
 # ---------------------------------------------------------------------------
 
