@@ -484,6 +484,35 @@ def insert_pending_mission(missions_path: Path, entry: str):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def modify_missions_file(missions_path: Path, transform):
+    """Apply a transform function to missions.md content with file locking.
+
+    Args:
+        missions_path: Path to missions.md
+        transform: Callable(content: str) -> str that returns modified content.
+
+    Returns the transformed content.
+    """
+    with _MISSIONS_LOCK:
+        if not missions_path.exists():
+            missions_path.write_text(_MISSIONS_DEFAULT)
+
+        with open(missions_path, "r+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            content = f.read()
+            if not content.strip():
+                content = _MISSIONS_DEFAULT
+
+            new_content = transform(content)
+
+            f.seek(0)
+            f.truncate()
+            f.write(new_content)
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+    return new_content
+
+
 # ---------------------------------------------------------------------------
 # Conversation history management (Telegram + Dashboard)
 # ---------------------------------------------------------------------------
