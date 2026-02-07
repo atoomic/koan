@@ -75,7 +75,6 @@ INSTANCE="$KOAN_ROOT/instance"
 APP_DIR="$KOAN_ROOT/koan/app"
 NOTIFY="$APP_DIR/notify.py"
 DAILY_REPORT="$APP_DIR/daily_report.py"
-MISSION_SUMMARY="$APP_DIR/mission_summary.py"
 GIT_SYNC="$APP_DIR/git_sync.py"
 GIT_SYNC_INTERVAL=${KOAN_GIT_SYNC_INTERVAL:-5}
 HEALTH_CHECK="$APP_DIR/health_check.py"
@@ -617,22 +616,39 @@ EOF
   CLAUDE_PID=$!
   wait_for_claude_task
 
-  # Extract text from JSON for display and quota detection
-  CLAUDE_TEXT=""
-  if command -v jq &>/dev/null && [ -s "$CLAUDE_OUT" ]; then
-    CLAUDE_TEXT=$(jq -r '.result // .content // .text // empty' "$CLAUDE_OUT" 2>/dev/null || cat "$CLAUDE_OUT")
-  else
-    CLAUDE_TEXT=$(cat "$CLAUDE_OUT")
-  fi
+  # Extract text from JSON for display (no jq dependency)
+  CLAUDE_TEXT=$("$PYTHON" -m app.mission_runner parse-output "$CLAUDE_OUT" 2>/dev/null || cat "$CLAUDE_OUT")
   echo "$CLAUDE_TEXT"
 
-  # Update token usage state from JSON output
-  "$PYTHON" "$USAGE_ESTIMATOR" update "$CLAUDE_OUT" "$USAGE_STATE" "$INSTANCE/usage.md" 2>/dev/null || true
+  # Post-mission processing pipeline (usage, quota, pending, reflection, auto-merge)
+  set_status "Run $RUN_NUM/$MAX_RUNS — post-mission processing"
+  POST_MISSION_STDERR=$(mktemp)
+  POST_MISSION_RESULT=$("$PYTHON" -m app.mission_runner post-mission \
+    --instance "$INSTANCE" \
+    --project-name "$PROJECT_NAME" \
+    --project-path "$PROJECT_PATH" \
+    --run-num "$RUN_NUM" \
+    --exit-code "$CLAUDE_EXIT" \
+    --stdout-file "$CLAUDE_OUT" \
+    --stderr-file "$CLAUDE_ERR" \
+    --mission-title "$MISSION_TITLE" \
+    --autonomous-mode "${AUTONOMOUS_MODE:-implement}" \
+    --start-time "$MISSION_START_TIME" 2>"$POST_MISSION_STDERR")
+  POST_EXIT=$?
 
-  # Check for quota exhaustion (detection, journal, pause — all in Python)
-  QUOTA_RESULT=$("$PYTHON" -m app.quota_handler check "$KOAN_ROOT" "$INSTANCE" "$PROJECT_NAME" "$count" "$CLAUDE_OUT" "$CLAUDE_ERR" 2>/dev/null) && {
-    RESET_DISPLAY=$(echo "$QUOTA_RESULT" | cut -d'|' -f1)
-    RESUME_MSG=$(echo "$QUOTA_RESULT" | cut -d'|' -f2)
+  # Log post-mission activity
+  while IFS= read -r line; do
+    case "$line" in
+      PENDING_ARCHIVED) log health "pending.md archived to journal (Claude didn't clean up)" ;;
+      AUTO_MERGE\|*) log git "Auto-merge checked for ${line#AUTO_MERGE|}" ;;
+    esac
+  done < "$POST_MISSION_STDERR"
+  rm -f "$POST_MISSION_STDERR"
+
+  # Handle quota exhaustion (exit code 2 from post-mission)
+  if [ $POST_EXIT -eq 2 ]; then
+    RESET_DISPLAY=$(echo "$POST_MISSION_RESULT" | cut -d'|' -f2)
+    RESUME_MSG=$(echo "$POST_MISSION_RESULT" | cut -d'|' -f3)
     log quota "Quota reached. $RESET_DISPLAY"
 
     # Commit journal update
@@ -648,55 +664,13 @@ Koan paused after $count runs. $RESUME_MSG or use /resume to restart manually."
     rm -f "$CLAUDE_OUT" "$CLAUDE_ERR"
     CLAUDE_OUT=""
     continue  # Go back to start of loop (will enter pause mode)
-  }
+  fi
   rm -f "$CLAUDE_OUT" "$CLAUDE_ERR"
   CLAUDE_OUT=""
 
-  # If Claude didn't clean up pending.md, archive it to daily journal
-  PENDING_FILE="$INSTANCE/journal/pending.md"
-  if [ -f "$PENDING_FILE" ]; then
-    JOURNAL_DIR="$INSTANCE/journal/$(date +%Y-%m-%d)"
-    mkdir -p "$JOURNAL_DIR"
-    JOURNAL_FILE="$JOURNAL_DIR/$PROJECT_NAME.md"
-    echo "" >> "$JOURNAL_FILE"
-    echo "## Run $RUN_NUM — $(date '+%H:%M') (auto-archived from pending)" >> "$JOURNAL_FILE"
-    echo "" >> "$JOURNAL_FILE"
-    cat "$PENDING_FILE" >> "$JOURNAL_FILE"
-    rm -f "$PENDING_FILE"
-    log health "pending.md archived to journal (Claude didn't clean up)"
-  fi
-
   # Report result
-  # NOTE: The Claude agent writes its own conclusion to outbox.md
-  # (summary + koan). No need for notify() or mission_summary.py here —
-  # those caused triple-repeated conclusions on Telegram.
   if [ $CLAUDE_EXIT -eq 0 ]; then
-    set_status "Run $RUN_NUM/$MAX_RUNS — post-mission processing"
     log mission "Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME] completed successfully"
-
-    # Post-mission reflection for significant missions (writes to shared-journal.md)
-    MISSION_END_TIME=$(date +%s)
-    MISSION_DURATION_MINUTES=$(( (MISSION_END_TIME - MISSION_START_TIME) / 60 ))
-    POST_MISSION_REFLECTION="$APP_DIR/post_mission_reflection.py"
-    if [ -n "$MISSION_TITLE" ]; then
-      "$PYTHON" "$POST_MISSION_REFLECTION" "$INSTANCE" "$MISSION_TITLE" "$MISSION_DURATION_MINUTES" 2>/dev/null || true
-    else
-      # Autonomous mode — use mode name as mission text
-      "$PYTHON" "$POST_MISSION_REFLECTION" "$INSTANCE" "Autonomous $AUTONOMOUS_MODE on $PROJECT_NAME" "$MISSION_DURATION_MINUTES" 2>/dev/null || true
-    fi
-
-    # Auto-merge logic (if on koan/* branch)
-    cd "$PROJECT_PATH"
-    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [[ "$CURRENT_BRANCH" == koan/* ]]; then
-      log git "Checking auto-merge for $CURRENT_BRANCH..."
-      GIT_AUTO_MERGE="$APP_DIR/git_auto_merge.py"
-      if "$PYTHON" "$GIT_AUTO_MERGE" "$INSTANCE" "$PROJECT_NAME" "$PROJECT_PATH" "$CURRENT_BRANCH" 2>&1; then
-        log git "Auto-merge completed for $CURRENT_BRANCH"
-      else
-        log git "Auto-merge skipped or failed for $CURRENT_BRANCH (see journal)"
-      fi
-    fi
   else
     if [ -n "$MISSION_TITLE" ]; then
       notify "❌ Run $RUN_NUM/$MAX_RUNS — [$PROJECT_NAME] Mission failed: $MISSION_TITLE"
