@@ -273,6 +273,55 @@ class TestExtractIdeaFromIssue:
         idea = handler._extract_idea_from_issue(body)
         assert len(idea) <= 500
 
+    def test_short_valid_idea(self, handler):
+        body = "Add auth\n\nMore details here"
+        idea = handler._extract_idea_from_issue(body)
+        assert idea == "Add auth"
+
+
+# ---------------------------------------------------------------------------
+# _format_comments
+# ---------------------------------------------------------------------------
+
+class TestFormatComments:
+    def test_formats_with_author_and_date(self, handler):
+        data = json.dumps([
+            {"author": "alice", "date": "2026-02-01T10:00:00Z", "body": "Looks good"},
+        ])
+        result = handler._format_comments(data)
+        assert "alice" in result
+        assert "2026-02-01" in result
+        assert "Looks good" in result
+
+    def test_multiple_comments_separated(self, handler):
+        data = json.dumps([
+            {"author": "a", "date": "2026-01-01T00:00:00Z", "body": "first"},
+            {"author": "b", "date": "2026-01-02T00:00:00Z", "body": "second"},
+        ])
+        result = handler._format_comments(data)
+        assert "first" in result
+        assert "second" in result
+        assert "---" in result  # separator between comments
+
+    def test_empty_list(self, handler):
+        assert handler._format_comments("[]") == ""
+
+    def test_invalid_json_returns_raw(self, handler):
+        assert handler._format_comments("not json") == "not json"
+
+    def test_empty_string(self, handler):
+        assert handler._format_comments("") == ""
+
+    def test_skips_empty_body_comments(self, handler):
+        data = json.dumps([
+            {"author": "a", "date": "2026-01-01T00:00:00Z", "body": ""},
+            {"author": "b", "date": "2026-01-02T00:00:00Z", "body": "useful"},
+        ])
+        result = handler._format_comments(data)
+        assert "useful" in result
+        # Empty body comment should not produce author header
+        assert result.count("**") == 2  # only one **author** pair
+
 
 # ---------------------------------------------------------------------------
 # _handle_new_plan — integration-style tests
@@ -505,15 +554,21 @@ class TestCreateIssue:
 class TestFetchIssueContext:
     @patch("subprocess.run")
     def test_returns_title_body_and_comments(self, mock_run, handler):
-        # Two calls: issue (title+body) then comments
+        # Two calls: issue (title+body) then comments (JSON with author/date)
+        comments_data = json.dumps([
+            {"author": "alice", "date": "2026-02-01T10:00:00Z", "body": "Looks good"},
+            {"author": "bob", "date": "2026-02-02T14:00:00Z", "body": "Needs changes"},
+        ])
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout=json.dumps({"title": "My Issue", "body": "Issue body content"})),
-            MagicMock(returncode=0, stdout="Comment 1\nComment 2"),
+            MagicMock(returncode=0, stdout=comments_data),
         ]
         title, body, comments = handler._fetch_issue_context("sukria", "koan", "64")
         assert title == "My Issue"
         assert body == "Issue body content"
-        assert "Comment 1" in comments
+        assert "alice" in comments
+        assert "Looks good" in comments
+        assert "bob" in comments
 
     @patch("subprocess.run")
     def test_handles_non_json_issue_response(self, mock_run, handler):
@@ -524,6 +579,20 @@ class TestFetchIssueContext:
         title, body, comments = handler._fetch_issue_context("sukria", "koan", "1")
         assert title == ""
         assert body == "plain text body"
+
+    @patch("subprocess.run")
+    def test_comments_preserve_authorship(self, mock_run, handler):
+        comments_data = json.dumps([
+            {"author": "sukria", "date": "2026-02-05T09:00:00Z", "body": "Please also handle edge case X"},
+        ])
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=json.dumps({"title": "Title", "body": "body"})),
+            MagicMock(returncode=0, stdout=comments_data),
+        ]
+        _, _, comments = handler._fetch_issue_context("sukria", "koan", "1")
+        assert "sukria" in comments
+        assert "2026-02-05" in comments
+        assert "edge case X" in comments
 
 
 # ---------------------------------------------------------------------------

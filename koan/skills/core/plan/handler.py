@@ -132,7 +132,8 @@ def _fetch_issue_context(owner, repo, issue_number):
     """Fetch issue title, body and comments via gh CLI.
 
     Returns:
-        Tuple of (title, body, comments_raw).
+        Tuple of (title, body, comments_text).
+        comments_text preserves authorship and timestamps for plan iteration.
     """
     # Get issue title and body
     issue_json = _gh([
@@ -147,13 +148,34 @@ def _fetch_issue_context(owner, repo, issue_number):
         title = ""
         body = issue_json
 
-    # Get all comments
-    comments_raw = _gh([
+    # Get all comments with author and date context
+    comments_json = _gh([
         "gh", "api", f"repos/{owner}/{repo}/issues/{issue_number}/comments",
-        "--jq", '.[].body',
+        "--jq", '[.[] | {author: .user.login, date: .created_at, body: .body}]',
     ])
 
-    return title, body, comments_raw
+    comments_text = _format_comments(comments_json)
+    return title, body, comments_text
+
+
+def _format_comments(comments_json):
+    """Format comments JSON into readable text with authorship."""
+    try:
+        comments = json.loads(comments_json)
+        if not isinstance(comments, list) or not comments:
+            return ""
+    except (json.JSONDecodeError, TypeError):
+        # Fallback: return raw text if not valid JSON
+        return comments_json.strip() if comments_json else ""
+
+    parts = []
+    for c in comments:
+        author = c.get("author", "unknown")
+        date = c.get("date", "")[:10]  # YYYY-MM-DD
+        body = c.get("body", "").strip()
+        if body:
+            parts.append(f"**{author}** ({date}):\n{body}")
+    return "\n\n---\n\n".join(parts)
 
 
 def _generate_plan(project_path, idea, context=""):
@@ -374,6 +396,6 @@ def _extract_idea_from_issue(body):
         clean = re.sub(r'^#+\s*', '', line).strip()
         # Skip "Plan:" prefix if present
         clean = re.sub(r'^Plan:\s*', '', clean).strip()
-        if clean and len(clean) > 10:
+        if clean and len(clean) > 3:
             return clean[:500]
     return "Review and refine this plan based on the discussion"
