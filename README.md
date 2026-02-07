@@ -6,6 +6,10 @@
 ![Claude Code](https://img.shields.io/badge/Claude-Code%20CLI-blueviolet.svg)
 ![Tests](https://img.shields.io/badge/tests-615-green.svg)
 
+<p align="center">
+  <img src="instance.example/avatar.png" alt="Kōan" width="200" />
+</p>
+
 An autonomous background agent that uses idle Claude Max quota to work on your projects.
 
 Koan runs as a continuous loop on your local machine: it pulls missions from a shared file, executes them via Claude Code CLI, writes reports, and communicates with you via Telegram.
