@@ -6,6 +6,6 @@ version: 1.0.0
 commands:
   - name: language
     description: Set reply language
-    aliases: []
+    aliases: [lng]
 handler: handler.py
 ---
