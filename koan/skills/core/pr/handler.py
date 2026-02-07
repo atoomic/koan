@@ -55,7 +55,10 @@ def handle(ctx):
         send(f"🔄 Starting PR review pipeline for #{pr_number} ({owner}/{repo})...")
 
     try:
-        success, summary = run_pr_review(owner, repo, pr_number, project_path)
+        success, summary = run_pr_review(
+            owner, repo, pr_number, project_path,
+            skill_dir=Path(__file__).parent,
+        )
         if success:
             if send:
                 send(f"✅ PR #{pr_number} updated.\n\n{summary[:400]}")

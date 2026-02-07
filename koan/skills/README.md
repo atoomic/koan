@@ -119,6 +119,31 @@ Every handler receives a `SkillContext` object:
 - Use `fcntl.flock()` when reading/writing shared files concurrently
 - Mark `worker: true` in SKILL.md if your handler blocks (API calls, subprocess, etc.)
 
+## Skill prompts
+
+Skills that need LLM prompt templates store them in a `prompts/` subdirectory:
+
+```
+skills/core/plan/
+  SKILL.md
+  handler.py
+  prompts/
+    plan.md          ← prompt template with {PLACEHOLDER} syntax
+```
+
+Load prompts with `load_skill_prompt()` from `app.prompts`:
+
+```python
+from pathlib import Path
+from app.prompts import load_skill_prompt
+
+prompt = load_skill_prompt(Path(__file__).parent, "plan", IDEA=idea, CONTEXT=context)
+```
+
+This looks for `<skill-dir>/prompts/<name>.md` first, then falls back to the global `system-prompts/` directory. Prompt-only skills (SKILL.md body, no handler) remain unaffected — this convention is only for handler-based skills with complex prompts.
+
+Infrastructure prompts used by `koan/app/` modules stay in `koan/system-prompts/`.
+
 ## Loading custom skills
 
 Koan loads skills from two locations:

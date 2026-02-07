@@ -77,5 +77,5 @@ Extensible command plugin system. Each skill lives in `skills/<scope>/<skill-nam
 - Multi-project support: up to 5 projects, each with isolated memory under `memory/projects/{name}/`
 - Tests use temp directories and isolated env vars — no real Telegram calls
 - `system-prompt.md` defines the Claude agent's identity, priorities, and autonomous mode rules
-- **No inline prompts in Python code** — All LLM prompts MUST be extracted to `koan/system-prompts/*.md` files. Python modules load these templates at runtime using `Path(__file__).parent.parent / "system-prompts" / "filename.md"`.
+- **No inline prompts in Python code** — LLM prompts MUST be extracted to `.md` files. Skill-bound prompts go in `skills/<scope>/<name>/prompts/` and are loaded via `load_skill_prompt()`. Infrastructure prompts used by `koan/app/` modules stay in `koan/system-prompts/` and are loaded via `load_prompt()`.
 - **System prompts must be generic** — Never reference specific instance details like owner names in system prompts. Use generic terms like "your human" instead of personal names. Prompts are in English; instance-specific personality and language preferences come from `soul.md`.

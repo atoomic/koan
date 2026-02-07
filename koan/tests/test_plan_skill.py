@@ -477,7 +477,7 @@ class TestGeneratePlan:
             stdout="## Plan\n\nStep 1: Do the thing",
             stderr="",
         )
-        with patch("app.prompts.load_prompt", return_value="Plan this: idea"), \
+        with patch("app.prompts.load_skill_prompt", return_value="Plan this: idea"), \
              patch("app.utils.get_model_config", return_value={"chat": "sonnet", "fallback": "haiku"}), \
              patch("app.utils.build_claude_flags", return_value=[]):
             result = handler._generate_plan("/project", "Add feature")
@@ -486,16 +486,19 @@ class TestGeneratePlan:
     @patch("subprocess.run")
     def test_includes_context_in_prompt(self, mock_run, handler):
         mock_run.return_value = MagicMock(returncode=0, stdout="plan", stderr="")
-        with patch("app.prompts.load_prompt", return_value="prompt with previous discussion") as mock_load, \
+        with patch("app.prompts.load_skill_prompt", return_value="prompt with previous discussion") as mock_load, \
              patch("app.utils.get_model_config", return_value={"chat": "", "fallback": ""}), \
              patch("app.utils.build_claude_flags", return_value=[]):
             handler._generate_plan("/project", "idea", context="previous discussion")
-            mock_load.assert_called_once_with("plan", IDEA="idea", CONTEXT="previous discussion")
+            mock_load.assert_called_once()
+            args, kwargs = mock_load.call_args
+            assert args[1] == "plan"
+            assert kwargs == {"IDEA": "idea", "CONTEXT": "previous discussion"}
 
     @patch("subprocess.run")
     def test_raises_on_claude_failure(self, mock_run, handler):
         mock_run.return_value = MagicMock(returncode=1, stderr="rate limited")
-        with patch("app.prompts.load_prompt", return_value="prompt"), \
+        with patch("app.prompts.load_skill_prompt", return_value="prompt"), \
              patch("app.utils.get_model_config", return_value={"chat": "", "fallback": ""}), \
              patch("app.utils.build_claude_flags", return_value=[]):
             with pytest.raises(RuntimeError, match="plan generation failed"):
@@ -504,7 +507,7 @@ class TestGeneratePlan:
     @patch("subprocess.run")
     def test_uses_read_only_tools(self, mock_run, handler):
         mock_run.return_value = MagicMock(returncode=0, stdout="plan", stderr="")
-        with patch("app.prompts.load_prompt", return_value="prompt"), \
+        with patch("app.prompts.load_skill_prompt", return_value="prompt"), \
              patch("app.utils.get_model_config", return_value={"chat": "", "fallback": ""}), \
              patch("app.utils.build_claude_flags", return_value=[]):
             handler._generate_plan("/project", "idea")
@@ -691,20 +694,20 @@ class TestSkillMd:
 # System prompt — plan.md
 # ---------------------------------------------------------------------------
 
+PLAN_PROMPT_PATH = Path(__file__).parent.parent / "skills" / "core" / "plan" / "prompts" / "plan.md"
+
+
 class TestPlanPrompt:
     def test_prompt_file_exists(self):
-        prompt_path = Path(__file__).parent.parent / "system-prompts" / "plan.md"
-        assert prompt_path.exists()
+        assert PLAN_PROMPT_PATH.exists()
 
     def test_prompt_has_placeholders(self):
-        prompt_path = Path(__file__).parent.parent / "system-prompts" / "plan.md"
-        content = prompt_path.read_text()
+        content = PLAN_PROMPT_PATH.read_text()
         assert "{IDEA}" in content
         assert "{CONTEXT}" in content
 
     def test_prompt_has_required_sections(self):
-        prompt_path = Path(__file__).parent.parent / "system-prompts" / "plan.md"
-        content = prompt_path.read_text()
+        content = PLAN_PROMPT_PATH.read_text()
         assert "Implementation Steps" in content
         assert "Corner Cases" in content
         assert "Open Questions" in content
