@@ -51,10 +51,10 @@ def handle(ctx):
 
     journal = get_latest_journal(ctx.instance_dir, project=project, target_date=target_date)
 
-    # Only show pending progress for today's journal (no target_date or today)
+    # Show pending progress at the bottom for today's journal (easier to read)
     if target_date is None:
         pending = _read_pending_progress(ctx.instance_dir)
         if pending:
-            return f"{pending}\n\n{journal}"
+            return f"{journal}\n\n{pending}"
 
     return journal
