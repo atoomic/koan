@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from app.bridge_log import log
+
 
 def handle(ctx):
     """Explore a random project and suggest creative improvement ideas."""
@@ -52,12 +54,12 @@ def handle(ctx):
             return _clean_response(result.stdout.strip())
         else:
             if result.stderr:
-                print(f"[skill:magic] Claude stderr: {result.stderr[:500]}")
+                log("error", f"Magic Claude stderr: {result.stderr[:500]}")
             return f"Couldn't generate ideas for {name}. Try again later."
     except subprocess.TimeoutExpired:
         return "Timeout exploring. Try again."
     except Exception as e:
-        print(f"[skill:magic] Error: {e}")
+        log("error", f"Magic error: {e}")
         return "Error during exploration. Try again."
 
 
