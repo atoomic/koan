@@ -23,7 +23,6 @@ def handle(ctx):
         /plan <github-issue-url>           -- iterate on existing issue
     """
     args = ctx.args.strip()
-    send = ctx.send_message
 
     if not args:
         return (
@@ -78,8 +77,15 @@ def _parse_project_arg(args):
     return None, args
 
 
-def _resolve_project_path(project_name):
-    """Resolve project name to its local path."""
+def _resolve_project_path(project_name, fallback=False):
+    """Resolve project name to its local path.
+
+    Args:
+        project_name: Project name to look up (None = use default).
+        fallback: If True, fall back to first project or env var when
+                  no exact match is found (used for existing issue mode).
+                  If False, return None on no match (used for new plan mode).
+    """
     from app.utils import get_known_projects
 
     projects = get_known_projects()
@@ -88,7 +94,12 @@ def _resolve_project_path(project_name):
         for name, path in projects:
             if name.lower() == project_name.lower():
                 return path
-        return None
+        # Try directory basename match
+        for name, path in projects:
+            if Path(path).name.lower() == project_name.lower():
+                return path
+        if not fallback:
+            return None
 
     # Default to first project
     if projects:
@@ -242,7 +253,6 @@ def _extract_title(plan_text):
     lines = plan_text.strip().splitlines()
     for line in lines:
         line = line.strip()
-        # Skip empty lines and markdown headers
         if not line:
             continue
         if line.startswith("#"):
@@ -314,8 +324,8 @@ def _handle_existing_issue(ctx, match):
     if send:
         send(f"\U0001f4d6 Reading issue #{issue_number} ({owner}/{repo})...")
 
-    # Resolve project path for codebase context
-    project_path = _resolve_project_path_for_repo(repo)
+    # Resolve project path for codebase context (fallback=True: best-effort match)
+    project_path = _resolve_project_path(repo, fallback=True)
 
     try:
         title, body, comments = _fetch_issue_context(owner, repo, issue_number)
@@ -362,21 +372,6 @@ def _handle_existing_issue(ctx, match):
         send(f"\u2705 Plan posted as comment on {issue_label}: https://github.com/{owner}/{repo}/issues/{issue_number}")
     return None
 
-
-def _resolve_project_path_for_repo(repo_name):
-    """Find local project path matching a repository name."""
-    from app.utils import get_known_projects
-
-    projects = get_known_projects()
-    for name, path in projects:
-        if name.lower() == repo_name.lower():
-            return path
-    for name, path in projects:
-        if Path(path).name.lower() == repo_name.lower():
-            return path
-    if projects:
-        return projects[0][1]
-    return os.environ.get("KOAN_PROJECT_PATH", "")
 
 
 def _extract_idea_from_issue(body):

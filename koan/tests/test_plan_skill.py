@@ -166,6 +166,10 @@ class TestResolveProjectPath:
              patch.dict("os.environ", {"KOAN_PROJECT_PATH": "/from/env"}):
             assert handler._resolve_project_path(None) == "/from/env"
 
+    def test_directory_basename_match(self, handler):
+        with patch("app.utils.get_known_projects", return_value=[("myproject", "/home/koan")]):
+            assert handler._resolve_project_path("koan") == "/home/koan"
+
 
 # ---------------------------------------------------------------------------
 # _get_repo_info
@@ -401,7 +405,7 @@ class TestHandleExistingIssue:
 
     def test_successful_iteration(self, handler, ctx):
         match = self._make_match(handler)
-        with patch.object(handler, "_resolve_project_path_for_repo", return_value="/project"), \
+        with patch.object(handler, "_resolve_project_path", return_value="/project"), \
              patch.object(handler, "_fetch_issue_context", return_value=("Issue Title", "Original plan", "Comment 1\nComment 2")), \
              patch.object(handler, "_generate_plan", return_value="## Updated Plan"), \
              patch.object(handler, "_comment_on_issue") as mock_comment:
@@ -414,14 +418,14 @@ class TestHandleExistingIssue:
 
     def test_fetch_failure(self, handler, ctx):
         match = self._make_match(handler)
-        with patch.object(handler, "_resolve_project_path_for_repo", return_value="/project"), \
+        with patch.object(handler, "_resolve_project_path", return_value="/project"), \
              patch.object(handler, "_fetch_issue_context", side_effect=RuntimeError("not found")):
             result = handler._handle_existing_issue(ctx, match)
             assert "Failed to fetch" in result
 
     def test_plan_generation_failure(self, handler, ctx):
         match = self._make_match(handler)
-        with patch.object(handler, "_resolve_project_path_for_repo", return_value="/project"), \
+        with patch.object(handler, "_resolve_project_path", return_value="/project"), \
              patch.object(handler, "_fetch_issue_context", return_value=("Title", "body", "")), \
              patch.object(handler, "_generate_plan", side_effect=RuntimeError("claude error")):
             result = handler._handle_existing_issue(ctx, match)
@@ -429,7 +433,7 @@ class TestHandleExistingIssue:
 
     def test_comment_failure_sends_inline(self, handler, ctx):
         match = self._make_match(handler)
-        with patch.object(handler, "_resolve_project_path_for_repo", return_value="/project"), \
+        with patch.object(handler, "_resolve_project_path", return_value="/project"), \
              patch.object(handler, "_fetch_issue_context", return_value=("Title", "body", "")), \
              patch.object(handler, "_generate_plan", return_value="## Updated Plan"), \
              patch.object(handler, "_comment_on_issue", side_effect=RuntimeError("no perms")):
@@ -440,7 +444,7 @@ class TestHandleExistingIssue:
 
     def test_sends_reading_notification(self, handler, ctx):
         match = self._make_match(handler)
-        with patch.object(handler, "_resolve_project_path_for_repo", return_value="/project"), \
+        with patch.object(handler, "_resolve_project_path", return_value="/project"), \
              patch.object(handler, "_fetch_issue_context", return_value=("Title", "body", "")), \
              patch.object(handler, "_generate_plan", return_value="## Plan"), \
              patch.object(handler, "_comment_on_issue"):
@@ -450,7 +454,7 @@ class TestHandleExistingIssue:
 
     def test_success_notification_includes_title(self, handler, ctx):
         match = self._make_match(handler)
-        with patch.object(handler, "_resolve_project_path_for_repo", return_value="/project"), \
+        with patch.object(handler, "_resolve_project_path", return_value="/project"), \
              patch.object(handler, "_fetch_issue_context", return_value=("Add dark mode", "body", "")), \
              patch.object(handler, "_generate_plan", return_value="## Plan"), \
              patch.object(handler, "_comment_on_issue"):
@@ -596,10 +600,6 @@ class TestFetchIssueContext:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_project_path_for_repo
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # _comment_on_issue — multiline-safe via stdin
 # ---------------------------------------------------------------------------
 
@@ -631,26 +631,33 @@ class TestCommentOnIssue:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_project_path_for_repo
+# _resolve_project_path
 # ---------------------------------------------------------------------------
 
-class TestResolveProjectPathForRepo:
+class TestResolveProjectPathFallback:
+    """Tests for _resolve_project_path with fallback=True (existing issue mode)."""
+
     def test_exact_name_match(self, handler):
         with patch("app.utils.get_known_projects", return_value=[("koan", "/home/koan"), ("web", "/home/web")]):
-            assert handler._resolve_project_path_for_repo("koan") == "/home/koan"
+            assert handler._resolve_project_path("koan", fallback=True) == "/home/koan"
 
     def test_directory_basename_match(self, handler):
         with patch("app.utils.get_known_projects", return_value=[("myproject", "/home/koan")]):
-            assert handler._resolve_project_path_for_repo("koan") == "/home/koan"
+            assert handler._resolve_project_path("koan", fallback=True) == "/home/koan"
 
     def test_defaults_to_first_project(self, handler):
         with patch("app.utils.get_known_projects", return_value=[("first", "/a"), ("second", "/b")]):
-            assert handler._resolve_project_path_for_repo("unknown") == "/a"
+            assert handler._resolve_project_path("unknown", fallback=True) == "/a"
 
     def test_falls_back_to_env(self, handler):
         with patch("app.utils.get_known_projects", return_value=[]), \
              patch.dict("os.environ", {"KOAN_PROJECT_PATH": "/from/env"}):
-            assert handler._resolve_project_path_for_repo("anything") == "/from/env"
+            assert handler._resolve_project_path("anything", fallback=True) == "/from/env"
+
+    def test_no_fallback_returns_none(self, handler):
+        """Without fallback, unknown project returns None."""
+        with patch("app.utils.get_known_projects", return_value=[("koan", "/home/koan")]):
+            assert handler._resolve_project_path("unknown", fallback=False) is None
 
 
 # ---------------------------------------------------------------------------
