@@ -23,6 +23,7 @@ from typing import Optional, Tuple
 
 import requests
 
+from app.bridge_log import log
 from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
 from app.health_check import write_heartbeat
 from app.language_preference import get_language_instruction
@@ -104,10 +105,10 @@ CORE_COMMANDS = frozenset({
 
 def check_config():
     if not BOT_TOKEN or not CHAT_ID:
-        print("Error: Set KOAN_TELEGRAM_TOKEN and KOAN_TELEGRAM_CHAT_ID env vars.")
+        log("error", "Set KOAN_TELEGRAM_TOKEN and KOAN_TELEGRAM_CHAT_ID env vars.")
         sys.exit(1)
     if not INSTANCE_DIR.exists():
-        print("Error: No instance/ directory. Run: cp -r instance.example instance")
+        log("error", "No instance/ directory. Run: cp -r instance.example instance")
         sys.exit(1)
 
 
@@ -120,7 +121,7 @@ def get_updates(offset=None):
         data = resp.json()
         return data.get("result", [])
     except (requests.RequestException, ValueError) as e:
-        print(f"[awake] Telegram error: {e}")
+        log("error", f"Telegram error: {e}")
         return []
 
 
@@ -464,7 +465,7 @@ def handle_resume():
         else:
             send_telegram(f"⏳ Quota not reset yet ({reset_info}). Paused {hours_since_pause:.1f}h ago. Check back later.")
     except Exception as e:
-        print(f"[awake] Error checking quota reset: {e}")
+        log("error", f"Error checking quota reset: {e}")
         send_telegram("⚠️ Error checking quota. /status or check manually.")
 
 
@@ -507,7 +508,7 @@ def handle_mission(text: str):
         ack_msg += f" (project: {project})"
     ack_msg += f":\n\n{mission_text[:500]}"
     send_telegram(ack_msg)
-    print(f"[awake] Mission queued: [{project or 'default'}] {mission_text[:60]}")
+    log("mission", f"Mission queued: [{project or 'default'}] {mission_text[:60]}")
 
 
 def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
@@ -705,16 +706,16 @@ def handle_chat(text: str):
             send_telegram(response)
             # Save assistant response to history
             save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
-            print(f"[awake] Chat reply: {response[:80]}...")
+            log("chat", f"Chat reply: {response[:80]}...")
         elif result.returncode != 0:
-            print(f"[awake] Claude error: {result.stderr[:200]}")
+            log("error", f"Claude error: {result.stderr[:200]}")
             error_msg = "⚠️ Hmm, I couldn't formulate a response. Try again?"
             send_telegram(error_msg)
             save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", error_msg)
         else:
-            print("[awake] Empty response from Claude.")
+            log("chat", "Empty response from Claude.")
     except subprocess.TimeoutExpired:
-        print(f"[awake] Claude timed out ({CHAT_TIMEOUT}s). Retrying with lite context...")
+        log("error", f"Claude timed out ({CHAT_TIMEOUT}s). Retrying with lite context...")
         # Retry with reduced context
         lite_prompt = _build_chat_prompt(text, lite=True)
         try:
@@ -727,10 +728,10 @@ def handle_chat(text: str):
             if response:
                 send_telegram(response)
                 save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
-                print(f"[awake] Chat reply (lite retry): {response[:80]}...")
+                log("chat", f"Chat reply (lite retry): {response[:80]}...")
             else:
                 if result.stderr:
-                    print(f"[awake] Lite retry stderr: {result.stderr[:500]}")
+                    log("error", f"Lite retry stderr: {result.stderr[:500]}")
                 timeout_msg = f"⏱ Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
                 send_telegram(timeout_msg)
                 save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
@@ -739,12 +740,12 @@ def handle_chat(text: str):
             send_telegram(timeout_msg)
             save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
         except Exception as e:
-            print(f"[awake] Lite retry error: {e}")
+            log("error", f"Lite retry error: {e}")
             error_msg = "⚠️ Something went wrong — try again?"
             send_telegram(error_msg)
             save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", error_msg)
     except Exception as e:
-        print(f"[awake] Claude error: {e}")
+        log("error", f"Claude error: {e}")
 
 
 def flush_outbox():
@@ -770,15 +771,15 @@ def flush_outbox():
                     preview = formatted[:150].replace("\n", " ")
                     if len(formatted) > 150:
                         preview += "..."
-                    print(f"[awake] Outbox flushed: {preview}")
+                    log("outbox", f"Outbox flushed: {preview}")
                 else:
-                    print("[awake] Outbox send failed — keeping messages for retry")
+                    log("error", "Outbox send failed — keeping messages for retry")
             fcntl.flock(f, fcntl.LOCK_UN)
     except BlockingIOError:
         # Another process holds the lock — skip this cycle
         pass
     except Exception as e:
-        print(f"[awake] Outbox error: {e}")
+        log("error", f"Outbox error: {e}")
 
 
 def _format_outbox_message(raw_content: str) -> str:
@@ -796,7 +797,7 @@ def _format_outbox_message(raw_content: str) -> str:
         memory = load_memory_context(INSTANCE_DIR)
         return format_for_telegram(raw_content, soul, prefs, memory)
     except Exception as e:
-        print(f"[awake] Format error, sending raw: {e}")
+        log("error", f"Format error, sending raw: {e}")
         return raw_content
 
 
@@ -849,23 +850,23 @@ def main():
     # Compact old conversation history to avoid context bleed across sessions
     compacted = compact_telegram_history(TELEGRAM_HISTORY_FILE, TOPICS_FILE)
     if compacted:
-        print(f"[awake] Compacted {compacted} old messages at startup")
+        log("health", f"Compacted {compacted} old messages at startup")
     # Purge stale heartbeat so health_check doesn't report STALE on restart
     heartbeat_file = KOAN_ROOT / ".koan-heartbeat"
     heartbeat_file.unlink(missing_ok=True)
     write_heartbeat(str(KOAN_ROOT))
-    print(f"[awake] Token: ...{BOT_TOKEN[-8:]}")
-    print(f"[awake] Chat ID: {CHAT_ID}")
-    print(f"[awake] Soul: {len(SOUL)} chars loaded")
-    print(f"[awake] Summary: {len(SUMMARY)} chars loaded")
+    log("init", f"Token: ...{BOT_TOKEN[-8:]}")
+    log("init", f"Chat ID: {CHAT_ID}")
+    log("init", f"Soul: {len(SOUL)} chars loaded")
+    log("init", f"Summary: {len(SUMMARY)} chars loaded")
     registry = _get_registry()
     core_count = len(registry.list_by_scope("core"))
     extra_count = len(registry) - core_count
     skills_info = f"{core_count} core"
     if extra_count:
         skills_info += f" + {extra_count} extra"
-    print(f"[awake] Skills: {skills_info}")
-    print(f"[awake] Polling every {POLL_INTERVAL}s (chat mode: fast reply)")
+    log("init", f"Skills: {skills_info}")
+    log("init", f"Polling every {POLL_INTERVAL}s (chat mode: fast reply)")
     offset = None
 
     try:
@@ -877,14 +878,14 @@ def main():
                 text = msg.get("text", "")
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 if chat_id == CHAT_ID and text:
-                    print(f"[awake] Received: {text[:60]}")
+                    log("chat", f"Received: {text[:60]}")
                     handle_message(text)
 
             flush_outbox()
             write_heartbeat(str(KOAN_ROOT))
             time.sleep(POLL_INTERVAL)
     except KeyboardInterrupt:
-        print("\n[awake] Shutting down.")
+        log("init", "Shutting down.")
         sys.exit(0)
 
 

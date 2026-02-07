@@ -4,6 +4,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from app.bridge_log import log
+
 
 def handle(ctx):
     """Launch a sparring session via Claude."""
@@ -87,10 +89,10 @@ def handle(ctx):
             return response
         else:
             if result.returncode != 0:
-                print(f"[skill:sparring] Claude error (exit {result.returncode}): {result.stderr[:200]}")
+                log("error", f"Sparring Claude error (exit {result.returncode}): {result.stderr[:200]}")
             return "🤷 Nothing compelling to say right now. Come back later."
     except subprocess.TimeoutExpired:
         return "⏱ Timeout -- my brain needs more time. Try again."
     except Exception as e:
-        print(f"[skill:sparring] Error: {e}")
+        log("error", f"Sparring error: {e}")
         return "⚠️ Error during sparring. Try again."

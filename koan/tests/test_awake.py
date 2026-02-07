@@ -897,7 +897,7 @@ class TestMainLoop:
             main()
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
-        assert "Shutting down" in captured.out
+        assert "Shutting down" in captured.err
 
     @patch("app.awake.write_heartbeat")
     @patch("app.awake.flush_outbox")
@@ -916,7 +916,7 @@ class TestMainLoop:
             main()
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
-        assert "Shutting down" in captured.out
+        assert "Shutting down" in captured.err
 
 
 # ---------------------------------------------------------------------------
