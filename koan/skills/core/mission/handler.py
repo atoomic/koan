@@ -7,6 +7,7 @@ def handle(ctx):
     """Handle /mission <text> command."""
     from app.utils import (
         parse_project as _parse_project,
+        detect_project_from_text,
         insert_pending_mission,
         get_known_projects,
     )
@@ -17,21 +18,29 @@ def handle(ctx):
             "Usage: /mission <description>\n\n"
             "Examples:\n"
             "  /mission fix the login bug\n"
-            "  /mission [project:koan] add retry logic"
+            "  /mission [project:koan] add retry logic\n"
+            "  /mission koan add retry logic"
         )
 
-    # Check for project tag
+    # Check for explicit [project:name] tag first
     project, mission_text = _parse_project(raw_args)
+
+    # Auto-detect project from first word (e.g. "/mission koan do something")
+    if not project:
+        project, detected_text = detect_project_from_text(raw_args)
+        if project:
+            mission_text = detected_text
 
     if not project:
         known = get_known_projects()
         if len(known) > 1:
-            project_list = "\n".join(f"  - {name}" for name in known)
+            project_list = "\n".join(f"  - {name}" for name, _path in known)
+            first_name = known[0][0]
             return (
                 f"Which project for this mission?\n\n"
                 f"{project_list}\n\n"
                 f"Reply with the tag, e.g.:\n"
-                f"  /mission [project:{known[0]}] {raw_args[:80]}"
+                f"  /mission [project:{first_name}] {raw_args[:80]}"
             )
 
     # Clean up mission prefix
