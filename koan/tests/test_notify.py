@@ -5,10 +5,13 @@ from unittest.mock import patch, MagicMock
 import pytest
 import requests
 
-from app.notify import send_telegram, format_and_send
+from app.notify import send_telegram, format_and_send, reset_flood_state
 
 
 class TestSendTelegram:
+    def setup_method(self):
+        reset_flood_state()
+
     @patch("app.notify.requests.post")
     def test_short_message(self, mock_post):
         mock_post.return_value = MagicMock(json=lambda: {"ok": True})
@@ -206,3 +209,109 @@ class TestNotifyCLI:
              pytest.raises(SystemExit) as exc_info:
             run_module("app.notify", run_name="__main__")
         assert exc_info.value.code == 1
+
+
+class TestFloodProtection:
+    """Tests for duplicate message flood protection in send_telegram()."""
+
+    def setup_method(self):
+        reset_flood_state()
+
+    @patch("app.notify.time.time", return_value=1000.0)
+    @patch("app.notify.requests.post")
+    def test_first_message_passes(self, mock_post, mock_time):
+        """First message is always sent through."""
+        mock_post.return_value = MagicMock(json=lambda: {"ok": True})
+        assert send_telegram("hello") is True
+        assert mock_post.call_count == 1
+
+    @patch("app.notify.requests.post")
+    def test_second_identical_triggers_warning(self, mock_post):
+        """Second identical message within window triggers a flood warning."""
+        mock_post.return_value = MagicMock(json=lambda: {"ok": True})
+        with patch("app.notify.time.time", return_value=1000.0):
+            send_telegram("hello")
+        with patch("app.notify.time.time", return_value=1010.0):
+            result = send_telegram("hello")
+
+        assert result is True
+        # 1 for original message + 1 for flood warning
+        assert mock_post.call_count == 2
+        warning_text = mock_post.call_args_list[1][1]["json"]["text"]
+        assert "flood" in warning_text.lower()
+
+    @patch("app.notify.requests.post")
+    def test_third_duplicate_silently_suppressed(self, mock_post):
+        """Third and subsequent duplicates are silently suppressed (no API calls)."""
+        mock_post.return_value = MagicMock(json=lambda: {"ok": True})
+        with patch("app.notify.time.time", return_value=1000.0):
+            send_telegram("hello")
+        with patch("app.notify.time.time", return_value=1010.0):
+            send_telegram("hello")  # triggers warning
+        with patch("app.notify.time.time", return_value=1020.0):
+            result = send_telegram("hello")  # silently suppressed
+
+        assert result is True
+        # Only 2 API calls: original + warning (third is suppressed)
+        assert mock_post.call_count == 2
+
+    @patch("app.notify.requests.post")
+    def test_different_message_resets(self, mock_post):
+        """A different message resets flood state and goes through."""
+        mock_post.return_value = MagicMock(json=lambda: {"ok": True})
+        with patch("app.notify.time.time", return_value=1000.0):
+            send_telegram("hello")
+        with patch("app.notify.time.time", return_value=1010.0):
+            send_telegram("hello")  # triggers warning
+        with patch("app.notify.time.time", return_value=1020.0):
+            result = send_telegram("world")  # different message
+
+        assert result is True
+        # 3 API calls: original + warning + new message
+        assert mock_post.call_count == 3
+
+    @patch("app.notify.requests.post")
+    def test_window_expiry_allows_resend(self, mock_post):
+        """Same message after 5-minute window expires is allowed through."""
+        mock_post.return_value = MagicMock(json=lambda: {"ok": True})
+        with patch("app.notify.time.time", return_value=1000.0):
+            send_telegram("hello")
+        with patch("app.notify.time.time", return_value=1000.0 + 301):
+            result = send_telegram("hello")  # after window expires
+
+        assert result is True
+        # Both messages sent (no flood suppression)
+        assert mock_post.call_count == 2
+        # Both are the actual message, not a warning
+        for call in mock_post.call_args_list:
+            assert call[1]["json"]["text"] == "hello"
+
+    @patch("app.notify.requests.post")
+    def test_flood_with_chunked_message(self, mock_post):
+        """Flood protection works correctly with multi-chunk messages."""
+        mock_post.return_value = MagicMock(json=lambda: {"ok": True})
+        long_msg = "x" * 5000  # 2 chunks
+        with patch("app.notify.time.time", return_value=1000.0):
+            send_telegram(long_msg)
+        with patch("app.notify.time.time", return_value=1010.0):
+            result = send_telegram(long_msg)  # duplicate
+
+        assert result is True
+        # 2 chunks for first message + 1 for flood warning
+        assert mock_post.call_count == 3
+
+    @patch("app.notify.requests.post")
+    def test_api_failure_still_updates_state(self, mock_post):
+        """Failed send still tracks message for flood detection (prevents retry spam)."""
+        mock_post.return_value = MagicMock(
+            json=lambda: {"ok": False, "description": "error"},
+            text='{"ok":false}',
+        )
+        with patch("app.notify.time.time", return_value=1000.0):
+            send_telegram("hello")  # fails
+        with patch("app.notify.time.time", return_value=1010.0):
+            result = send_telegram("hello")  # still detected as duplicate
+
+        assert result is True
+        # 1 for failed original + 1 for flood warning
+        assert mock_post.call_count == 2

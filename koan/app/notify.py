@@ -16,15 +16,34 @@ Usage from Python:
 import os
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import requests
 
 from app.utils import load_dotenv
 
+# Flood protection state (guarded by _flood_lock)
+_flood_lock = threading.Lock()
+_flood_last_message = ""
+_flood_last_sent_at = 0.0
+_flood_warning_sent = False
 
-def send_telegram(text: str) -> bool:
-    """Send a message to the configured Telegram chat. Returns True on success."""
+FLOOD_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def reset_flood_state():
+    """Reset flood protection state. Call in test setup for isolation."""
+    global _flood_last_message, _flood_last_sent_at, _flood_warning_sent
+    with _flood_lock:
+        _flood_last_message = ""
+        _flood_last_sent_at = 0.0
+        _flood_warning_sent = False
+
+
+def _send_raw(text: str) -> bool:
+    """Send a message to Telegram (no flood check). Returns True on success."""
     load_dotenv()
 
     BOT_TOKEN = os.environ.get("KOAN_TELEGRAM_TOKEN", "")
@@ -51,6 +70,40 @@ def send_telegram(text: str) -> bool:
             print(f"[notify] Send error: {e}", file=sys.stderr)
             ok = False
     return ok
+
+
+def send_telegram(text: str) -> bool:
+    """Send a message to Telegram with flood protection.
+
+    Detects consecutive duplicate messages within a 5-minute window.
+    First duplicate triggers a warning, subsequent duplicates are silently suppressed.
+    Returns True on success (suppression counts as success).
+    """
+    global _flood_last_message, _flood_last_sent_at, _flood_warning_sent
+
+    # Empty messages skip flood tracking entirely
+    if not text:
+        return _send_raw(text)
+
+    now = time.time()
+
+    with _flood_lock:
+        if text == _flood_last_message and (now - _flood_last_sent_at) < FLOOD_WINDOW_SECONDS:
+            if not _flood_warning_sent:
+                _flood_warning_sent = True
+                # Send warning outside lock would be ideal, but keeping it simple:
+                # _send_raw is I/O but the lock ensures correct flood state transitions.
+                _send_raw("[flood] Duplicate message detected — suppressing repeats for 5 min.")
+            else:
+                print("[notify] Flood suppression: duplicate message dropped.", file=sys.stderr)
+            return True
+
+        # New or different message — reset state and send
+        _flood_last_message = text
+        _flood_last_sent_at = now
+        _flood_warning_sent = False
+
+    return _send_raw(text)
 
 
 def format_and_send(raw_message: str, instance_dir: str = None,
