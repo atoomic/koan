@@ -420,6 +420,27 @@ def parse_project(text: str) -> Tuple[Optional[str], str]:
     return None, text
 
 
+def detect_project_from_text(text: str) -> Tuple[Optional[str], str]:
+    """Detect project name from the first word of text.
+
+    If the first word matches a known project name (case-insensitive),
+    returns (project_name, remaining_text). Otherwise returns (None, text).
+    """
+    parts = text.strip().split(None, 1)
+    if not parts:
+        return None, text
+
+    first_word = parts[0].lower()
+    known = get_known_projects()
+    project_names = {name.lower(): name for name, _path in known}
+
+    if first_word in project_names:
+        remaining = parts[1].strip() if len(parts) > 1 else ""
+        return project_names[first_word], remaining
+
+    return None, text
+
+
 def atomic_write(path: Path, content: str):
     """Write content to a file atomically using write-to-temp + rename.
 

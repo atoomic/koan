@@ -31,6 +31,7 @@ from app.skills import Skill, SkillRegistry, SkillContext, execute_skill, build_
 from app.utils import (
     load_dotenv,
     parse_project as _parse_project,
+    detect_project_from_text,
     insert_pending_mission,
     get_known_projects,
     save_telegram_message,
@@ -437,6 +438,12 @@ def handle_mission(text: str):
     """Append to missions.md with optional project tag."""
     # Parse project tag if present
     project, mission_text = parse_project(text)
+
+    # Auto-detect project from first word (e.g. "koan do something")
+    if not project:
+        project, detected_text = detect_project_from_text(text)
+        if project:
+            mission_text = detected_text
 
     # Clean up the mission prefix
     if mission_text.lower().startswith("mission:"):

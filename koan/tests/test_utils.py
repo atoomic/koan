@@ -2,6 +2,7 @@
 import os
 import threading
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -83,6 +84,56 @@ class TestParseProject:
         project, text = parse_project("Fix [project:koan] bug")
         assert project == "koan"
         assert text == "Fix bug"
+
+
+class TestDetectProjectFromText:
+    def test_detects_first_word_as_project(self):
+        from app.utils import detect_project_from_text
+        with patch("app.utils.get_known_projects", return_value=[("koan", "/path/to/koan"), ("web", "/path/to/web")]):
+            project, text = detect_project_from_text("koan fix the bug")
+        assert project == "koan"
+        assert text == "fix the bug"
+
+    def test_detects_case_insensitive(self):
+        from app.utils import detect_project_from_text
+        with patch("app.utils.get_known_projects", return_value=[("Koan", "/path/to/koan")]):
+            project, text = detect_project_from_text("KOAN fix the bug")
+        assert project == "Koan"
+        assert text == "fix the bug"
+
+    def test_no_match_returns_none(self):
+        from app.utils import detect_project_from_text
+        with patch("app.utils.get_known_projects", return_value=[("koan", "/path/to/koan")]):
+            project, text = detect_project_from_text("fix the bug")
+        assert project is None
+        assert text == "fix the bug"
+
+    def test_empty_text(self):
+        from app.utils import detect_project_from_text
+        with patch("app.utils.get_known_projects", return_value=[("koan", "/path/to/koan")]):
+            project, text = detect_project_from_text("")
+        assert project is None
+
+    def test_project_name_only(self):
+        from app.utils import detect_project_from_text
+        with patch("app.utils.get_known_projects", return_value=[("koan", "/path/to/koan")]):
+            project, text = detect_project_from_text("koan")
+        assert project == "koan"
+        assert text == ""
+
+    def test_no_known_projects(self):
+        from app.utils import detect_project_from_text
+        with patch("app.utils.get_known_projects", return_value=[]):
+            project, text = detect_project_from_text("koan fix bug")
+        assert project is None
+        assert text == "koan fix bug"
+
+    def test_second_project_detected(self):
+        from app.utils import detect_project_from_text
+        with patch("app.utils.get_known_projects", return_value=[("koan", "/p1"), ("web", "/p2")]):
+            project, text = detect_project_from_text("web deploy changes")
+        assert project == "web"
+        assert text == "deploy changes"
 
 
 class TestInsertPendingMission:
