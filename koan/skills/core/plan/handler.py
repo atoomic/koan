@@ -1,0 +1,379 @@
+"""Koan plan skill -- deep-think an idea, create or update a GitHub issue."""
+
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+
+
+# GitHub issue URL pattern
+_ISSUE_URL_RE = re.compile(
+    r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/(?P<number>\d+)"
+)
+
+
+def handle(ctx):
+    """Handle /plan command.
+
+    Modes:
+        /plan                              -- usage help
+        /plan <idea>                       -- plan for default project
+        /plan <project> <idea>             -- plan for a specific project
+        /plan <github-issue-url>           -- iterate on existing issue
+    """
+    args = ctx.args.strip()
+    send = ctx.send_message
+
+    if not args:
+        return (
+            "Usage:\n"
+            "  /plan <idea> -- plan for default project\n"
+            "  /plan <project> <idea> -- plan for a specific project\n"
+            "  /plan <github-issue-url> -- iterate on an existing issue\n\n"
+            "Creates a structured plan with step-by-step implementation, "
+            "corner cases, and open questions. Posts to GitHub as an issue."
+        )
+
+    # Mode 1: existing GitHub issue URL
+    issue_match = _ISSUE_URL_RE.search(args)
+    if issue_match:
+        return _handle_existing_issue(ctx, issue_match)
+
+    # Mode 2: detect project name prefix
+    project, idea = _parse_project_arg(args)
+
+    if not idea:
+        return "Please provide an idea to plan. Ex: /plan Add dark mode to the dashboard"
+
+    return _handle_new_plan(ctx, project, idea)
+
+
+def _parse_project_arg(args):
+    """Parse optional project prefix from args.
+
+    Supports:
+        /plan koan Fix the bug        -> ("koan", "Fix the bug")
+        /plan [project:koan] Fix bug  -> ("koan", "Fix bug")
+        /plan Fix the bug             -> (None, "Fix the bug")
+    """
+    from app.utils import parse_project, get_known_projects
+
+    # Try [project:X] tag first
+    project, cleaned = parse_project(args)
+    if project:
+        return project, cleaned
+
+    # Try first word as project name
+    parts = args.split(None, 1)
+    if len(parts) < 2:
+        return None, args
+
+    candidate = parts[0].lower()
+    known = get_known_projects()
+    for name, _ in known:
+        if name.lower() == candidate:
+            return name, parts[1]
+
+    return None, args
+
+
+def _resolve_project_path(project_name):
+    """Resolve project name to its local path."""
+    from app.utils import get_known_projects
+
+    projects = get_known_projects()
+
+    if project_name:
+        for name, path in projects:
+            if name.lower() == project_name.lower():
+                return path
+        return None
+
+    # Default to first project
+    if projects:
+        return projects[0][1]
+
+    return os.environ.get("KOAN_PROJECT_PATH", "")
+
+
+def _get_repo_info(project_path):
+    """Get GitHub owner/repo from a local git repo."""
+    try:
+        result = subprocess.run(
+            ["gh", "repo", "view", "--json", "owner,name"],
+            capture_output=True, text=True, timeout=15,
+            cwd=project_path,
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            owner = data.get("owner", {}).get("login", "")
+            repo = data.get("name", "")
+            if owner and repo:
+                return owner, repo
+    except Exception:
+        pass
+    return None, None
+
+
+def _gh(cmd, cwd=None, timeout=30):
+    """Run a gh CLI command and return stdout."""
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gh failed: {' '.join(cmd[:4])}... — {result.stderr[:300]}"
+        )
+    return result.stdout.strip()
+
+
+def _fetch_issue_context(owner, repo, issue_number):
+    """Fetch issue title, body and comments via gh CLI.
+
+    Returns:
+        Tuple of (title, body, comments_raw).
+    """
+    # Get issue title and body
+    issue_json = _gh([
+        "gh", "api", f"repos/{owner}/{repo}/issues/{issue_number}",
+        "--jq", '{"title": .title, "body": .body}',
+    ])
+    try:
+        data = json.loads(issue_json)
+        title = data.get("title", "")
+        body = data.get("body", "")
+    except (json.JSONDecodeError, TypeError):
+        title = ""
+        body = issue_json
+
+    # Get all comments
+    comments_raw = _gh([
+        "gh", "api", f"repos/{owner}/{repo}/issues/{issue_number}/comments",
+        "--jq", '.[].body',
+    ])
+
+    return title, body, comments_raw
+
+
+def _generate_plan(project_path, idea, context=""):
+    """Run Claude to generate a structured plan.
+
+    Args:
+        project_path: Path to project for codebase context.
+        idea: The idea to plan.
+        context: Optional existing issue/comments context.
+    """
+    from app.prompts import load_prompt
+
+    prompt = load_prompt("plan", IDEA=idea, CONTEXT=context)
+
+    from app.utils import get_model_config, build_claude_flags
+
+    models = get_model_config()
+    flags = build_claude_flags(model=models.get("chat", ""), fallback=models.get("fallback", ""))
+
+    result = subprocess.run(
+        ["claude", "-p", prompt,
+         "--allowedTools", "Read,Glob,Grep,WebFetch",
+         "--max-turns", "3"] + flags,
+        capture_output=True, text=True, timeout=300,
+        cwd=project_path,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Claude plan generation failed: {result.stderr[:300]}")
+
+    return result.stdout.strip()
+
+
+def _create_issue(project_path, title, body):
+    """Create a GitHub issue via gh CLI. Returns the issue URL."""
+    result = subprocess.run(
+        ["gh", "issue", "create", "--title", title, "--body", body],
+        capture_output=True, text=True, timeout=30,
+        cwd=project_path,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"gh issue create failed: {result.stderr[:300]}")
+    return result.stdout.strip()
+
+
+def _comment_on_issue(owner, repo, issue_number, body):
+    """Post a comment on an existing GitHub issue."""
+    # Use --input - to pass body via stdin (multiline-safe)
+    result = subprocess.run(
+        [
+            "gh", "api", f"repos/{owner}/{repo}/issues/{issue_number}/comments",
+            "-F", "body=@-",
+        ],
+        input=body, capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gh comment failed: {result.stderr[:300]}"
+        )
+
+
+def _extract_title(plan_text):
+    """Extract a short title from the plan for the issue title."""
+    lines = plan_text.strip().splitlines()
+    for line in lines:
+        line = line.strip()
+        # Skip empty lines and markdown headers
+        if not line:
+            continue
+        if line.startswith("#"):
+            # Use the first heading as title (strip # prefix)
+            title = re.sub(r'^#+\s*', '', line).strip()
+            if title:
+                return title[:120]
+        # Use first non-empty line
+        clean = re.sub(r'^[#*>\-]+\s*', '', line).strip()
+        if clean:
+            return clean[:120]
+    return "Implementation Plan"
+
+
+def _handle_new_plan(ctx, project_name, idea):
+    """Generate a plan for a new idea and create a GitHub issue."""
+    send = ctx.send_message
+
+    project_path = _resolve_project_path(project_name)
+    if not project_path:
+        from app.utils import get_known_projects
+        known = ", ".join(n for n, _ in get_known_projects()) or "none"
+        return f"Project '{project_name}' not found. Known: {known}"
+
+    project_label = project_name or Path(project_path).name
+
+    if send:
+        send(f"\U0001f9e0 Planning: {idea[:100]}{'...' if len(idea) > 100 else ''} (project: {project_label})")
+
+    try:
+        plan = _generate_plan(project_path, idea)
+    except Exception as e:
+        return f"Plan generation failed: {str(e)[:300]}"
+
+    if not plan:
+        return "Claude returned an empty plan. Try rephrasing your idea."
+
+    # Create GitHub issue
+    owner, repo = _get_repo_info(project_path)
+    if not owner or not repo:
+        # No GitHub repo — return the plan as a message
+        if send:
+            send(f"Plan (no GitHub repo found, showing inline):\n\n{plan[:3500]}")
+        return None
+
+    title = _extract_title(plan)
+    issue_body = f"## Plan: {idea}\n\n{plan}\n\n---\n*Generated by Koan /plan*"
+
+    try:
+        issue_url = _create_issue(project_path, title, issue_body)
+    except Exception as e:
+        # Fallback: send plan inline if issue creation fails
+        if send:
+            send(f"\u26a0\ufe0f Plan ready but issue creation failed ({e}):\n\n{plan[:3000]}")
+        return None
+
+    if send:
+        send(f"\u2705 Plan created: {issue_url}")
+    return None
+
+
+def _handle_existing_issue(ctx, match):
+    """Read an existing issue + comments, generate updated plan, post comment."""
+    send = ctx.send_message
+    owner = match.group("owner")
+    repo = match.group("repo")
+    issue_number = match.group("number")
+
+    if send:
+        send(f"\U0001f4d6 Reading issue #{issue_number} ({owner}/{repo})...")
+
+    # Resolve project path for codebase context
+    project_path = _resolve_project_path_for_repo(repo)
+
+    try:
+        title, body, comments = _fetch_issue_context(owner, repo, issue_number)
+    except Exception as e:
+        return f"Failed to fetch issue: {str(e)[:300]}"
+
+    # Build context from issue body + comments
+    context_parts = [f"## Original Issue #{issue_number}: {title}\n\n{body}"]
+    if comments:
+        context_parts.append(f"\n\n## Comments\n\n{comments}")
+
+    context = "\n".join(context_parts)
+
+    # Extract the core idea from the issue body
+    idea = _extract_idea_from_issue(body)
+
+    try:
+        plan = _generate_plan(
+            project_path or str(Path.cwd()),
+            idea,
+            context=context,
+        )
+    except Exception as e:
+        return f"Plan generation failed: {str(e)[:300]}"
+
+    if not plan:
+        return "Claude returned an empty plan. The issue may need more context."
+
+    # Post as a comment on the issue
+    comment_body = f"## Updated Plan\n\n{plan}\n\n---\n*Generated by Koan /plan — iteration on existing issue*"
+
+    try:
+        _comment_on_issue(owner, repo, issue_number, comment_body)
+    except Exception as e:
+        # Fallback: send inline
+        if send:
+            send(f"Plan ready but comment failed ({e}):\n\n{plan[:3000]}")
+        return None
+
+    issue_label = f"#{issue_number}"
+    if title:
+        issue_label = f"#{issue_number} ({title[:60]})"
+    if send:
+        send(f"\u2705 Plan posted as comment on {issue_label}: https://github.com/{owner}/{repo}/issues/{issue_number}")
+    return None
+
+
+def _resolve_project_path_for_repo(repo_name):
+    """Find local project path matching a repository name."""
+    from app.utils import get_known_projects
+
+    projects = get_known_projects()
+    for name, path in projects:
+        if name.lower() == repo_name.lower():
+            return path
+    for name, path in projects:
+        if Path(path).name.lower() == repo_name.lower():
+            return path
+    if projects:
+        return projects[0][1]
+    return os.environ.get("KOAN_PROJECT_PATH", "")
+
+
+def _extract_idea_from_issue(body):
+    """Extract the core idea from an issue body for re-planning."""
+    if not body:
+        return "Review and update this plan"
+    # Use the first non-empty paragraph as the idea
+    lines = body.strip().splitlines()
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Skip markdown headers/metadata
+        if line.startswith("---") or line.startswith("*Generated by"):
+            continue
+        # Strip markdown header prefix
+        clean = re.sub(r'^#+\s*', '', line).strip()
+        # Skip "Plan:" prefix if present
+        clean = re.sub(r'^Plan:\s*', '', clean).strip()
+        if clean and len(clean) > 10:
+            return clean[:500]
+    return "Review and refine this plan based on the discussion"
