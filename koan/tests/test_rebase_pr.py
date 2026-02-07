@@ -7,11 +7,9 @@ from unittest.mock import patch, MagicMock, call
 
 import pytest
 
+from app.claude_step import _rebase_onto_target, _run_git, _truncate
 from app.pr_review import parse_pr_url
 from app.rebase_pr import (
-    _rebase_onto_target,
-    _run_git,
-    _truncate,
     fetch_pr_context,
     build_comment_summary,
     run_rebase,
@@ -95,20 +93,20 @@ class TestRunGit:
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "  main  "
-        with patch("app.rebase_pr.subprocess.run", return_value=mock_result):
+        with patch("app.claude_step.subprocess.run", return_value=mock_result):
             assert _run_git(["git", "status"]) == "main"
 
     def test_raises_on_failure(self):
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stderr = "error"
-        with patch("app.rebase_pr.subprocess.run", return_value=mock_result):
+        with patch("app.claude_step.subprocess.run", return_value=mock_result):
             with pytest.raises(RuntimeError, match="git failed"):
                 _run_git(["git", "checkout", "foo"])
 
     def test_passes_cwd(self):
         mock_result = MagicMock(returncode=0, stdout="ok")
-        with patch("app.rebase_pr.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("app.claude_step.subprocess.run", return_value=mock_result) as mock_run:
             _run_git(["git", "status"], cwd="/project")
             mock_run.assert_called_once()
             assert mock_run.call_args.kwargs.get("cwd") == "/project"
@@ -121,11 +119,11 @@ class TestRunGit:
 class TestGetCurrentBranch:
     def test_returns_branch_name(self):
         mock_result = MagicMock(returncode=0, stdout="koan/my-feature\n")
-        with patch("app.rebase_pr.subprocess.run", return_value=mock_result):
+        with patch("app.claude_step.subprocess.run", return_value=mock_result):
             assert _get_current_branch("/project") == "koan/my-feature"
 
     def test_fallback_on_error(self):
-        with patch("app.rebase_pr.subprocess.run", side_effect=Exception("detached HEAD")):
+        with patch("app.claude_step.subprocess.run", side_effect=Exception("detached HEAD")):
             assert _get_current_branch("/project") == "main"
 
 
@@ -141,7 +139,7 @@ class TestCheckoutPrBranch:
             calls.append(cmd)
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("app.rebase_pr.subprocess.run", side_effect=mock_run):
+        with patch("app.claude_step.subprocess.run", side_effect=mock_run):
             _checkout_pr_branch("koan/fix", "/project")
 
         cmds = [c[:3] for c in calls]
@@ -160,7 +158,7 @@ class TestCheckoutPrBranch:
                 raise RuntimeError("checkout failed")
             return result
 
-        with patch("app.rebase_pr.subprocess.run", side_effect=mock_run):
+        with patch("app.claude_step.subprocess.run", side_effect=mock_run):
             _checkout_pr_branch("koan/fix", "/project")
 
 
@@ -171,7 +169,7 @@ class TestCheckoutPrBranch:
 class TestRebaseOntoTarget:
     def test_successful_rebase_on_origin(self):
         mock_result = MagicMock(returncode=0, stdout="", stderr="")
-        with patch("app.rebase_pr.subprocess.run", return_value=mock_result):
+        with patch("app.claude_step.subprocess.run", return_value=mock_result):
             result = _rebase_onto_target("main", "/project")
             assert result == "origin"
 
@@ -182,7 +180,7 @@ class TestRebaseOntoTarget:
                 raise RuntimeError("fetch failed")
             return result
 
-        with patch("app.rebase_pr.subprocess.run", side_effect=mock_run):
+        with patch("app.claude_step.subprocess.run", side_effect=mock_run):
             result = _rebase_onto_target("main", "/project")
             assert result == "upstream"
 
@@ -192,7 +190,7 @@ class TestRebaseOntoTarget:
                 raise RuntimeError("conflict")
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("app.rebase_pr.subprocess.run", side_effect=mock_run):
+        with patch("app.claude_step.subprocess.run", side_effect=mock_run):
             result = _rebase_onto_target("main", "/project")
             assert result is None
 
@@ -228,11 +226,11 @@ class TestIsPermissionError:
 class TestSafeCheckout:
     def test_succeeds_silently(self):
         mock_result = MagicMock(returncode=0, stdout="", stderr="")
-        with patch("app.rebase_pr.subprocess.run", return_value=mock_result):
+        with patch("app.claude_step.subprocess.run", return_value=mock_result):
             _safe_checkout("main", "/project")
 
     def test_fails_silently(self):
-        with patch("app.rebase_pr.subprocess.run", side_effect=RuntimeError("oops")):
+        with patch("app.claude_step.subprocess.run", side_effect=RuntimeError("oops")):
             _safe_checkout("main", "/project")  # Should not raise
 
 
@@ -361,7 +359,7 @@ class TestFetchPrContext:
 class TestPushWithFallback:
     def test_successful_push(self):
         mock_result = MagicMock(returncode=0, stdout="", stderr="")
-        with patch("app.rebase_pr.subprocess.run", return_value=mock_result):
+        with patch("app.claude_step.subprocess.run", return_value=mock_result):
             result = _push_with_fallback(
                 "koan/fix", "main", "sukria/koan", "42",
                 {"title": "Fix", "url": "https://..."}, "/project"
@@ -378,7 +376,7 @@ class TestPushWithFallback:
                 result.stdout = "https://github.com/sukria/koan/pull/100\n"
             return result
 
-        with patch("app.rebase_pr.subprocess.run", side_effect=mock_run), \
+        with patch("app.claude_step.subprocess.run", side_effect=mock_run), \
              patch("app.github.subprocess.run", side_effect=mock_run):
             result = _push_with_fallback(
                 "koan/fix", "main", "sukria/koan", "42",
@@ -394,7 +392,7 @@ class TestPushWithFallback:
                 raise RuntimeError("git failed: git push — fatal: remote ref does not exist")
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("app.rebase_pr.subprocess.run", side_effect=mock_run):
+        with patch("app.claude_step.subprocess.run", side_effect=mock_run):
             result = _push_with_fallback(
                 "koan/fix", "main", "sukria/koan", "42",
                 {"title": "Fix", "url": ""}, "/project"
@@ -583,7 +581,7 @@ class TestPushCrossLink:
                 result.stdout = "https://github.com/sukria/koan/pull/100\n"
             return result
 
-        with patch("app.rebase_pr.subprocess.run", side_effect=mock_run), \
+        with patch("app.claude_step.subprocess.run", side_effect=mock_run), \
              patch("app.github.subprocess.run", side_effect=mock_run):
             result = _push_with_fallback(
                 "koan/fix", "main", "sukria/koan", "42",

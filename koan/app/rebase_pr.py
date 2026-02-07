@@ -19,46 +19,8 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from app.claude_step import _rebase_onto_target, _run_git, _truncate
 from app.github import run_gh
-
-
-def _run_git(cmd: list, cwd: str = None, timeout: int = 60) -> str:
-    """Run a git command, raise on failure."""
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"git failed: {' '.join(cmd)} — {result.stderr[:200]}")
-    return result.stdout.strip()
-
-
-def _rebase_onto_target(base: str, project_path: str) -> Optional[str]:
-    """Rebase onto target branch, trying origin then upstream.
-
-    Returns:
-        Remote name used (e.g. "origin" or "upstream") on success, None on failure.
-    """
-    for remote in ("origin", "upstream"):
-        try:
-            _run_git(["git", "fetch", remote, base], cwd=project_path)
-            _run_git(
-                ["git", "rebase", "--autostash", f"{remote}/{base}"],
-                cwd=project_path,
-            )
-            return remote
-        except Exception:
-            subprocess.run(
-                ["git", "rebase", "--abort"],
-                capture_output=True, cwd=project_path,
-            )
-    return None
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    """Truncate text with indicator."""
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + "\n...(truncated)"
 
 
 def fetch_pr_context(owner: str, repo: str, pr_number: str) -> dict:

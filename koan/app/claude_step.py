@@ -1,12 +1,12 @@
 """
-Koan -- Shared helpers for invoking Claude Code CLI.
+Koan -- Shared helpers for the CI/CD pipeline.
 
-Extracted from pr_review.py for reuse by rebase_pr.py and other modules
-that need to run Claude as a subprocess and commit the results.
+Git operations, Claude Code CLI invocation, and text utilities
+used by pr_review.py, rebase_pr.py, and other pipeline modules.
 """
 
 import subprocess
-from typing import List
+from typing import List, Optional
 
 from app.utils import get_model_config, build_claude_flags
 
@@ -19,6 +19,35 @@ def _run_git(cmd: list, cwd: str = None, timeout: int = 60) -> str:
     if result.returncode != 0:
         raise RuntimeError(f"git failed: {' '.join(cmd)} — {result.stderr[:200]}")
     return result.stdout.strip()
+
+
+def _rebase_onto_target(base: str, project_path: str) -> Optional[str]:
+    """Rebase onto target branch, trying origin then upstream.
+
+    Returns:
+        Remote name used (e.g. "origin" or "upstream") on success, None on failure.
+    """
+    for remote in ("origin", "upstream"):
+        try:
+            _run_git(["git", "fetch", remote, base], cwd=project_path)
+            _run_git(
+                ["git", "rebase", "--autostash", f"{remote}/{base}"],
+                cwd=project_path,
+            )
+            return remote
+        except Exception:
+            subprocess.run(
+                ["git", "rebase", "--abort"],
+                capture_output=True, cwd=project_path,
+            )
+    return None
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    """Truncate text with indicator."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...(truncated)"
 
 
 def run_claude(cmd: list, cwd: str, timeout: int = 600) -> dict:
