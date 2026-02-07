@@ -122,6 +122,7 @@ export PYTHONPATH="$KOAN_ROOT/koan"
 # Load config from config.yaml (source of truth for behavioral settings)
 MAX_RUNS=$("$PYTHON" -c "from app.utils import get_max_runs; print(get_max_runs())" 2>/dev/null || echo "20")
 INTERVAL=$("$PYTHON" -c "from app.utils import get_interval_seconds; print(get_interval_seconds())" 2>/dev/null || echo "300")
+BRANCH_PREFIX=$("$PYTHON" -c "from app.utils import get_branch_prefix; print(get_branch_prefix())" 2>/dev/null || echo "koan/")
 
 # Set git identity for koan commits (overrides local git config)
 if [ -n "${KOAN_EMAIL:-}" ]; then
@@ -682,10 +683,10 @@ Koan paused after $count runs. $RESUME_MSG or use /resume to restart manually."
       "$PYTHON" "$POST_MISSION_REFLECTION" "$INSTANCE" "Autonomous $AUTONOMOUS_MODE on $PROJECT_NAME" "$MISSION_DURATION_MINUTES" 2>/dev/null || true
     fi
 
-    # Auto-merge logic (if on koan/* branch)
+    # Auto-merge logic (if on agent branch matching configured prefix)
     cd "$PROJECT_PATH"
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [[ "$CURRENT_BRANCH" == koan/* ]]; then
+    if [[ "$CURRENT_BRANCH" == ${BRANCH_PREFIX}* ]]; then
       log git "Checking auto-merge for $CURRENT_BRANCH..."
       GIT_AUTO_MERGE="$APP_DIR/git_auto_merge.py"
       if "$PYTHON" "$GIT_AUTO_MERGE" "$INSTANCE" "$PROJECT_NAME" "$PROJECT_PATH" "$CURRENT_BRANCH" 2>&1; then

@@ -28,6 +28,14 @@ fast_reply: false
 # 0 = never contemplative, 10 = ~1 in 10 runs, 20 = ~1 in 5 runs
 contemplative_chance: 10
 
+# Branch prefix for agent-created branches
+# All branches created by this agent instance will use this prefix.
+# Useful when multiple bots work on the same repo — each bot gets its own prefix
+# so branches don't collide and authorship is clear.
+# Default: "koan" (branches will be named koan/<mission-name>)
+# Example: "koan-alice" → branches named koan-alice/<mission-name>
+# branch_prefix: "koan"
+
 # Telegram
 # NOTE: Prefer setting these in .env (KOAN_TELEGRAM_TOKEN, KOAN_TELEGRAM_CHAT_ID)
 # These config values are only used if the env vars are not set.
@@ -66,13 +74,15 @@ models:
   review_mode: ""          # Override model for REVIEW mode (cheaper audits)
 
 # Git auto-merge configuration
-# Automatically merges koan/* branches based on rules
+# Automatically merges agent branches based on rules.
+# The default pattern "koan/*" matches the default branch_prefix.
+# If you changed branch_prefix above, update the pattern accordingly.
 git_auto_merge:
   enabled: false                    # Global on/off switch
   base_branch: "main"               # Default target branch for merges
   strategy: "squash"                # merge | squash | rebase
   rules:
-    - pattern: "koan/*"             # Branch name pattern (glob-style)
+    - pattern: "koan/*"             # Branch name pattern (glob-style, match your branch_prefix)
       auto_merge: true              # Enable auto-merge for matching branches
       delete_after_merge: true      # Clean up branch after successful merge
 
