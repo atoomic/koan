@@ -28,6 +28,21 @@ _SECTION_MAP = {
 DEFAULT_SKELETON = "# Missions\n\n## Pending\n\n## In Progress\n\n## Done\n"
 
 
+def extract_now_flag(text: str) -> Tuple[bool, str]:
+    """Check for --now flag in the first 5 words of mission text.
+
+    Returns (is_urgent, cleaned_text) where cleaned_text has --now removed.
+    """
+    words = text.split()
+    first_five = words[:5]
+    if "--now" in first_five:
+        words_copy = list(words)
+        # Remove the first occurrence of --now from the full word list
+        words_copy.remove("--now")
+        return True, " ".join(words_copy)
+    return False, text
+
+
 def classify_section(header_text: str) -> Optional[str]:
     """Normalize a ## header into a canonical section key.
 
@@ -86,27 +101,58 @@ def parse_sections(content: str) -> Dict[str, List[str]]:
     return sections
 
 
-def insert_mission(content: str, entry: str) -> str:
+def insert_mission(content: str, entry: str, *, urgent: bool = False) -> str:
     """Insert a mission entry into the pending section of missions.md content.
+
+    By default, inserts at the bottom of the pending section (FIFO queue).
+    When urgent=True, inserts at the top (next to be picked up).
 
     Returns the updated content string.
     """
     if not content:
         content = DEFAULT_SKELETON
 
-    marker = None
-    for candidate in ("## Pending", "## En attente"):
-        if candidate in content:
-            marker = candidate
-            break
+    if urgent:
+        # Insert at top of pending section (right after the header)
+        marker = None
+        for candidate in ("## Pending", "## En attente"):
+            if candidate in content:
+                marker = candidate
+                break
 
-    if marker:
-        idx = content.index(marker) + len(marker)
-        while idx < len(content) and content[idx] == "\n":
-            idx += 1
-        content = content[:idx] + f"\n{entry}\n" + content[idx:]
+        if marker:
+            idx = content.index(marker) + len(marker)
+            while idx < len(content) and content[idx] == "\n":
+                idx += 1
+            content = content[:idx] + f"\n{entry}\n" + content[idx:]
+        else:
+            content += f"\n## Pending\n\n{entry}\n"
     else:
-        content += f"\n## Pending\n\n{entry}\n"
+        # Insert at bottom of pending section (before next ## header)
+        lines = content.splitlines()
+        in_pending = False
+        last_content_line = None
+        pending_header_line = None
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.lower() in ("## pending", "## en attente"):
+                in_pending = True
+                pending_header_line = i
+                continue
+            if in_pending and stripped.startswith("## "):
+                break  # Next section
+            if in_pending and (stripped.startswith("- ") or
+                               (stripped and not stripped.startswith("#") and
+                                last_content_line is not None)):
+                last_content_line = i
+
+        if pending_header_line is not None:
+            insert_after = last_content_line if last_content_line is not None else pending_header_line
+            lines.insert(insert_after + 1, entry)
+            content = "\n".join(lines)
+        else:
+            content += f"\n## Pending\n\n{entry}\n"
 
     return normalize_content(content)
 
@@ -382,8 +428,8 @@ def promote_idea(content: str, index: int) -> Tuple[str, Optional[str]]:
     if deleted is None:
         return content, None
 
-    # Insert the deleted idea into the pending section
-    updated = insert_mission(updated, deleted)
+    # Insert the deleted idea into the pending section (at the top — promoted ideas are urgent)
+    updated = insert_mission(updated, deleted, urgent=True)
     return updated, deleted
 
 

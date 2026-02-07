@@ -8,6 +8,7 @@ from app.missions import (
     count_pending,
     extract_next_pending,
     extract_project_tag,
+    extract_now_flag,
     group_by_project,
     find_section_boundaries,
     normalize_content,
@@ -639,3 +640,144 @@ class TestReorderMission:
         # clean_mission_display should convert [project:koan] to [koan]
         assert "[koan]" in moved
         assert "[project:koan]" not in moved
+
+
+# ---------------------------------------------------------------------------
+# extract_now_flag
+# ---------------------------------------------------------------------------
+
+class TestExtractNowFlag:
+    def test_no_flag(self):
+        urgent, text = extract_now_flag("fix the login bug")
+        assert urgent is False
+        assert text == "fix the login bug"
+
+    def test_flag_at_start(self):
+        urgent, text = extract_now_flag("--now fix the login bug")
+        assert urgent is True
+        assert text == "fix the login bug"
+
+    def test_flag_in_first_five_words(self):
+        urgent, text = extract_now_flag("fix the --now login bug")
+        assert urgent is True
+        assert text == "fix the login bug"
+
+    def test_flag_at_position_five(self):
+        urgent, text = extract_now_flag("one two three four --now rest")
+        assert urgent is True
+        assert text == "one two three four rest"
+
+    def test_flag_beyond_first_five_words(self):
+        urgent, text = extract_now_flag("one two three four five --now six")
+        assert urgent is False
+        assert text == "one two three four five --now six"
+
+    def test_flag_with_project_tag(self):
+        urgent, text = extract_now_flag("--now [project:koan] fix auth")
+        assert urgent is True
+        assert text == "[project:koan] fix auth"
+
+    def test_empty_text(self):
+        urgent, text = extract_now_flag("")
+        assert urgent is False
+        assert text == ""
+
+    def test_only_flag(self):
+        urgent, text = extract_now_flag("--now")
+        assert urgent is True
+        assert text == ""
+
+    def test_flag_case_sensitive(self):
+        urgent, text = extract_now_flag("--NOW fix bug")
+        assert urgent is False
+        assert text == "--NOW fix bug"
+
+    def test_flag_not_partial_match(self):
+        urgent, text = extract_now_flag("--nowhere fix bug")
+        assert urgent is False
+        assert text == "--nowhere fix bug"
+
+
+# ---------------------------------------------------------------------------
+# insert_mission — queue ordering
+# ---------------------------------------------------------------------------
+
+class TestInsertMissionOrdering:
+    CONTENT = (
+        "# Missions\n\n"
+        "## Pending\n\n"
+        "- existing task one\n"
+        "- existing task two\n\n"
+        "## In Progress\n\n"
+        "## Done\n"
+    )
+
+    def test_default_inserts_at_bottom(self):
+        result = insert_mission(self.CONTENT, "- new task")
+        lines = [l for l in result.splitlines() if l.startswith("- ")]
+        assert lines[0] == "- existing task one"
+        assert lines[1] == "- existing task two"
+        assert lines[2] == "- new task"
+
+    def test_urgent_inserts_at_top(self):
+        result = insert_mission(self.CONTENT, "- urgent task", urgent=True)
+        lines = [l for l in result.splitlines() if l.startswith("- ")]
+        assert lines[0] == "- urgent task"
+        assert lines[1] == "- existing task one"
+        assert lines[2] == "- existing task two"
+
+    def test_multiple_bottom_inserts_preserve_order(self):
+        result = insert_mission(self.CONTENT, "- third task")
+        result = insert_mission(result, "- fourth task")
+        lines = [l for l in result.splitlines() if l.startswith("- ")]
+        assert lines == [
+            "- existing task one",
+            "- existing task two",
+            "- third task",
+            "- fourth task",
+        ]
+
+    def test_multiple_urgent_inserts(self):
+        result = insert_mission(self.CONTENT, "- urgent A", urgent=True)
+        result = insert_mission(result, "- urgent B", urgent=True)
+        lines = [l for l in result.splitlines() if l.startswith("- ")]
+        assert lines[0] == "- urgent B"
+        assert lines[1] == "- urgent A"
+
+    def test_bottom_insert_into_empty_section(self):
+        content = "# Missions\n\n## Pending\n\n## In Progress\n"
+        result = insert_mission(content, "- first task")
+        assert "- first task" in result
+        assert result.index("- first task") < result.index("## In Progress")
+
+    def test_bottom_insert_with_french_headers(self):
+        content = (
+            "# Missions\n\n"
+            "## En attente\n\n"
+            "- tache existante\n\n"
+            "## En cours\n\n"
+            "## Terminées\n"
+        )
+        result = insert_mission(content, "- nouvelle tache")
+        lines = [l for l in result.splitlines() if l.startswith("- ")]
+        assert lines[-1] == "- nouvelle tache"
+
+    def test_bottom_insert_with_multiline_mission(self):
+        content = (
+            "## Pending\n\n"
+            "- task one\n"
+            "  with details\n"
+            "- task two\n\n"
+            "## In Progress\n"
+        )
+        result = insert_mission(content, "- task three")
+        lines = [l for l in result.splitlines() if l.startswith("- ")]
+        assert lines[-1] == "- task three"
+        # task three should come after "task two" not after "with details"
+        assert result.index("- task three") > result.index("  with details")
+
+    def test_urgent_preserves_existing_order(self):
+        """Urgent adds to top but existing order is preserved."""
+        result = insert_mission(self.CONTENT, "- urgent!", urgent=True)
+        existing = [l for l in result.splitlines() if l.startswith("- ")]
+        assert existing.index("- existing task one") < existing.index("- existing task two")
