@@ -331,16 +331,12 @@ while true; do
       export KOAN_CURRENT_PROJECT="$PROJECT_NAME"
       export KOAN_CURRENT_PROJECT_PATH="$PROJECT_PATH"
 
-      CONTEMPLATE_PROMPT=$("$PYTHON" -m app.prompt_builder contemplative \
+      cd "$INSTANCE"
+      log pause "Running contemplative session..."
+      (trap '' INT; exec "$PYTHON" -m app.contemplative_runner run \
         --instance "$INSTANCE" \
         --project-name "$PROJECT_NAME" \
-        --session-info "Pause mode. Run loop paused.")
-
-      cd "$INSTANCE"
-      CONTEMPLATE_FLAGS=$("$PYTHON" -c "from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('contemplative'))" 2>/dev/null || echo "")
-      # shellcheck disable=SC2086
-      log pause "Running contemplative session..."
-      (trap '' INT; exec claude -p "$CONTEMPLATE_PROMPT" --allowedTools Read,Write,Glob,Grep --max-turns 5 $CONTEMPLATE_FLAGS) 2>/dev/null &
+        --session-info "Pause mode. Run loop paused.") 2>/dev/null &
       CLAUDE_PID=$!
       wait_for_claude_task
       log pause "Contemplative session ended."
@@ -444,25 +440,18 @@ $KNOWN_PROJECTS"
     # Only triggers when there's no mission and not in WAIT/REVIEW mode (need budget)
     if [ "$AUTONOMOUS_MODE" = "deep" ] || [ "$AUTONOMOUS_MODE" = "implement" ]; then
       CONTEMPLATIVE_CHANCE=$("$PYTHON" -c "from app.utils import get_contemplative_chance; print(get_contemplative_chance())" 2>/dev/null || echo "10")
-      CONTEMPLATE_ROLL=$((RANDOM % 100))
-      if [ "$CONTEMPLATE_ROLL" -lt "$CONTEMPLATIVE_CHANCE" ]; then
-        log pause "Decision: CONTEMPLATIVE mode (random reflection)"
-        echo "  Roll: $CONTEMPLATE_ROLL < $CONTEMPLATIVE_CHANCE (threshold)"
+      if "$PYTHON" -m app.contemplative_runner should-run "$CONTEMPLATIVE_CHANCE" 2>/dev/null; then
+        log pause "Decision: CONTEMPLATIVE mode (random reflection, chance: ${CONTEMPLATIVE_CHANCE}%)"
         echo "  Action: Running contemplative session instead of autonomous work"
         echo ""
-        notify "🪷 Run $RUN_NUM/$MAX_RUNS — Contemplative mode (rolled $CONTEMPLATE_ROLL < $CONTEMPLATIVE_CHANCE%)"
-
-        # Run contemplative session (same as pause mode contemplation, but doesn't enter pause)
-        CONTEMPLATE_PROMPT=$("$PYTHON" -m app.prompt_builder contemplative \
-          --instance "$INSTANCE" \
-          --project-name "$PROJECT_NAME" \
-          --session-info "Run $RUN_NUM/$MAX_RUNS on $PROJECT_NAME. Mode: $AUTONOMOUS_MODE. Triggered by $CONTEMPLATIVE_CHANCE% contemplative chance.")
+        notify "🪷 Run $RUN_NUM/$MAX_RUNS — Contemplative mode (chance: $CONTEMPLATIVE_CHANCE%)"
 
         cd "$INSTANCE"
-        CONTEMPLATE_FLAGS=$("$PYTHON" -c "from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('contemplative'))" 2>/dev/null || echo "")
-        # shellcheck disable=SC2086
         log pause "Running contemplative session..."
-        (trap '' INT; exec claude -p "$CONTEMPLATE_PROMPT" --allowedTools Read,Write,Glob,Grep --max-turns 5 $CONTEMPLATE_FLAGS) 2>/dev/null &
+        (trap '' INT; exec "$PYTHON" -m app.contemplative_runner run \
+          --instance "$INSTANCE" \
+          --project-name "$PROJECT_NAME" \
+          --session-info "Run $RUN_NUM/$MAX_RUNS on $PROJECT_NAME. Mode: $AUTONOMOUS_MODE. Triggered by $CONTEMPLATIVE_CHANCE% contemplative chance.") 2>/dev/null &
         CLAUDE_PID=$!
         wait_for_claude_task
         log pause "Contemplative session ended."
