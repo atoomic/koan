@@ -40,20 +40,24 @@ Communication between processes happens through shared files in `instance/` with
 
 ### Key modules (`koan/app/`)
 
-- **`missions.py`** — Single source of truth for `missions.md` parsing (sections: En attente / En cours / Terminées). Missions can be tagged `[project:name]`.
+- **`missions.py`** — Single source of truth for `missions.md` parsing (sections: Pending / In Progress / Done; French equivalents also accepted). Missions can be tagged `[project:name]`.
 - **`utils.py`** — File locking (thread + file locks), config loading, atomic writes
 - **`memory_manager.py`** — Per-project memory isolation and compaction
 - **`usage_tracker.py`** — Budget tracking; decides autonomous mode (REVIEW/IMPLEMENT/DEEP/WAIT) based on quota percentage
 - **`git_sync.py`** / **`git_auto_merge.py`** — Branch tracking, sync awareness, configurable auto-merge
 - **`recover.py`** — Crash recovery for stale in-progress missions
 - **`notify.py`** — Telegram notification helper
+- **`github.py`** — Centralized `gh` CLI wrapper (`run_gh()`, `pr_create()`, `issue_create()`)
+- **`prompts.py`** — System prompt loader; `load_prompt()` for `koan/system-prompts/*.md`, `load_skill_prompt()` for skill-bound prompts
+- **`prompt_builder.py`** — Agent prompt assembly for `run.sh` (replaces bash sed/string concatenation)
+- **`pause_manager.py`** — Pause state management (`.koan-pause` / `.koan-pause-reason` files)
 
 ### Skills system (`koan/skills/`)
 
 Extensible command plugin system. Each skill lives in `skills/<scope>/<skill-name>/` with a `SKILL.md` (YAML frontmatter defining commands, aliases, metadata) and an optional `handler.py`.
 
 - **`skills.py`** — Registry that discovers SKILL.md files, parses frontmatter (custom lite YAML parser, no PyYAML), maps commands/aliases to skills, and dispatches execution.
-- **Core skills** live in `koan/skills/core/` (status, idea, mission, journal, etc.)
+- **Core skills** live in `koan/skills/core/` (cancel, chat, idea, journal, language, list, magic, mission, plan, pr, priority, rebase, reflect, sparring, status, verbose)
 - **Custom skills** loaded from `instance/skills/<scope>/` — each scope directory can be a cloned Git repo for team sharing.
 - **Handler pattern**: `def handle(ctx: SkillContext) -> Optional[str]` — return string for Telegram reply, empty string for "already handled", None for no message.
 - **`worker: true`** flag in SKILL.md marks blocking skills (Claude calls, API requests) that run in a background thread.
