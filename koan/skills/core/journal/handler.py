@@ -4,6 +4,28 @@ import re
 from datetime import date, timedelta
 
 
+def _read_pending_progress(instance_dir, max_lines=5):
+    """Read last progress lines from journal/pending.md."""
+    pending_path = instance_dir / "journal" / "pending.md"
+    if not pending_path.exists():
+        return None
+
+    content = pending_path.read_text()
+    # Find lines after the --- separator
+    sep_idx = content.find("\n---\n")
+    if sep_idx == -1:
+        return None
+
+    after_sep = content[sep_idx + 5:]  # skip "\n---\n"
+    lines = [line for line in after_sep.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    last_lines = lines[-max_lines:]
+    bullets = "\n".join(f"- {line}" for line in last_lines)
+    return f"📡 Live progress:\n{bullets}"
+
+
 def handle(ctx):
     """Handle /log [project] [date] command."""
     from app.utils import get_latest_journal
@@ -27,4 +49,12 @@ def handle(ctx):
         elif re.match(r'^\d{4}-\d{2}-\d{2}$', parts[1]):
             target_date = parts[1]
 
-    return get_latest_journal(ctx.instance_dir, project=project, target_date=target_date)
+    journal = get_latest_journal(ctx.instance_dir, project=project, target_date=target_date)
+
+    # Only show pending progress for today's journal (no target_date or today)
+    if target_date is None:
+        pending = _read_pending_progress(ctx.instance_dir)
+        if pending:
+            return f"{pending}\n\n{journal}"
+
+    return journal
