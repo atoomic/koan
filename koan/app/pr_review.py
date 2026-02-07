@@ -19,8 +19,16 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Tuple, List
 
+from app.claude_step import (
+    _run_git,
+    _rebase_onto_target,
+    _truncate,
+    run_claude as _run_claude,
+    commit_if_changes as _commit_if_changes,
+    run_claude_step as _run_claude_step,
+)
 from app.github import run_gh
-from app.utils import get_model_config, build_claude_flags
+from app.rebase_pr import fetch_pr_context
 
 # Matches skill names like `atoomic.refactor` or my.review (with or without backticks)
 _SKILL_RE = re.compile(r'`?([a-zA-Z0-9_-]+\.(?:refactor|review))\b`?')
@@ -46,66 +54,6 @@ def parse_pr_url(url: str) -> Tuple[str, str, str]:
     if not match:
         raise ValueError(f"Invalid PR URL: {url}")
     return match.group(1), match.group(2), match.group(3)
-
-
-def fetch_pr_context(owner: str, repo: str, pr_number: str) -> dict:
-    """Fetch PR details, diff, and review comments via gh CLI.
-
-    Returns a dict with keys: title, body, branch, base, diff, reviews,
-    comments, issue_comments, state, author, url.
-    """
-    full_repo = f"{owner}/{repo}"
-
-    # Fetch PR metadata
-    pr_json = run_gh(
-        "pr", "view", pr_number, "--repo", full_repo, "--json",
-        "title,body,headRefName,baseRefName,state,author,url"
-    )
-
-    # Fetch PR diff
-    diff = run_gh(
-        "pr", "diff", pr_number, "--repo", full_repo
-    )
-
-    # Fetch review comments (inline code comments)
-    comments_json = run_gh(
-        "api", f"repos/{full_repo}/pulls/{pr_number}/comments",
-        "--paginate", "--jq",
-        r'.[] | "[\(.path):\(.line // .original_line)] @\(.user.login): \(.body)"'
-    )
-
-    # Fetch PR-level review comments (top-level reviews)
-    reviews_json = run_gh(
-        "api", f"repos/{full_repo}/pulls/{pr_number}/reviews",
-        "--paginate", "--jq",
-        r'.[] | select(.body != "") | "@\(.user.login) (\(.state)): \(.body)"'
-    )
-
-    # Fetch issue-level comments (conversation thread)
-    issue_comments = run_gh(
-        "api", f"repos/{full_repo}/issues/{pr_number}/comments",
-        "--paginate", "--jq",
-        r'.[] | "@\(.user.login): \(.body)"'
-    )
-
-    try:
-        metadata = json.loads(pr_json)
-    except (json.JSONDecodeError, TypeError):
-        metadata = {}
-
-    return {
-        "title": metadata.get("title", ""),
-        "body": metadata.get("body", ""),
-        "branch": metadata.get("headRefName", ""),
-        "base": metadata.get("baseRefName", "main"),
-        "state": metadata.get("state", ""),
-        "author": metadata.get("author", {}).get("login", ""),
-        "url": metadata.get("url", ""),
-        "diff": _truncate(diff, 8000),
-        "review_comments": _truncate(comments_json, 4000),
-        "reviews": _truncate(reviews_json, 3000),
-        "issue_comments": _truncate(issue_comments, 3000),
-    }
 
 
 def _load_prompt(name: str, skill_dir: Path = None, **kwargs) -> str:
@@ -443,124 +391,6 @@ def run_pr_review(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _run_claude_step(
-    prompt: str,
-    project_path: str,
-    commit_msg: str,
-    success_label: str,
-    failure_label: str,
-    actions_log: List[str],
-    max_turns: int = 20,
-    timeout: int = 600,
-    use_skill: bool = False,
-) -> bool:
-    """Run a Claude Code step: invoke CLI, commit changes, log result.
-
-    Args:
-        use_skill: If True, include the Skill tool in allowed tools
-                   so Claude can invoke registered skills (e.g. /refactor).
-
-    Returns True if the step produced a commit.
-    """
-    models = get_model_config()
-    flags = build_claude_flags(
-        model=models["mission"], fallback=models["fallback"]
-    )
-
-    tools = "Bash,Read,Write,Glob,Grep,Edit"
-    if use_skill:
-        tools += ",Skill"
-
-    cmd = (
-        ["claude", "-p", prompt,
-         "--allowedTools", tools,
-         "--max-turns", str(max_turns)]
-        + flags
-    )
-
-    result = _run_claude(cmd, project_path, timeout=timeout)
-    if result["success"]:
-        committed = _commit_if_changes(project_path, commit_msg)
-        if committed and success_label:
-            actions_log.append(success_label)
-            return True
-    elif failure_label:
-        actions_log.append(f"{failure_label}: {result['error'][:200]}")
-    return False
-
-
-def _rebase_onto_target(base: str, project_path: str) -> Optional[str]:
-    """Rebase onto target branch, trying origin then upstream.
-
-    Returns:
-        Remote name used (e.g. "origin" or "upstream") on success, None on failure.
-    """
-    for remote in ("origin", "upstream"):
-        try:
-            _run_git(["git", "fetch", remote, base], cwd=project_path)
-            _run_git(
-                ["git", "rebase", "--autostash", f"{remote}/{base}"],
-                cwd=project_path,
-            )
-            return remote
-        except Exception:
-            subprocess.run(
-                ["git", "rebase", "--abort"],
-                capture_output=True, cwd=project_path,
-            )
-    return None
-
-
-def _run_claude(
-    cmd: list, cwd: str, timeout: int = 600
-) -> dict:
-    """Run a Claude Code CLI command.
-
-    Returns:
-        Dict with keys: success (bool), output (str), error (str).
-    """
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True, text=True,
-            timeout=timeout, cwd=cwd,
-        )
-        if result.returncode != 0:
-            stderr_snippet = result.stderr[-500:] if result.stderr else "no stderr"
-            return {
-                "success": False,
-                "output": result.stdout.strip(),
-                "error": f"Exit code {result.returncode}: {stderr_snippet}",
-            }
-        return {
-            "success": True,
-            "output": result.stdout.strip(),
-            "error": "",
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "output": "",
-            "error": f"Timeout ({timeout}s)",
-        }
-
-
-def _commit_if_changes(project_path: str, message: str) -> bool:
-    """Stage all changes and commit if there are any.
-
-    Returns True if a commit was created.
-    """
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True, text=True, cwd=project_path,
-    )
-    if not status.stdout.strip():
-        return False
-
-    _run_git(["git", "add", "-u"], cwd=project_path)
-    _run_git(["git", "commit", "-m", message], cwd=project_path)
-    return True
-
 
 def _run_tests(test_cmd: str, project_path: str) -> dict:
     """Run the test suite and return results.
@@ -663,24 +493,3 @@ def _build_pr_comment(
         f"---\n"
         f"_Automated by Kōan_"
     )
-
-
-def _run_git(cmd: list, cwd: str = None, timeout: int = 60) -> str:
-    """Run a git command, raise on failure."""
-    result = subprocess.run(
-        cmd,
-        capture_output=True, text=True,
-        timeout=timeout, cwd=cwd,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"git failed: {' '.join(cmd)} — {result.stderr[:200]}"
-        )
-    return result.stdout.strip()
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    """Truncate text with indicator."""
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + "\n...(truncated)"
