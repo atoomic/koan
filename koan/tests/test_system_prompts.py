@@ -60,9 +60,10 @@ def test_all_prompts_exist():
         "contemplative.md",
         "format-telegram.md",
         "pick-mission.md",
-        "sparring.md",
-        "usage-status.md",
         "dashboard-chat.md",
+        "morning-brief.md",
+        "evening-debrief.md",
+        "post-mission-reflection.md",
     ]
 
     for prompt_name in expected_prompts:

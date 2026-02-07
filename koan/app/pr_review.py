@@ -107,16 +107,26 @@ def fetch_pr_context(owner: str, repo: str, pr_number: str) -> dict:
     }
 
 
-def _load_prompt(name: str, **kwargs) -> str:
-    """Lazy-load a system prompt template by name."""
+def _load_prompt(name: str, skill_dir: Path = None, **kwargs) -> str:
+    """Lazy-load a prompt template by name.
+
+    Args:
+        name: Prompt file name without .md extension.
+        skill_dir: If provided, look in skill's prompts/ directory first.
+        **kwargs: Placeholder substitutions.
+    """
+    if skill_dir is not None:
+        from app.prompts import load_skill_prompt
+        return load_skill_prompt(skill_dir, name, **kwargs)
     from app.prompts import load_prompt
     return load_prompt(name, **kwargs)
 
 
-def build_pr_prompt(context: dict) -> str:
+def build_pr_prompt(context: dict, skill_dir: Path = None) -> str:
     """Build a prompt for Claude to address PR review feedback."""
     return _load_prompt(
         "pr-review",
+        skill_dir=skill_dir,
         TITLE=context["title"],
         BODY=context["body"],
         BRANCH=context["branch"],
@@ -128,9 +138,9 @@ def build_pr_prompt(context: dict) -> str:
     )
 
 
-def build_refactor_prompt(project_path: str, skill_name: str = "") -> str:
+def build_refactor_prompt(project_path: str, skill_name: str = "", skill_dir: Path = None) -> str:
     """Build a prompt for the refactor pass on recent changes."""
-    prompt = _load_prompt("pr-refactor", PROJECT_PATH=project_path)
+    prompt = _load_prompt("pr-refactor", skill_dir=skill_dir, PROJECT_PATH=project_path)
     if skill_name:
         prompt += (
             f"\n\n## Skill Invocation\n\n"
@@ -141,9 +151,9 @@ def build_refactor_prompt(project_path: str, skill_name: str = "") -> str:
     return prompt
 
 
-def build_quality_review_prompt(project_path: str, skill_name: str = "") -> str:
+def build_quality_review_prompt(project_path: str, skill_name: str = "", skill_dir: Path = None) -> str:
     """Build a prompt for the quality review pass on recent changes."""
-    prompt = _load_prompt("pr-quality-review", PROJECT_PATH=project_path)
+    prompt = _load_prompt("pr-quality-review", skill_dir=skill_dir, PROJECT_PATH=project_path)
     if skill_name:
         prompt += (
             f"\n\n## Skill Invocation\n\n"
@@ -247,6 +257,7 @@ def run_pr_review(
     pr_number: str,
     project_path: str,
     notify_fn=None,
+    skill_dir: Path = None,
 ) -> Tuple[bool, str]:
     """Execute the full PR review pipeline.
 
@@ -317,7 +328,7 @@ def run_pr_review(
     if has_review_feedback:
         notify_fn(f"Addressing review comments on `{branch}`...")
         _run_claude_step(
-            prompt=build_pr_prompt(context),
+            prompt=build_pr_prompt(context, skill_dir=skill_dir),
             project_path=project_path,
             commit_msg=f"pr-review: address feedback on #{pr_number}",
             success_label="Addressed reviewer feedback",
@@ -332,7 +343,7 @@ def run_pr_review(
     if refactor_skill:
         notify_fn(f"Running refactor pass ({refactor_skill})...")
         _run_claude_step(
-            prompt=build_refactor_prompt(project_path, refactor_skill),
+            prompt=build_refactor_prompt(project_path, refactor_skill, skill_dir=skill_dir),
             project_path=project_path,
             commit_msg=f"refactor: apply refactoring pass on #{pr_number}",
             success_label=f"Applied refactoring via `{refactor_skill}`",
@@ -345,7 +356,7 @@ def run_pr_review(
     if review_skill:
         notify_fn(f"Running quality review pass ({review_skill})...")
         _run_claude_step(
-            prompt=build_quality_review_prompt(project_path, review_skill),
+            prompt=build_quality_review_prompt(project_path, review_skill, skill_dir=skill_dir),
             project_path=project_path,
             commit_msg=f"review: apply quality improvements on #{pr_number}",
             success_label=f"Applied quality review via `{review_skill}`",

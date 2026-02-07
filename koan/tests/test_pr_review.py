@@ -553,6 +553,9 @@ class TestFetchPrContext:
 # build_pr_prompt
 # ---------------------------------------------------------------------------
 
+PR_SKILL_DIR = Path(__file__).parent.parent / "skills" / "core" / "pr"
+
+
 class TestBuildPrPrompt:
     def test_builds_prompt(self):
         ctx = {
@@ -565,7 +568,7 @@ class TestBuildPrPrompt:
             "reviews": "needs work",
             "issue_comments": "thread",
         }
-        prompt = build_pr_prompt(ctx)
+        prompt = build_pr_prompt(ctx, skill_dir=PR_SKILL_DIR)
         assert "Test PR" in prompt
         assert "fix-branch" in prompt
         assert "+some code" in prompt
@@ -579,25 +582,25 @@ class TestBuildPrPrompt:
 
 class TestBuildRefactorPrompt:
     def test_includes_project_path(self):
-        prompt = build_refactor_prompt("/tmp/project")
+        prompt = build_refactor_prompt("/tmp/project", skill_dir=PR_SKILL_DIR)
         assert "/tmp/project" in prompt
 
     def test_includes_skill_name(self):
-        prompt = build_refactor_prompt("/tmp/project", "atoomic.refactor")
+        prompt = build_refactor_prompt("/tmp/project", "atoomic.refactor", skill_dir=PR_SKILL_DIR)
         assert "atoomic.refactor" in prompt
 
     def test_empty_skill_name(self):
-        prompt = build_refactor_prompt("/tmp/project", "")
+        prompt = build_refactor_prompt("/tmp/project", "", skill_dir=PR_SKILL_DIR)
         assert "/tmp/project" in prompt
 
 
 class TestBuildQualityReviewPrompt:
     def test_includes_project_path(self):
-        prompt = build_quality_review_prompt("/tmp/project")
+        prompt = build_quality_review_prompt("/tmp/project", skill_dir=PR_SKILL_DIR)
         assert "/tmp/project" in prompt
 
     def test_includes_skill_name(self):
-        prompt = build_quality_review_prompt("/tmp/project", "atoomic.review")
+        prompt = build_quality_review_prompt("/tmp/project", "atoomic.review", skill_dir=PR_SKILL_DIR)
         assert "atoomic.review" in prompt
 
 
@@ -641,7 +644,7 @@ class TestRunPrReview:
         mock_commit.return_value = True
 
         notify = MagicMock()
-        success, summary = run_pr_review("o", "r", "1", "/tmp/p", notify_fn=notify)
+        success, summary = run_pr_review("o", "r", "1", "/tmp/p", notify_fn=notify, skill_dir=PR_SKILL_DIR)
         assert success is True
         assert "updated" in summary.lower() or "PR #1" in summary
 
@@ -692,7 +695,7 @@ class TestRunPrReview:
         mock_tests.return_value = {"passed": True, "output": "", "details": "800 tests passed"}
 
         notify = MagicMock()
-        success, summary = run_pr_review("o", "r", "1", "/tmp/p", notify_fn=notify)
+        success, summary = run_pr_review("o", "r", "1", "/tmp/p", notify_fn=notify, skill_dir=PR_SKILL_DIR)
         assert success is True
         # Should have called Claude 3 times (feedback + refactor + review)
         assert mock_claude.call_count == 3

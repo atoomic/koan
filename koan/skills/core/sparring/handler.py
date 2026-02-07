@@ -2,11 +2,12 @@
 
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
 
 def handle(ctx):
     """Launch a sparring session via Claude."""
-    from app.prompts import load_prompt
+    from app.prompts import load_skill_prompt
     from app.utils import get_fast_reply_model
 
     instance_dir = ctx.instance_dir
@@ -57,7 +58,8 @@ def handle(ctx):
         else "It's morning."
     )
 
-    prompt = load_prompt(
+    prompt = load_skill_prompt(
+        Path(__file__).parent,
         "sparring",
         SOUL=soul,
         PREFS=prefs,

@@ -197,9 +197,9 @@ def _generate_plan(project_path, idea, context=""):
         idea: The idea to plan.
         context: Optional existing issue/comments context.
     """
-    from app.prompts import load_prompt
+    from app.prompts import load_skill_prompt
 
-    prompt = load_prompt("plan", IDEA=idea, CONTEXT=context)
+    prompt = load_skill_prompt(Path(__file__).parent, "plan", IDEA=idea, CONTEXT=context)
 
     from app.utils import get_model_config, build_claude_flags
 
