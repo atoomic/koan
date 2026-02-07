@@ -84,9 +84,9 @@ def _handle_ping(ctx) -> str:
     stop_file = koan_root / ".koan-stop"
 
     if run_loop_alive and stop_file.exists():
-        return "⏹ Run loop is stopping after current mission."
+        return "⏹️ Run loop is stopping after current mission."
     elif run_loop_alive and pause_file.exists():
-        return "⏸ Run loop is paused. /resume to unpause."
+        return "⏸️ Run loop is paused. /resume to unpause."
     elif run_loop_alive:
         return "✅ OK"
     else:

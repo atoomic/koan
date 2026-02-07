@@ -96,8 +96,8 @@ def _delete_idea(missions_file, index):
         from app.missions import parse_ideas
         count = len(parse_ideas(missions_file.read_text()))
         if count == 0:
-            return "No ideas to delete."
-        return f"Invalid index. Use 1-{count}."
+            return "ℹ️ No ideas to delete."
+        return f"⚠️ Invalid index. Use 1-{count}."
 
     display = clean_mission_display(deleted_text)
     return f"🗑 Deleted: {display}"
@@ -121,8 +121,8 @@ def _promote_idea(missions_file, index):
         from app.missions import parse_ideas
         count = len(parse_ideas(missions_file.read_text()))
         if count == 0:
-            return "No ideas to promote."
-        return f"Invalid index. Use 1-{count}."
+            return "ℹ️ No ideas to promote."
+        return f"⚠️ Invalid index. Use 1-{count}."
 
     display = clean_mission_display(promoted_text)
     return f"⬆️ Promoted to pending: {display}"

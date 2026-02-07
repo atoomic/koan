@@ -167,16 +167,16 @@ def handle_command(text: str):
 
     if cmd == "/stop":
         (KOAN_ROOT / ".koan-stop").write_text("STOP")
-        send_telegram("⏹ Stop requested. Current mission will complete, then Kōan will stop.")
+        send_telegram("⏹️ Stop requested. Current mission will complete, then Kōan will stop.")
         return
 
     if cmd == "/pause":
         pause_file = KOAN_ROOT / ".koan-pause"
         if pause_file.exists():
-            send_telegram("⏸ Already paused. /resume to unpause.")
+            send_telegram("⏸️ Already paused. /resume to unpause.")
         else:
             pause_file.write_text("PAUSE")
-            send_telegram("⏸ Paused. No missions will run. /resume to unpause.")
+            send_telegram("⏸️ Paused. No missions will run. /resume to unpause.")
         return
 
     if cmd == "/resume":
@@ -325,9 +325,9 @@ def _handle_help():
     parts = [
         "Koan -- Commands\n",
         "CORE",
-        "/pause -- pause (no new missions)",
-        "/resume -- resume after pause or quota exhausted",
-        "/stop -- stop Koan after current mission",
+        "⏸️ /pause -- pause (no new missions)",
+        "▶️ /resume -- resume after pause or quota exhausted",
+        "⏹️ /stop -- stop Koan after current mission",
         "/help -- this help",
         "/skill -- list available skills",
     ]

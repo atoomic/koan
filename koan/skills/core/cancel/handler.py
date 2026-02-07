@@ -53,7 +53,7 @@ def _cancel_mission(missions_file, identifier):
     try:
         modify_missions_file(missions_file, _transform)
     except ValueError as e:
-        return str(e)
+        return f"⚠️ {e}"
 
     if cancelled_text is None:
         return "⚠️ Error during cancellation."
