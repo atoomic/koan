@@ -18,6 +18,10 @@ This launches a web-based wizard that guides you through Telegram setup, project
 - Python 3.8+
 - A Telegram account (for the Telegram bridge)
 
+## Recommended
+
+- GitHub cli `gh` setup and has one or more identidies to access to your repositories
+
 ## Manual Setup
 
 ### 1. Clone and create your instance
