@@ -1,7 +1,5 @@
 """Koan cancel skill -- cancel pending missions from the queue."""
 
-import re
-
 
 def handle(ctx):
     """Handle /cancel command.
@@ -24,25 +22,25 @@ def _list_pending(missions_file):
     if not missions_file.exists():
         return "No pending missions."
 
-    from app.missions import list_pending
+    from app.missions import list_pending, clean_mission_display
 
     pending = list_pending(missions_file.read_text())
 
     if not pending:
         return "No pending missions."
 
-    parts = ["Pending missions:"]
+    parts = ["Pending missions:\n"]
     for i, m in enumerate(pending, 1):
-        display = _clean_display(m)
+        display = clean_mission_display(m)
         parts.append(f"  {i}. {display}")
 
-    parts.append("\nUsage: /cancel 3 or /cancel fix auth")
+    parts.append("\nReply /cancel <number> to cancel a mission.")
     return "\n".join(parts)
 
 
 def _cancel_mission(missions_file, identifier):
     """Cancel a mission by number or keyword."""
-    from app.missions import cancel_pending_mission
+    from app.missions import cancel_pending_mission, clean_mission_display
     from app.utils import modify_missions_file
 
     cancelled_text = None
@@ -60,25 +58,5 @@ def _cancel_mission(missions_file, identifier):
     if cancelled_text is None:
         return "Error during cancellation."
 
-    display = _clean_display(cancelled_text)
+    display = clean_mission_display(cancelled_text)
     return f"Mission cancelled: {display}"
-
-
-def _clean_display(text):
-    """Clean a mission line for display."""
-    # Strip leading "- "
-    if text.startswith("- "):
-        text = text[2:]
-
-    # Strip project tag but keep project name as prefix
-    tag_match = re.search(r'\[projec?t:([a-zA-Z0-9_-]+)\]\s*', text)
-    if tag_match:
-        project = tag_match.group(1)
-        text = re.sub(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*', '', text)
-        text = f"[{project}] {text}"
-
-    # Truncate for readability
-    if len(text) > 120:
-        text = text[:117] + "..."
-
-    return text

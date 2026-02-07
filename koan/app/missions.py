@@ -425,6 +425,30 @@ def cancel_pending_mission(content: str, identifier: str) -> Tuple[str, str]:
     return "\n".join(new_lines), target_text
 
 
+def clean_mission_display(text: str, max_length: int = 120) -> str:
+    """Clean a mission or idea line for display.
+
+    Strips leading "- ", converts [project:X] tags to readable [X] prefix,
+    and truncates long lines.
+    """
+    # Strip leading "- "
+    if text.startswith("- "):
+        text = text[2:]
+
+    # Strip project tag but keep project name as prefix
+    tag_match = re.search(r'\[projec?t:([a-zA-Z0-9_-]+)\]\s*', text)
+    if tag_match:
+        project = tag_match.group(1)
+        text = re.sub(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*', '', text)
+        text = f"[{project}] {text}"
+
+    # Truncate for readability
+    if len(text) > max_length:
+        text = text[:max_length - 3] + "..."
+
+    return text
+
+
 def find_section_boundaries(lines: List[str]) -> Dict[str, Tuple[int, int]]:
     """Find line indices for each section.
 

@@ -275,31 +275,40 @@ class TestCancelHandler:
 # _clean_display helper
 # ---------------------------------------------------------------------------
 
-class TestCleanDisplay:
+class TestCleanMissionDisplay:
+    """Tests for shared clean_mission_display() in missions.py."""
+
     def test_strip_dash_prefix(self):
-        from skills.core.cancel.handler import _clean_display
-        assert _clean_display("- fix the bug") == "fix the bug"
+        from app.missions import clean_mission_display
+        assert clean_mission_display("- fix the bug") == "fix the bug"
 
     def test_strip_project_tag(self):
-        from skills.core.cancel.handler import _clean_display
-        result = _clean_display("- [project:koan] fix parser")
+        from app.missions import clean_mission_display
+        result = clean_mission_display("- [project:koan] fix parser")
         assert result == "[koan] fix parser"
 
     def test_strip_projet_tag(self):
-        from skills.core.cancel.handler import _clean_display
-        result = _clean_display("- [projet:webapp] add feature")
+        from app.missions import clean_mission_display
+        result = clean_mission_display("- [projet:webapp] add feature")
         assert result == "[webapp] add feature"
 
     def test_no_tag(self):
-        from skills.core.cancel.handler import _clean_display
-        assert _clean_display("- simple task") == "simple task"
+        from app.missions import clean_mission_display
+        assert clean_mission_display("- simple task") == "simple task"
 
     def test_truncation(self):
-        from skills.core.cancel.handler import _clean_display
+        from app.missions import clean_mission_display
         long = "- " + "a" * 200
-        result = _clean_display(long)
+        result = clean_mission_display(long)
         assert result.endswith("...")
         assert len(result) == 120
+
+    def test_custom_max_length(self):
+        from app.missions import clean_mission_display
+        text = "- " + "b" * 100
+        result = clean_mission_display(text, max_length=50)
+        assert len(result) == 50
+        assert result.endswith("...")
 
 
 # ---------------------------------------------------------------------------
