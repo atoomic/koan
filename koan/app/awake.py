@@ -366,12 +366,12 @@ def _handle_help():
     registry = _get_registry()
 
     parts = [
-        "Koan -- Commands\n",
+        "Kōan -- Commands\n",
         "CORE",
         "⏸️ /pause -- pause (alias: /sleep)",
         "▶️ /resume -- resume after pause (alias: /work, /awake, /start)",
         "🔄 /restart -- restart both bridge and run loop",
-        "⏹️ /stop -- stop Koan after current mission",
+        "⏹️ /stop -- stop Kōan after current mission",
         "/help -- this help (use /help <command> for details)",
         "/skill -- list available skills",
     ]

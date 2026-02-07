@@ -1,4 +1,4 @@
-"""Koan mission skill — create missions."""
+"""Kōan mission skill — create missions."""
 
 from pathlib import Path
 

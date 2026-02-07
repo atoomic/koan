@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- Shared utilities
+Kōan -- Shared utilities
 
 Consolidates duplicated helpers used across modules:
 - load_dotenv: .env file loading

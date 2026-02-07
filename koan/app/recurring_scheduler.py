@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- Recurring mission scheduler (CLI entry point)
+Kōan -- Recurring mission scheduler (CLI entry point)
 
 Called from run.sh at the top of each loop iteration to inject
 due recurring missions into the pending queue.

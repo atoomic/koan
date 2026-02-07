@@ -1,4 +1,4 @@
-"""Koan PR review skill — review and update GitHub pull requests."""
+"""Kōan PR review skill — review and update GitHub pull requests."""
 
 import re
 from pathlib import Path

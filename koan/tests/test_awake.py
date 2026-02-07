@@ -332,7 +332,7 @@ class TestBuildStatus:
         )
         status = _call_status_handler(tmp_path)
 
-        assert "Koan Status" in status
+        assert "Kōan Status" in status
         assert "koan" in status
         assert "default" in status
         assert "In progress: 1" in status
@@ -360,7 +360,7 @@ class TestBuildStatus:
             "# Missions\n\n## En attente\n\n## En cours\n\n"
         )
         status = _call_status_handler(tmp_path)
-        assert "Koan Status" in status
+        assert "Kōan Status" in status
 
     def test_status_with_stop_file(self, tmp_path):
         (tmp_path / "instance").mkdir()

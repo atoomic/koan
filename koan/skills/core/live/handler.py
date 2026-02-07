@@ -1,4 +1,4 @@
-"""Koan live progress skill — show current mission progress."""
+"""Kōan live progress skill — show current mission progress."""
 
 
 def _read_live_progress(instance_dir):

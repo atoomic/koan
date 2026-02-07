@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- Daily report generator
+Kōan -- Daily report generator
 
 Builds a concise Telegram-friendly digest of the day's activity.
 Called from run.sh at session boundaries (morning or evening).

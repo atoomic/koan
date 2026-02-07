@@ -1,4 +1,4 @@
-"""Koan recurring skill -- manage recurring missions (hourly, daily, weekly)."""
+"""Kōan recurring skill -- manage recurring missions (hourly, daily, weekly)."""
 
 
 def handle(ctx):

@@ -1,4 +1,4 @@
-"""Koan -- Skills system.
+"""Kōan -- Skills system.
 
 Loads skills from SKILL.md files, parses YAML frontmatter, and dispatches
 commands to the appropriate handler (Python function or Claude prompt).
@@ -10,7 +10,7 @@ Directory layout:
 SKILL.md format:
     ---
     name: status
-    description: Show Koan status
+    description: Show Kōan status
     version: 1.0.0
     commands:
       - name: status

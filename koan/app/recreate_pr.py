@@ -1,5 +1,5 @@
 """
-Koan -- Pull Request recreation workflow.
+Kōan -- Pull Request recreation workflow.
 
 Recreates a PR from scratch when the original branch has diverged too far
 from the target for a clean rebase.

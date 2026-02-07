@@ -1,4 +1,4 @@
-"""Koan rebase skill -- queue a PR rebase mission."""
+"""Kōan rebase skill -- queue a PR rebase mission."""
 
 import re
 

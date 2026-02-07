@@ -5,7 +5,7 @@ from typing import List, Optional
 
 
 # ---------------------------------------------------------------------------
-# Tool name mapping: Koan canonical -> provider-specific
+# Tool name mapping: Kōan canonical -> provider-specific
 # ---------------------------------------------------------------------------
 
 # Claude Code tool names (canonical, used throughout koan codebase)

@@ -28,7 +28,7 @@ class TestStatusDispatch:
         from skills.core.status.handler import handle
         ctx = _make_ctx("status", instance, tmp_path)
         result = handle(ctx)
-        assert "Koan Status" in result
+        assert "Kōan Status" in result
 
     def test_dispatch_to_ping(self, tmp_path):
         instance = tmp_path / "instance"
@@ -162,7 +162,7 @@ class TestHandleStatus:
         from skills.core.status.handler import _handle_status
         ctx = _make_ctx("status", instance, tmp_path)
         result = _handle_status(ctx)
-        assert "Koan Status" in result
+        assert "Kōan Status" in result
 
     def test_empty_missions(self, tmp_path):
         """missions.md with only Done items shows no pending/in-progress."""

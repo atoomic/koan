@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- Recurring missions
+Kōan -- Recurring missions
 
 Manages recurring missions (hourly, daily, weekly) stored in instance/recurring.json.
 The scheduler checks which missions are due and inserts them into missions.md pending

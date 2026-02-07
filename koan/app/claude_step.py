@@ -1,5 +1,5 @@
 """
-Koan -- Shared helpers for the CI/CD pipeline.
+Kōan -- Shared helpers for the CI/CD pipeline.
 
 Git operations, Claude Code CLI invocation, and text utilities
 used by pr_review.py, rebase_pr.py, and other pipeline modules.

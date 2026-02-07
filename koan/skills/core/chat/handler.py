@@ -1,4 +1,4 @@
-"""Koan chat skill — force chat mode bypassing mission detection."""
+"""Kōan chat skill — force chat mode bypassing mission detection."""
 
 
 def handle(ctx):

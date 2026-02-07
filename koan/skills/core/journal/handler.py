@@ -1,4 +1,4 @@
-"""Koan journal skill — view journal entries."""
+"""Kōan journal skill — view journal entries."""
 
 import re
 from datetime import date, timedelta

@@ -1,4 +1,4 @@
-"""Colored log output for the Koan bridge process.
+"""Colored log output for the Kōan bridge process.
 
 Mirrors the log() function from run.sh: each category gets its own
 ANSI color prefix for easy visual scanning in the terminal.

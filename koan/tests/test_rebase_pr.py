@@ -280,7 +280,7 @@ class TestBuildRebaseComment:
         assert "`koan/fix`" in result
         assert "`main`" in result
         assert "Rebased" in result
-        assert "Koan" in result
+        assert "Kōan" in result
 
     def test_empty_actions(self):
         result = _build_rebase_comment(

@@ -1,9 +1,9 @@
 """
-CLI provider abstraction for Koan.
+CLI provider abstraction for Kōan.
 
 Allows switching between Claude Code CLI and GitHub Copilot CLI
 as the underlying AI agent binary. Each provider knows how to
-translate Koan's generic command spec into provider-specific flags.
+translate Kōan's generic command spec into provider-specific flags.
 
 Configuration:
     config.yaml:  cli_provider: "claude"   (default)

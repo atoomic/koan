@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan — Memory manager
+Kōan — Memory manager
 
 Handles memory scope isolation and periodic cleanup:
 - Scoped summary: filter summary.md to only show relevant project sessions

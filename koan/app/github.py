@@ -1,4 +1,4 @@
-"""Shared GitHub CLI (gh) wrapper for all Koan modules.
+"""Shared GitHub CLI (gh) wrapper for all Kōan modules.
 
 Centralizes all `gh` CLI interactions so that consumers don't reinvent
 subprocess plumbing.  Auth is handled externally by ``github_auth.py``
