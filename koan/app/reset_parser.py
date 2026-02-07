@@ -56,7 +56,7 @@ def parse_reset_time(text: str, now: Optional[datetime] = None) -> Tuple[Optiona
 
     try:
         tz = ZoneInfo(tz_name)
-    except Exception:
+    except (KeyError, ValueError):
         tz = ZoneInfo("Europe/Paris")
 
     # Parse the time component

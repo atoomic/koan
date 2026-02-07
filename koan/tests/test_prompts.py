@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.prompts import PROMPT_DIR, _substitute, load_prompt, load_skill_prompt
+from app.prompts import PROMPT_DIR, _substitute, get_prompt_path, load_prompt, load_skill_prompt
 
 
 # ---------- _substitute ----------
@@ -85,6 +85,35 @@ class TestLoadPrompt:
             name = md_file.stem
             result = load_prompt(name)
             assert len(result) > 0, f"Prompt {name} is empty"
+
+
+# ---------- get_prompt_path ----------
+
+
+class TestGetPromptPath:
+    """Tests for the prompt path helper."""
+
+    def test_returns_path_object(self):
+        result = get_prompt_path("chat")
+        assert isinstance(result, Path)
+
+    def test_path_includes_md_extension(self):
+        result = get_prompt_path("format-telegram")
+        assert result.name == "format-telegram.md"
+
+    def test_path_is_in_prompt_dir(self):
+        result = get_prompt_path("agent")
+        assert result.parent == PROMPT_DIR
+
+    def test_path_for_existing_prompt(self):
+        result = get_prompt_path("chat")
+        assert result.exists()
+
+    def test_path_for_nonexistent_prompt(self):
+        """Path is returned even if file doesn't exist (caller handles that)."""
+        result = get_prompt_path("does-not-exist")
+        assert isinstance(result, Path)
+        assert not result.exists()
 
 
 # ---------- load_skill_prompt ----------

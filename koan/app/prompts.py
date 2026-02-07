@@ -8,6 +8,18 @@ from pathlib import Path
 PROMPT_DIR = Path(__file__).parent.parent / "system-prompts"
 
 
+def get_prompt_path(name: str) -> Path:
+    """Return the full path to a system prompt file.
+
+    Args:
+        name: Prompt file name without .md extension (e.g. "chat", "pick-mission")
+
+    Returns:
+        Path to the prompt file (e.g. koan/system-prompts/chat.md)
+    """
+    return PROMPT_DIR / f"{name}.md"
+
+
 def _substitute(template: str, kwargs: dict) -> str:
     """Replace {KEY} placeholders in a template string."""
     for key, value in kwargs.items():
