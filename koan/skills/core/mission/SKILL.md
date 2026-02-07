@@ -2,11 +2,11 @@
 name: mission
 scope: core
 description: Create or manage missions
-version: 1.0.0
+version: 1.1.0
 commands:
   - name: mission
-    description: Create a mission
-    usage: /mission <description>, /mission [project:name] <desc>
+    description: Create a mission (queued at bottom, use --now for top)
+    usage: /mission <description>, /mission --now <desc>, /mission [project:name] <desc>
     aliases: []
 handler: handler.py
 ---

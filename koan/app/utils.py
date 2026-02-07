@@ -464,13 +464,18 @@ def atomic_write(path: Path, content: str):
         raise
 
 
-def insert_pending_mission(missions_path: Path, entry: str):
+def insert_pending_mission(missions_path: Path, entry: str, *, urgent: bool = False):
     """Insert a mission entry into the pending section of missions.md.
+
+    By default, inserts at the bottom of the pending section (FIFO queue).
+    When urgent=True, inserts at the top (next to be picked up).
 
     Uses file locking for the entire read-modify-write cycle to prevent
     TOCTOU race conditions between awake.py and dashboard.py.
     Creates the file with default structure if it doesn't exist.
     """
+    from app.missions import insert_mission
+
     # Thread lock (in-process) + file lock (cross-process) for full protection
     with _MISSIONS_LOCK:
         if not missions_path.exists():
@@ -482,22 +487,7 @@ def insert_pending_mission(missions_path: Path, entry: str):
             if not content.strip():
                 content = _MISSIONS_DEFAULT
 
-            marker = None
-            for candidate in ("## Pending", "## En attente"):
-                if candidate in content:
-                    marker = candidate
-                    break
-
-            if marker:
-                idx = content.index(marker) + len(marker)
-                while idx < len(content) and content[idx] == "\n":
-                    idx += 1
-                content = content[:idx] + f"\n{entry}\n" + content[idx:]
-            else:
-                content += f"\n## Pending\n\n{entry}\n"
-
-            from app.missions import normalize_content
-            content = normalize_content(content)
+            content = insert_mission(content, entry, urgent=urgent)
 
             f.seek(0)
             f.truncate()

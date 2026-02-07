@@ -436,6 +436,11 @@ def handle_resume():
 
 def handle_mission(text: str):
     """Append to missions.md with optional project tag."""
+    from app.missions import extract_now_flag
+
+    # Check for --now flag in first 5 words (queue at top instead of bottom)
+    urgent, text = extract_now_flag(text)
+
     # Parse project tag if present
     project, mission_text = parse_project(text)
 
@@ -458,10 +463,12 @@ def handle_mission(text: str):
         mission_entry = f"- {mission_text}"
 
     # Append to missions.md under pending section (with file locking)
-    insert_pending_mission(MISSIONS_FILE, mission_entry)
+    insert_pending_mission(MISSIONS_FILE, mission_entry, urgent=urgent)
 
     # Acknowledge with project info
     ack_msg = f"✅ Mission received"
+    if urgent:
+        ack_msg += " (priority)"
     if project:
         ack_msg += f" (project: {project})"
     ack_msg += f":\n\n{mission_text[:500]}"
