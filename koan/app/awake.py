@@ -43,18 +43,11 @@ from app.bridge_state import (
     TELEGRAM_HISTORY_FILE,
     TOPICS_FILE,
     _get_registry,
-    _reset_registry,
 )
 from app.cli_provider import build_full_command
 from app.command_handlers import (
-    CORE_COMMANDS,
-    _dispatch_skill,
-    _handle_help,
-    _handle_help_command,
-    _handle_skill_command,
     handle_command,
     handle_mission,
-    handle_resume,
     set_callbacks,
 )
 from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
