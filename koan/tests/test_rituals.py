@@ -141,6 +141,62 @@ class TestRunRitual:
         result = run_ritual("morning", instance_dir)
         assert result is True
 
+    @patch("app.rituals.subprocess.run")
+    def test_max_turns_is_7(self, mock_run, prompt_dir, instance_dir):
+        """Regression: max_turns=3 was too low for ritual prompts (need 5+ tool calls)."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        run_ritual("morning", instance_dir)
+
+        cmd = mock_run.call_args[0][0]
+        idx = cmd.index("--max-turns")
+        assert cmd[idx + 1] == "7"
+
+    @patch("app.rituals.subprocess.run")
+    def test_strips_max_turns_error_from_stdout(self, mock_run, prompt_dir, instance_dir, capsys):
+        """Regression: 'Error: Reached max turns (N)' leaked to console."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="Morning message\nError: Reached max turns (3)\n",
+            stderr=""
+        )
+
+        result = run_ritual("morning", instance_dir)
+        assert result is True
+        captured = capsys.readouterr()
+        assert "max turns" not in captured.out.lower()
+        assert "Morning message" in captured.out
+
+    @patch("app.rituals.subprocess.run")
+    def test_strips_max_turns_error_from_stderr(self, mock_run, prompt_dir, instance_dir, capsys):
+        """Regression: max turns error in stderr should also be filtered."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="Error: Reached max turns (3)"
+        )
+
+        result = run_ritual("morning", instance_dir)
+        assert result is False
+        captured = capsys.readouterr()
+        assert "max turns" not in captured.err.lower()
+
+    @patch("app.rituals.subprocess.run")
+    def test_only_max_turns_error_in_stdout_prints_nothing(self, mock_run, prompt_dir, instance_dir, capsys):
+        """When stdout is only the max turns error, output should be empty."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="Error: Reached max turns (7)\n",
+            stderr=""
+        )
+
+        result = run_ritual("morning", instance_dir)
+        assert result is True
+        captured = capsys.readouterr()
+        # Should print the completed message but not the error
+        assert "ritual completed" in captured.out
+        assert "max turns" not in captured.out.lower()
+
 
 class TestRitualsCLI:
     """CLI tests call main() directly to avoid runpy re-import issues."""
