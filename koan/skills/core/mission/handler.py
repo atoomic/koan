@@ -1,7 +1,5 @@
 """Kōan mission skill — create missions."""
 
-from pathlib import Path
-
 
 def handle(ctx):
     """Handle /mission <text> command."""
