@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from app.cli_provider import build_full_command
+from app.claude_step import strip_cli_noise
 from app.prompts import get_prompt_path
 
 
@@ -58,7 +59,7 @@ def run_ritual(ritual_type: str, instance_dir: Path) -> bool:
         cmd = build_full_command(
             prompt=prompt,
             allowed_tools=["Read", "Write", "Glob"],
-            max_turns=3,
+            max_turns=7,
         )
         result = subprocess.run(
             cmd,
@@ -67,11 +68,13 @@ def run_ritual(ritual_type: str, instance_dir: Path) -> bool:
         )
         if result.returncode == 0:
             print(f"[rituals] {ritual_type} ritual completed")
-            if result.stdout.strip():
-                print(result.stdout.strip())
+            output = strip_cli_noise(result.stdout.strip())
+            if output:
+                print(output)
             return True
         else:
-            print(f"[rituals] {ritual_type} ritual failed: {result.stderr[:200]}", file=sys.stderr)
+            stderr = strip_cli_noise(result.stderr[:200])
+            print(f"[rituals] {ritual_type} ritual failed: {stderr}", file=sys.stderr)
             return False
     except subprocess.TimeoutExpired:
         print(f"[rituals] {ritual_type} ritual timed out", file=sys.stderr)
