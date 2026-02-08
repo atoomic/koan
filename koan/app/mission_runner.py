@@ -1,5 +1,5 @@
 """
-Koan -- Mission execution pipeline.
+Kōan -- Mission execution pipeline.
 
 Handles the full lifecycle of a single mission run:
 1. Build the Claude CLI command (prompt, tools, flags)

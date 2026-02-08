@@ -1,4 +1,4 @@
-"""Koan projects skill — list configured projects."""
+"""Kōan projects skill — list configured projects."""
 
 
 def handle(ctx):

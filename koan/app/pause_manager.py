@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- Pause State Manager
+Kōan -- Pause State Manager
 
 Manages the .koan-pause and .koan-pause-reason files that control the
 agent loop's pause/resume behavior. Replaces fragile bash logic (sed,

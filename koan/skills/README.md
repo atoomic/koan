@@ -1,6 +1,6 @@
-# Koan Skills
+# Kōan Skills
 
-Skills are self-contained plugins that add commands to Koan's Telegram interface. Each skill lives in its own directory and declares its commands through a `SKILL.md` file.
+Skills are self-contained plugins that add commands to Kōan's Telegram interface. Each skill lives in its own directory and declares its commands through a `SKILL.md` file.
 
 ## Directory layout
 
@@ -16,7 +16,7 @@ skills/
 
 ```
 skills/
-  core/               # Built-in (ships with Koan)
+  core/               # Built-in (ships with Kōan)
     status/
     idea/
     ...
@@ -146,7 +146,7 @@ Infrastructure prompts used by `koan/app/` modules stay in `koan/system-prompts/
 
 ## Loading custom skills
 
-Koan loads skills from two locations:
+Kōan loads skills from two locations:
 
 1. **`koan/skills/`** — built-in core skills (shipped with the repo)
 2. **`instance/skills/`** — custom skills (gitignored, instance-specific)

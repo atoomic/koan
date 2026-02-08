@@ -1,5 +1,5 @@
 """
-Koan -- Contemplative session runner.
+Kōan -- Contemplative session runner.
 
 Manages contemplative sessions (probability roll, prompt building, CLI invocation).
 Extracted from duplicated bash logic in run.sh (pause-mode + autonomous-roll).

@@ -1,4 +1,4 @@
-"""Koan priority skill -- reorder pending missions in the queue."""
+"""Kōan priority skill -- reorder pending missions in the queue."""
 
 
 def handle(ctx):

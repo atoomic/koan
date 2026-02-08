@@ -1,4 +1,4 @@
-"""Koan idea skill -- manage the ideas backlog in missions.md."""
+"""Kōan idea skill -- manage the ideas backlog in missions.md."""
 
 import re
 

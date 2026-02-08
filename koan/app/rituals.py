@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Koan -- Daily rituals module
+Kōan -- Daily rituals module
 
 Morning brief (first run) and evening debrief (last run) — conversational
-messages that make Koan feel like a collaborator, not just a tool.
+messages that make Kōan feel like a collaborator, not just a tool.
 
 Usage: python -m app.rituals <morning|evening> <instance_dir>
 """

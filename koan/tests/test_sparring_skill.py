@@ -42,14 +42,14 @@ class TestSparringContextLoading:
         """Soul file is read and passed to prompt template."""
         instance = tmp_path / "instance"
         instance.mkdir()
-        (instance / "soul.md").write_text("I am Koan.")
+        (instance / "soul.md").write_text("I am Kōan.")
         mock_sub.run.return_value = MagicMock(returncode=0, stdout="Response text")
 
         from skills.core.sparring.handler import handle
         handle(_make_ctx(instance))
 
         _, kwargs = mock_prompt.call_args
-        assert kwargs["SOUL"] == "I am Koan."
+        assert kwargs["SOUL"] == "I am Kōan."
 
     @patch(_P_SUB)
     @patch(_P_PROMPT, return_value="test prompt")

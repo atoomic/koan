@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan — Mission extraction
+Kōan — Mission extraction
 
 Extracts the next pending mission from missions.md, scoped to the "En attente" / "Pending"
 section only. Prints the mission line to stdout (empty if none found).

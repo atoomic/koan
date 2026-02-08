@@ -1,4 +1,4 @@
-"""Koan language skill — set/reset reply language preference."""
+"""Kōan language skill — set/reset reply language preference."""
 
 # Language shortcut commands: /french, /english, and their aliases
 _LANGUAGE_SHORTCUTS = {

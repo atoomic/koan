@@ -153,7 +153,7 @@ class TestHandleLogLayout:
         today = date.today().strftime("%Y-%m-%d")
         journal_dir = tmp_path / "journal" / today
         journal_dir.mkdir(parents=True)
-        (journal_dir / "koan.md").write_text("Koan stuff")
+        (journal_dir / "koan.md").write_text("Kōan stuff")
         (journal_dir / "web-app.md").write_text("Web stuff")
 
         pending = tmp_path / "journal" / "pending.md"
@@ -166,7 +166,7 @@ class TestHandleLogLayout:
         progress_pos = result.find("Live progress")
         assert progress_pos != -1, "Live progress should be present"
         # Progress should be after journal content
-        koan_pos = result.find("Koan stuff")
+        koan_pos = result.find("Kōan stuff")
         assert koan_pos < progress_pos, (
             "Journal content should be before Live progress"
         )

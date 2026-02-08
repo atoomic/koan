@@ -1,5 +1,5 @@
 """
-Koan -- Pull Request recreation workflow.
+Kōan -- Pull Request recreation workflow.
 
 Recreates a PR from scratch when the original branch has diverged too far
 from the target for a clean rebase.
@@ -340,7 +340,7 @@ def _push_recreated(
             f"The original branch had diverged too far for a clean rebase, so the "
             f"feature was recreated from scratch based on the original PR's intent.\n\n"
             f"Original PR: {context.get('url', f'#{pr_number}')}\n\n"
-            f"---\n_Automated by Koan_"
+            f"---\n_Automated by Kōan_"
         )
         new_pr_url = pr_create(
             title=f"[Recreate] {title}",
@@ -364,7 +364,7 @@ def _push_recreated(
                 f"This PR has been recreated from scratch and superseded by {new_pr_ref}.\n\n"
                 f"The original branch had diverged too far for a clean rebase. "
                 f"The new PR contains a fresh reimplementation on current `{base}`.\n\n"
-                f"---\n_Automated by Koan_",
+                f"---\n_Automated by Kōan_",
             )
             actions.append("Cross-linked original PR")
         except Exception:
@@ -416,7 +416,7 @@ def _build_recreate_comment(
         f"### Actions\n\n"
         f"{actions_md}\n\n"
         f"---\n"
-        f"_Automated by Koan_"
+        f"_Automated by Kōan_"
     )
     return comment
 

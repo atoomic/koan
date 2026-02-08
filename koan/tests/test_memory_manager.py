@@ -386,7 +386,7 @@ class TestArchiveJournals:
         old_month = old_date[:7]
         self._make_journal_day(
             tmp_path, old_date, "koan",
-            "## Session 1\n\n### Koan work\n\nK.\n"
+            "## Session 1\n\n### Kōan work\n\nK.\n"
         )
         self._make_journal_day(
             tmp_path, old_date, "anantys-back",

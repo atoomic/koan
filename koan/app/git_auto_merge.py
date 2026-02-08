@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- Git Auto-Merge
+Kōan -- Git Auto-Merge
 
 Automatically merges koan/* branches based on configuration rules.
 Supports:
@@ -80,9 +80,9 @@ def get_author_env() -> Dict[str, str]:
     email = os.environ.get("KOAN_EMAIL", "")
     if email:
         return {
-            "GIT_AUTHOR_NAME": "Koan",
+            "GIT_AUTHOR_NAME": "Kōan",
             "GIT_AUTHOR_EMAIL": email,
-            "GIT_COMMITTER_NAME": "Koan",
+            "GIT_COMMITTER_NAME": "Kōan",
             "GIT_COMMITTER_EMAIL": email,
         }
     return {}

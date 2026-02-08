@@ -1,4 +1,4 @@
-"""Exclusive PID file management for Koan processes.
+"""Exclusive PID file management for Kōan processes.
 
 Ensures only one instance of each process type (run, awake) can run
 at a time.
@@ -115,7 +115,7 @@ def acquire_pid(koan_root: Path, process_name: str, pid: int) -> None:
     PID in the existing file is still alive — if so, aborts.
 
     Args:
-        koan_root: Root path of the Koan installation.
+        koan_root: Root path of the Kōan installation.
         process_name: Process type ("run" or "awake").
         pid: The PID to write (typically $$ from bash).
     """

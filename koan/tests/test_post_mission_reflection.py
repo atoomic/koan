@@ -64,11 +64,11 @@ class TestBuildReflectionPrompt:
     def test_includes_soul_when_exists(self, tmp_path):
         """Prompt includes soul.md content if present."""
         soul_file = tmp_path / "soul.md"
-        soul_file.write_text("You are Koan. A sparring partner.")
+        soul_file.write_text("You are Kōan. A sparring partner.")
 
         prompt = build_reflection_prompt(tmp_path, "Test mission")
 
-        assert "Koan" in prompt
+        assert "Kōan" in prompt
         assert "sparring partner" in prompt
 
     def test_includes_emotional_memory_when_exists(self, tmp_path):
@@ -128,7 +128,7 @@ class TestWriteToJournal:
         assert "New reflection." in content
 
     def test_includes_koan_header_and_timestamp(self, tmp_path):
-        """Each reflection has a Koan header with timestamp."""
+        """Each reflection has a Kōan header with timestamp."""
         write_to_journal(tmp_path, "Test reflection.")
 
         content = (tmp_path / "shared-journal.md").read_text()

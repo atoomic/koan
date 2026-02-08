@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}Koan{% endblock %}</title>
+    <title>{% block title %}Kōan{% endblock %}</title>
     <style>
         :root {
             --bg: #0d1117;
@@ -214,7 +214,7 @@
 </head>
 <body>
     <nav>
-        <a href="/" class="logo">Koan</a>
+        <a href="/" class="logo">Kōan</a>
         <a href="/" {% if request.path == '/' %}class="active"{% endif %}>Dashboard</a>
         <a href="/missions" {% if request.path == '/missions' %}class="active"{% endif %}>Missions</a>
         <a href="/chat" {% if request.path == '/chat' %}class="active"{% endif %}>Chat</a>

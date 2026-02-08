@@ -1,4 +1,4 @@
-"""Koan status skill — consolidates /status, /ping, /usage."""
+"""Kōan status skill — consolidates /status, /ping, /usage."""
 
 import re
 import subprocess
@@ -24,7 +24,7 @@ def _handle_status(ctx) -> str:
     instance_dir = ctx.instance_dir
     missions_file = instance_dir / "missions.md"
 
-    parts = ["Koan Status"]
+    parts = ["Kōan Status"]
 
     pause_file = koan_root / ".koan-pause"
     stop_file = koan_root / ".koan-stop"

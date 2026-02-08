@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- Pull Request review and update workflow.
+Kōan -- Pull Request review and update workflow.
 
 Multi-step pipeline for /pr command:
 1. Fetch PR context from GitHub

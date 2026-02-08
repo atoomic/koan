@@ -14,7 +14,7 @@ def instance_dir(tmp_path):
     """Create a minimal instance directory for testing."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True)
-    (tmp_path / "soul.md").write_text("You are Koan.")
+    (tmp_path / "soul.md").write_text("You are Kōan.")
     return tmp_path
 
 

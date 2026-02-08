@@ -1,4 +1,4 @@
-"""Koan list skill -- show current missions (pending + in progress)."""
+"""Kōan list skill -- show current missions (pending + in progress)."""
 
 
 def handle(ctx):

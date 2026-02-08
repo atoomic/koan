@@ -1,7 +1,7 @@
 ---
 name: status
 scope: core
-description: Show Koan status, missions, and run loop health
+description: Show Kōan status, missions, and run loop health
 version: 1.0.0
 commands:
   - name: status

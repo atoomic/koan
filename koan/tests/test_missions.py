@@ -398,7 +398,7 @@ class TestSubHeaderProjectGrouping:
             "## En attente\n\n"
             "- Untagged task\n"
             "### project:koan\n"
-            "- Koan task\n\n"
+            "- Kōan task\n\n"
             "## En cours\n"
         )
         result = extract_next_pending(content, "anantys")
@@ -429,8 +429,8 @@ class TestSubHeaderProjectGrouping:
         content = (
             "## En attente\n\n"
             "### project:koan\n"
-            "- Koan task 1\n"
-            "- Koan task 2\n\n"
+            "- Kōan task 1\n"
+            "- Kōan task 2\n\n"
             "### project:anantys\n"
             "- Anantys task\n\n"
             "## En cours\n\n"

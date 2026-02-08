@@ -1,4 +1,4 @@
-# Koan
+# Kōan
 
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
@@ -12,7 +12,7 @@
 
 An autonomous background agent that uses idle Claude Max quota to work on your projects.
 
-Koan runs as a continuous loop on your local machine: it pulls missions from a shared file, executes them via Claude Code CLI, writes reports, and communicates with you via Telegram.
+Kōan runs as a continuous loop on your local machine: it pulls missions from a shared file, executes them via Claude Code CLI, writes reports, and communicates with you via Telegram.
 
 **The agent proposes. The human decides.** No unsupervised code modifications.
 
@@ -178,14 +178,14 @@ git_auto_merge:
 
 **This project is alpha software.** It is not designed for public-facing deployment.
 
-Koan exposes local services (dashboard, Telegram bridge) that have **no authentication or access control**. It should only be run on a trusted local network.
+Kōan exposes local services (dashboard, Telegram bridge) that have **no authentication or access control**. It should only be run on a trusted local network.
 
 Known security considerations:
 - Telegram messages are passed to Claude with tool access — prompt injection risk exists
 - Dashboard has no auth (safe on localhost, do not expose)
 - Bot authentication relies on Telegram chat_id only
 
-Do not expose any Koan service to the public internet. Use a VPN or SSH tunnel for remote access.
+Do not expose any Kōan service to the public internet. Use a VPN or SSH tunnel for remote access.
 
 ## License
 
