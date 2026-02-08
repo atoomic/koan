@@ -21,10 +21,11 @@ import sys
 from pathlib import Path
 
 from app.cli_provider import build_full_command
+from app.prompts import get_prompt_path
 from app.utils import get_model_config
 
 
-PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "system-prompts" / "pick-mission.md"
+PROMPT_TEMPLATE_PATH = get_prompt_path("pick-mission")
 
 
 def build_prompt(

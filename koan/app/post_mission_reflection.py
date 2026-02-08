@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.cli_provider import build_full_command
+from app.prompts import get_prompt_path
 from app.utils import atomic_write
 
 
@@ -61,8 +62,7 @@ def _get_prompt_template() -> str:
     Returns:
         Prompt template string
     """
-    prompt_file = Path(__file__).parent.parent / "system-prompts" / "post-mission-reflection.md"
-    return prompt_file.read_text()
+    return get_prompt_path("post-mission-reflection").read_text()
 
 
 def build_reflection_prompt(instance_dir: Path, mission_text: str) -> str:

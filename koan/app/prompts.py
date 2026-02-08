@@ -8,6 +8,18 @@ from pathlib import Path
 PROMPT_DIR = Path(__file__).parent.parent / "system-prompts"
 
 
+def get_prompt_path(name: str) -> Path:
+    """Return the full path to a system prompt file.
+
+    Args:
+        name: Prompt file name without .md extension (e.g. "chat", "pick-mission")
+
+    Returns:
+        Path to the prompt file (e.g. koan/system-prompts/chat.md)
+    """
+    return PROMPT_DIR / f"{name}.md"
+
+
 def _substitute(template: str, kwargs: dict) -> str:
     """Replace {KEY} placeholders in a template string."""
     for key, value in kwargs.items():
@@ -25,7 +37,7 @@ def load_prompt(name: str, **kwargs: str) -> str:
     Returns:
         The prompt string with placeholders replaced.
     """
-    template = (PROMPT_DIR / f"{name}.md").read_text()
+    template = get_prompt_path(name).read_text()
     return _substitute(template, kwargs)
 
 
@@ -47,5 +59,5 @@ def load_skill_prompt(skill_dir: Path, name: str, **kwargs: str) -> str:
     if skill_prompt.exists():
         template = skill_prompt.read_text()
     else:
-        template = (PROMPT_DIR / f"{name}.md").read_text()
+        template = get_prompt_path(name).read_text()
     return _substitute(template, kwargs)
