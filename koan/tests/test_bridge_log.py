@@ -160,7 +160,7 @@ class TestLogOutput:
 
 
 class TestColorConstants:
-    """Test that the color mapping is consistent with run.sh."""
+    """Test that the color mapping is consistent with run.py."""
 
     def test_all_expected_categories_defined(self):
         expected = {"init", "chat", "mission", "outbox", "error", "health", "skill"}

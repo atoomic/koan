@@ -2,14 +2,14 @@
 """
 Kōan -- Recurring mission scheduler (CLI entry point)
 
-Called from run.sh at the top of each loop iteration to inject
+Called at the top of each loop iteration to inject
 due recurring missions into the pending queue.
 
 Usage:
     python3 recurring_scheduler.py <instance_dir>
 
 Output:
-    Prints each injected mission (for run.sh logging).
+    Prints each injected mission (for logging).
     Exit code 0 always (errors are non-fatal).
 """
 

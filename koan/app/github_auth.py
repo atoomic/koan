@@ -15,7 +15,7 @@ Usage from Python:
     # Or setup once at session start (validates + alerts on failure)
     setup_github_auth()
 
-Usage from shell (run.sh integration):
+Usage from shell:
     python3 -m app.github_auth
     # Prints GH_TOKEN=<token> on success, exits 1 on failure.
 """
@@ -69,7 +69,7 @@ def get_gh_env() -> Dict[str, str]:
     if not username:
         return {}
 
-    # Check if GH_TOKEN is already set in environment (from run.sh setup)
+    # Check if GH_TOKEN is already set in environment
     existing_token = os.environ.get("GH_TOKEN", "")
     if existing_token:
         return {"GH_TOKEN": existing_token}
@@ -119,7 +119,7 @@ def setup_github_auth() -> bool:
 
 
 if __name__ == "__main__":
-    # CLI entry point for run.sh integration.
+    # CLI entry point.
     # Prints GH_TOKEN=<token> on success (for eval in bash).
     # Exits 0 if no GITHUB_USER configured or token retrieved.
     # Exits 1 if GITHUB_USER set but token retrieval failed.

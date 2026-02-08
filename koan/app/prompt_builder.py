@@ -1,10 +1,9 @@
-"""Kōan — Prompt builder for run.sh.
+"""Kōan — Prompt builder for the agent loop.
 
-Replaces complex sed substitution and string concatenation in run.sh with a single
-Python call. Handles agent prompt assembly (template + merge policy + deep research +
+Handles agent prompt assembly (template + merge policy + deep research +
 verbose mode) and contemplative prompt assembly.
 
-Usage from run.sh:
+Usage:
     PROMPT=$("$PYTHON" -m app.prompt_builder agent \
         --instance "$INSTANCE" \
         --project-name "$PROJECT_NAME" \
@@ -210,7 +209,7 @@ def build_contemplative_prompt(
 
 
 def main():
-    """CLI entry point for run.sh integration."""
+    """CLI entry point."""
     parser = argparse.ArgumentParser(description="Build prompts for Kōan agent")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

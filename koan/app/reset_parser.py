@@ -208,7 +208,7 @@ def should_auto_resume(reset_timestamp: int, now: Optional[datetime] = None) -> 
     return int(now.timestamp()) >= reset_timestamp
 
 
-# CLI interface for run.sh
+# CLI interface
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: reset_parser.py <command> [args...]", file=sys.stderr)

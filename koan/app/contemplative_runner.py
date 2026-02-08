@@ -2,9 +2,8 @@
 Kōan -- Contemplative session runner.
 
 Manages contemplative sessions (probability roll, prompt building, CLI invocation).
-Extracted from duplicated bash logic in run.sh (pause-mode + autonomous-roll).
 
-CLI interface for run.sh:
+CLI interface:
     python -m app.contemplative_runner should-run <chance>
     python -m app.contemplative_runner run --instance ... --project-name ... --session-info ...
 """

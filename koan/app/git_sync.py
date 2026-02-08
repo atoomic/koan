@@ -8,7 +8,7 @@ Checks what changed in the repo since last run:
 - Current branch state
 
 Writes a summary to the journal so Kōan stays aware of repo evolution
-between runs. Called from run.sh periodically (every N runs).
+between runs. Called from run.py periodically (every N runs).
 
 Usage:
     python3 git_sync.py <instance_dir> <project_name> <project_path>

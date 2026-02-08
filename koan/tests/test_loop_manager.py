@@ -1,4 +1,4 @@
-"""Tests for loop_manager.py — loop management utilities for run.sh."""
+"""Tests for loop_manager.py — loop management utilities for the agent loop."""
 
 import os
 import subprocess
@@ -55,7 +55,7 @@ class TestResolveFocusArea:
     def test_wait_mode_no_special_handling(self):
         from app.loop_manager import resolve_focus_area
 
-        # wait mode is handled separately in run.sh before resolve_focus_area
+        # wait mode is handled separately in run.py before resolve_focus_area
         result = resolve_focus_area("wait")
         assert result == "General autonomous work"
 
@@ -498,7 +498,7 @@ class TestCheckHelpers:
 
 
 class TestCLI:
-    """Test CLI interface for run.sh integration."""
+    """Test CLI interface."""
 
     def test_resolve_focus_cli(self):
         result = subprocess.run(

@@ -3,7 +3,7 @@ Koan -- AI exploration runner.
 
 Gathers project context and runs Claude to suggest creative improvements.
 Extracted from the /ai skill handler so it can run as a queued mission
-via run.sh instead of inlining the full prompt into missions.md.
+via run.py instead of inlining the full prompt into missions.md.
 
 CLI:
     python3 -m app.ai_runner --project-path <path> --project-name <name> \

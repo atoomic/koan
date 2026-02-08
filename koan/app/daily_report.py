@@ -3,7 +3,7 @@
 Kōan -- Daily report generator
 
 Builds a concise Telegram-friendly digest of the day's activity.
-Called from run.sh at session boundaries (morning or evening).
+Called from run.py at session boundaries (morning or evening).
 
 Usage from shell:
     python3 daily_report.py [--yesterday]

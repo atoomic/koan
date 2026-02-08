@@ -1,10 +1,9 @@
 """Tests for run loop status tracking and interruptible sleep.
 
 Covers:
-- .koan-status file lifecycle (written by run.sh, read by /status and /ping)
+- .koan-status file lifecycle (written by run.py, read by /status and /ping)
 - has_pending_missions helper (used for sleep-skip logic)
 - Status handler improvements (loop status in /status, /ping)
-- Run.sh structure validation (set_status, has_pending_missions, interruptible sleep)
 """
 
 import importlib.util
@@ -223,87 +222,6 @@ class TestPendingMissionDetection:
         from app.missions import count_pending
         content = "# Missions\n\n## Pending\n\n## In Progress\n\n- working on stuff\n\n## Done\n"
         assert count_pending(content) == 0
-
-
-# ---------------------------------------------------------------------------
-# run.sh structure validation
-# ---------------------------------------------------------------------------
-
-class TestRunShStructure:
-    """Validate run.sh has the expected functions and patterns."""
-
-    @pytest.fixture
-    def run_sh_content(self):
-        return (Path(__file__).parent.parent / "run.sh").read_text()
-
-    def test_set_status_function_exists(self, run_sh_content):
-        """run.sh must define set_status()."""
-        assert "set_status()" in run_sh_content
-
-    def test_set_status_writes_to_koan_status(self, run_sh_content):
-        """set_status writes to .koan-status file."""
-        assert '.koan-status' in run_sh_content
-
-    def test_has_pending_missions_function_exists(self, run_sh_content):
-        """run.sh must define has_pending_missions()."""
-        assert "has_pending_missions()" in run_sh_content
-
-    def test_interruptible_sleep_pattern(self, run_sh_content):
-        """Sleep between runs should check for pending missions."""
-        assert "has_pending_missions" in run_sh_content
-        # Should have the skip-sleep logic
-        assert "skipping sleep" in run_sh_content.lower() or "skip" in run_sh_content.lower()
-
-    def test_status_set_on_mission_execution(self, run_sh_content):
-        """Status should be set when executing a mission."""
-        assert "executing mission" in run_sh_content
-
-    def test_status_set_on_idle(self, run_sh_content):
-        """Status should be set when sleeping."""
-        assert "Idle" in run_sh_content
-
-    def test_status_set_on_post_mission(self, run_sh_content):
-        """Status should be set during post-mission processing."""
-        assert "post-mission processing" in run_sh_content
-
-    def test_status_set_on_preparing(self, run_sh_content):
-        """Status should be set when preparing a run."""
-        assert "preparing" in run_sh_content
-
-    def test_status_cleanup_on_shutdown(self, run_sh_content):
-        """Status file should be cleaned up on shutdown."""
-        # cleanup function should remove status file
-        assert "rm -f" in run_sh_content and ".koan-status" in run_sh_content
-
-    def test_sleep_checks_for_stop(self, run_sh_content):
-        """Interruptible sleep should also check for stop/pause requests."""
-        # Find the sleep section and verify it checks for stop
-        assert ".koan-stop" in run_sh_content
-
-    def test_no_hard_sleep_at_end_of_loop(self, run_sh_content):
-        """The old hard 'sleep $INTERVAL' at end of loop should be replaced."""
-        # Look for the pattern: it should NOT be a bare "sleep $INTERVAL" followed by "done"
-        lines = run_sh_content.splitlines()
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped == "sleep $INTERVAL" and i + 1 < len(lines):
-                next_line = lines[i + 1].strip()
-                # OK if it's inside the interruptible sleep loop (preceded by SLEEP_ELAPSED)
-                # Not OK if followed directly by "done" (the old pattern)
-                if next_line == "done":
-                    pytest.fail(
-                        f"Found hard 'sleep $INTERVAL' followed by 'done' at line {i+1}. "
-                        "Should use interruptible sleep pattern."
-                    )
-
-    def test_set_status_bash_syntax(self):
-        """Verify set_status function has valid bash syntax."""
-        run_sh = Path(__file__).parent.parent / "run.sh"
-        result = subprocess.run(
-            ["bash", "-n", str(run_sh)],
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 0, f"Bash syntax error: {result.stderr}"
 
 
 # ---------------------------------------------------------------------------

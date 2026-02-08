@@ -3,7 +3,7 @@
 Kōan — Telegram notification helper
 
 Standalone module to send messages to Telegram from any process
-(awake.py, run.sh, workers).
+(awake.py, run.py, workers).
 
 Usage from shell:
     python3 notify.py "Mission completed: security audit"

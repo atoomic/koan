@@ -1,26 +1,16 @@
 """Exclusive PID file management for Kōan processes.
 
 Ensures only one instance of each process type (run, awake) can run
-at a time.
-
-Two enforcement strategies:
-- Python processes (awake.py): fcntl.flock() — OS releases lock on crash.
-- Bash processes (run.sh): PID file + liveness check via CLI.
+at a time. Uses fcntl.flock() — OS releases lock on crash.
 
 PID files live in $KOAN_ROOT:
-  .koan-pid-run    — agent loop (run.sh)
+  .koan-pid-run    — agent loop (run.py)
   .koan-pid-awake  — Telegram bridge (awake.py)
 
-Usage from Python (awake.py):
+Usage from Python:
     lock = acquire_pidfile(koan_root, "awake")
     # ... run main loop ...
     release_pidfile(lock, koan_root, "awake")
-
-Usage from bash (run.sh):
-    # At startup — exits 1 if another instance is running:
-    python -m app.pid_manager acquire-pid run "$KOAN_ROOT" $$
-    # At shutdown:
-    python -m app.pid_manager release-pid run "$KOAN_ROOT"
 """
 
 import fcntl
@@ -177,7 +167,7 @@ def check_pidfile(koan_root: Path, process_name: str) -> Optional[int]:
     return None
 
 
-# --- CLI interface for run.sh ---
+# --- CLI interface ---
 if __name__ == "__main__":
     if len(sys.argv) < 4:
         print(

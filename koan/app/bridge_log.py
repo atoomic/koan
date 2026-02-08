@@ -1,6 +1,6 @@
 """Colored log output for the Kōan bridge process.
 
-Mirrors the log() function from run.sh: each category gets its own
+Mirrors the log() function from run.py: each category gets its own
 ANSI color prefix for easy visual scanning in the terminal.
 
 Categories:
@@ -36,7 +36,7 @@ _MAGENTA = "\033[35m"
 _CYAN = "\033[36m"
 _WHITE = "\033[37m"
 
-# Category → color mapping (mirrors run.sh's log() function)
+# Category → color mapping (mirrors run.py's log() function)
 _COLORS = {
     "init": _BLUE,
     "chat": _CYAN,

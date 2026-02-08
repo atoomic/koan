@@ -1,17 +1,13 @@
 """
-Koan -- Loop management utilities for run.sh.
+Koan -- Loop management utilities for the agent loop.
 
-Extracts data-processing and decision-making logic from the main loop
-into testable Python functions. Follows the pattern set by mission_runner.py
-and contemplative_runner.py.
-
-Extracted blocks:
-1. Project config validation and lookup (bash array parsing -> Python)
+Data-processing and decision-making logic used by the main loop:
+1. Project config validation and lookup
 2. Autonomous mode focus area resolution
 3. Pending.md file creation
 4. Interruptible sleep logic with wake-on-mission
 
-CLI interface for run.sh:
+CLI interface:
     python -m app.loop_manager resolve-focus --mode <mode>
     python -m app.loop_manager create-pending --instance ... --project-name ...
     python -m app.loop_manager validate-projects
@@ -218,7 +214,7 @@ def interruptible_sleep(
     return "timeout"
 
 
-# --- CLI interface for run.sh ---
+# --- CLI interface ---
 
 
 def _cli_resolve_focus(args: list) -> None:

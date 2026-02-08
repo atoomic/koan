@@ -188,7 +188,7 @@ def parse_duration(text: str) -> Optional[int]:
     return total if total > 0 else None
 
 
-# CLI interface for run.sh
+# CLI interface
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print(
