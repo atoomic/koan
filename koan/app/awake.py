@@ -53,7 +53,7 @@ from app.command_handlers import (
 from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
 from app.health_check import write_heartbeat
 from app.language_preference import get_language_instruction
-from app.notify import send_telegram
+from app.notify import reset_flood_state, send_telegram
 from app.config import (
     get_chat_tools,
     get_tools_description,
@@ -470,6 +470,10 @@ def handle_message(text: str):
     text = text.strip()
     if not text:
         return
+
+    # Each incoming user message resets flood protection so identical
+    # command responses (e.g. /help twice) are never suppressed.
+    reset_flood_state()
 
     if is_command(text):
         handle_command(text)
