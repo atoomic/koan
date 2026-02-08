@@ -417,10 +417,8 @@ while true; do
   echo -e "${_C_BOLD}${_C_CYAN}=== Run $RUN_NUM/$MAX_RUNS — $(date '+%Y-%m-%d %H:%M:%S') ===${_C_RESET}"
 
   # Refresh usage.md from accumulated token state (handles session/weekly resets)
-  # On first run, trust existing usage.md as source of truth (don't reset counters)
-  if [ $count -gt 0 ]; then
-    "$PYTHON" "$USAGE_ESTIMATOR" refresh "$USAGE_STATE" "$INSTANCE/usage.md" 2>/dev/null || true
-  fi
+  # Always refresh — critical after auto-resume so stale usage.md is cleared
+  "$PYTHON" "$USAGE_ESTIMATOR" refresh "$USAGE_STATE" "$INSTANCE/usage.md" 2>/dev/null || true
 
   # Parse usage.md and decide autonomous mode
   USAGE_DECISION=$("$PYTHON" "$USAGE_TRACKER" "$INSTANCE/usage.md" "$count" "$KOAN_PROJECTS" 2>/dev/null || echo "implement:50:Tracker error:0")
@@ -565,13 +563,19 @@ $KNOWN_PROJECTS"
       wait)
         log quota "Decision: WAIT mode (budget exhausted)"
         echo "  Reason: $DECISION_REASON"
-        echo "  Action: Entering pause mode (will auto-resume after 5h)"
+        # Get the actual session reset timestamp from usage state
+        RESET_TS=$("$PYTHON" "$USAGE_ESTIMATOR" reset-time "$USAGE_STATE" 2>/dev/null || echo "")
+        if [ -z "$RESET_TS" ]; then
+          RESET_TS=$(( $(date +%s) + 18000 ))  # Fallback: now + 5h
+        fi
+        RESET_DISPLAY=$("$PYTHON" -c "from datetime import datetime; print(datetime.fromtimestamp($RESET_TS).strftime('reset at %H:%M'))" 2>/dev/null || echo "reset in ~5h")
+        echo "  Action: Entering pause mode ($RESET_DISPLAY)"
         echo ""
         # Send retrospective and enter pause mode
         "$PYTHON" "$APP_DIR/send_retrospective.py" "$INSTANCE" "$PROJECT_NAME" 2>/dev/null || true
-        # Create pause via pause_manager
-        "$PYTHON" -m app.pause_manager create "$KOAN_ROOT" "quota"
-        notify "⏸️ Koan paused: budget exhausted after $count runs on [$PROJECT_NAME]. Auto-resume in 5h or use /resume."
+        # Create pause with actual reset timestamp (not current time)
+        "$PYTHON" -m app.pause_manager create "$KOAN_ROOT" "quota" "$RESET_TS" "$RESET_DISPLAY"
+        notify "⏸️ Koan paused: budget exhausted after $count runs on [$PROJECT_NAME]. $RESET_DISPLAY or use /resume."
         continue  # Go back to start of loop (will enter pause mode)
         ;;
       review)
