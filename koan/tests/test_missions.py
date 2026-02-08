@@ -163,6 +163,201 @@ class TestExtractNextPending:
         assert extract_next_pending(content) == "- English task"
 
 
+# --- extract_next_pending: multi-line missions ---
+
+class TestExtractNextPendingMultiLine:
+    """Tests for multi-line mission block extraction."""
+
+    def test_simple_continuation(self):
+        """Indented continuation lines are included in the block."""
+        content = (
+            "## Pending\n\n"
+            "- Fix the parser\n"
+            "  to handle multi-line missions\n"
+            "  and code blocks\n\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content)
+        assert "- Fix the parser" in result
+        assert "to handle multi-line missions" in result
+        assert "and code blocks" in result
+
+    def test_code_block_included(self):
+        """Code-fenced blocks within a mission are included."""
+        content = (
+            "## Pending\n\n"
+            "- Implement the following:\n"
+            "  ```python\n"
+            "  def hello():\n"
+            "      print('world')\n"
+            "  ```\n\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content)
+        assert "- Implement the following:" in result
+        assert "```python" in result
+        assert "def hello():" in result
+        assert "print('world')" in result
+
+    def test_code_block_with_empty_lines(self):
+        """Empty lines inside code fences do NOT terminate the block."""
+        content = (
+            "## Pending\n\n"
+            "- Fix the bug with this code:\n"
+            "  ```\n"
+            "  line1\n"
+            "\n"
+            "  line3\n"
+            "  ```\n\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content)
+        assert "line1" in result
+        assert "line3" in result
+        assert result.count("```") == 2
+
+    def test_stops_at_next_item(self):
+        """Multi-line block stops at the next '- ' item."""
+        content = (
+            "## Pending\n\n"
+            "- First mission\n"
+            "  with details\n"
+            "- Second mission\n\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content)
+        assert "First mission" in result
+        assert "with details" in result
+        assert "Second mission" not in result
+
+    def test_stops_at_empty_line(self):
+        """Multi-line block stops at an empty line (outside code fences)."""
+        content = (
+            "## Pending\n\n"
+            "- Mission text\n"
+            "  continuation\n"
+            "\n"
+            "- Next mission\n\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content)
+        assert "Mission text" in result
+        assert "continuation" in result
+        assert "Next mission" not in result
+
+    def test_stops_at_section_header(self):
+        """Multi-line block stops at ## header."""
+        content = (
+            "## Pending\n\n"
+            "- Mission\n"
+            "  details\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content)
+        assert "Mission" in result
+        assert "details" in result
+
+    def test_project_filter_with_multiline(self):
+        """Project filter works with multi-line missions."""
+        content = (
+            "## Pending\n\n"
+            "- [project:koan] Fix the parser\n"
+            "  to handle multi-line\n"
+            "- [project:other] Other task\n\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content, "koan")
+        assert "Fix the parser" in result
+        assert "to handle multi-line" in result
+        assert "Other task" not in result
+
+    def test_project_filter_skips_multiline_non_match(self):
+        """When first multi-line mission doesn't match, skip to next."""
+        content = (
+            "## Pending\n\n"
+            "- [project:other] Wrong project\n"
+            "  with continuation\n"
+            "- [project:koan] Right project\n"
+            "  with its own continuation\n\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content, "koan")
+        assert "Right project" in result
+        assert "its own continuation" in result
+        assert "Wrong project" not in result
+
+    def test_single_line_still_works(self):
+        """Single-line missions still return just the one line."""
+        content = "## Pending\n\n- Simple task\n\n## In Progress\n"
+        result = extract_next_pending(content)
+        assert result == "- Simple task"
+
+    def test_real_world_multiline_mission(self):
+        """Real-world multi-line mission from missions.md."""
+        content = (
+            "## Pending\n\n"
+            "- [project:koan] mission in the pending queue can be on multiple lines\n"
+            "  to for example provide a code block or continue the discussion.\n"
+            "  I want to improve the parsing from Missions when we read them.\n\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content, "koan")
+        assert "multiple lines" in result
+        assert "code block" in result
+        assert "improve the parsing" in result
+
+    def test_subheader_with_multiline(self):
+        """Multi-line missions under ### project sub-headers."""
+        content = (
+            "## Pending\n\n"
+            "### project:koan\n"
+            "- Fix the parser\n"
+            "  with continuation\n"
+            "- Another task\n\n"
+            "## In Progress\n"
+        )
+        result = extract_next_pending(content, "koan")
+        assert "Fix the parser" in result
+        assert "with continuation" in result
+        assert "Another task" not in result
+
+
+class TestParseSectionsCodeFence:
+    """Tests for code-fenced block handling in parse_sections."""
+
+    def test_code_fence_in_mission(self):
+        """Code fences within a mission item are preserved."""
+        content = (
+            "## Pending\n\n"
+            "- Task with code\n"
+            "  ```python\n"
+            "  x = 1\n"
+            "  ```\n\n"
+            "## In Progress\n"
+        )
+        result = parse_sections(content)
+        assert len(result["pending"]) == 1
+        assert "```python" in result["pending"][0]
+        assert "x = 1" in result["pending"][0]
+
+    def test_code_fence_with_empty_lines_in_complex_block(self):
+        """Empty lines inside code fences in ### blocks don't split the block."""
+        content = (
+            "## In Progress\n\n"
+            "### Big task\n"
+            "```\n"
+            "line1\n"
+            "\n"
+            "line3\n"
+            "```\n\n"
+            "## Done\n"
+        )
+        result = parse_sections(content)
+        assert len(result["in_progress"]) == 1
+        assert "line1" in result["in_progress"][0]
+        assert "line3" in result["in_progress"][0]
+
+
 # --- extract_project_tag ---
 
 class TestExtractProjectTag:
