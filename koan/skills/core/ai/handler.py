@@ -1,14 +1,22 @@
-"""Skill handler for /ai — queue an AI exploration mission."""
+"""Koan /ai skill -- queue an AI exploration mission."""
 
 import os
 import random
-import subprocess
+import shlex
 from pathlib import Path
 from typing import List, Tuple
 
 
 def handle(ctx):
-    """Queue an AI exploration mission for a project."""
+    """Handle /ai command -- queue an AI exploration mission.
+
+    Usage:
+        /ai [project]
+
+    Queues a mission that explores a project in depth via a dedicated
+    CLI runner (app.ai_runner), gathers git context, and suggests
+    creative improvements.
+    """
     projects = _get_projects(ctx)
     if not projects:
         return "No projects configured."
@@ -20,29 +28,26 @@ def handle(ctx):
         known = ", ".join(n for n, _ in projects)
         return f"Unknown project '{target}'. Known: {known}"
 
-    # Gather context for the prompt
-    git_activity = _gather_git_activity(path)
-    project_structure = _gather_project_structure(path)
-    missions_context = _get_missions_context(ctx.instance_dir)
-
-    # Build the exploration prompt
-    from app.prompts import load_skill_prompt
-    prompt = load_skill_prompt(
-        Path(__file__).parent,
-        "ai-explore",
-        PROJECT_NAME=name,
-        GIT_ACTIVITY=git_activity,
-        PROJECT_STRUCTURE=project_structure,
-        MISSIONS_CONTEXT=missions_context,
+    # Build CLI command (same pattern as /rebase, /plan, /check, /claude.md)
+    koan_root = ctx.koan_root
+    instance_dir = ctx.instance_dir
+    cmd = (
+        f"cd {koan_root}/koan && "
+        f"{koan_root}/.venv/bin/python3 -m app.ai_runner "
+        f"--project-path {shlex.quote(path)} "
+        f"--project-name {shlex.quote(name)} "
+        f"--instance-dir {shlex.quote(str(instance_dir))}"
     )
 
-    # Queue as a mission
+    # Queue the mission
     from app.utils import insert_pending_mission
-    mission_text = (
-        f"[project:{name}] AI exploration — {prompt}"
+
+    mission_entry = (
+        f"- [project:{name}] AI exploration "
+        f"\u2014 run: `{cmd}`"
     )
-    missions_path = ctx.instance_dir / "missions.md"
-    insert_pending_mission(missions_path, mission_text)
+    missions_path = instance_dir / "missions.md"
+    insert_pending_mission(missions_path, mission_entry)
 
     return f"AI exploration queued for {name}"
 
@@ -50,6 +55,7 @@ def handle(ctx):
 def _get_projects(ctx) -> List[Tuple[str, str]]:
     """Get list of (name, path) for project exploration."""
     from app.utils import get_known_projects
+
     try:
         projects = get_known_projects()
         return [(name, path) for name, path in projects if Path(path).is_dir()]
@@ -78,82 +84,3 @@ def _resolve_project(
             return name, path
 
     return None, None
-
-
-def _get_missions_context(instance_dir: Path) -> str:
-    """Get current missions context for the prompt."""
-    missions_file = instance_dir / "missions.md"
-    if not missions_file.exists():
-        return "No active missions."
-
-    from app.missions import parse_sections
-    sections = parse_sections(missions_file.read_text())
-    in_progress = sections.get("in_progress", [])
-    pending = sections.get("pending", [])
-    parts = []
-    if in_progress:
-        parts.append("In progress:\n" + "\n".join(in_progress[:5]))
-    if pending:
-        parts.append("Pending:\n" + "\n".join(pending[:5]))
-    return "\n".join(parts) if parts else "No active missions."
-
-
-def _gather_git_activity(project_path: str) -> str:
-    """Gather recent git activity for a project."""
-    parts = []
-    try:
-        result = subprocess.run(
-            ["git", "log", "--oneline", "-15", "--no-merges"],
-            capture_output=True, text=True, timeout=10,
-            cwd=project_path,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            parts.append("Recent commits:\n" + result.stdout.strip())
-
-        result = subprocess.run(
-            ["git", "branch", "-r", "--sort=-committerdate",
-             "--format=%(refname:short)"],
-            capture_output=True, text=True, timeout=10,
-            cwd=project_path,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            branches = result.stdout.strip().split("\n")[:10]
-            parts.append("Active branches:\n" + "\n".join(branches))
-
-        result = subprocess.run(
-            ["git", "diff", "--stat", "HEAD~10", "HEAD"],
-            capture_output=True, text=True, timeout=10,
-            cwd=project_path,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            parts.append("Recent changes:\n" + result.stdout.strip())
-
-    except (subprocess.TimeoutExpired, Exception) as e:
-        parts.append(f"(git activity unavailable: {e})")
-
-    return "\n\n".join(parts) if parts else "No git activity available."
-
-
-def _gather_project_structure(project_path: str) -> str:
-    """Gather top-level project structure."""
-    try:
-        p = Path(project_path)
-        entries = sorted(p.iterdir())
-        dirs = [
-            e.name + "/"
-            for e in entries
-            if e.is_dir() and not e.name.startswith(".")
-        ]
-        files = [
-            e.name
-            for e in entries
-            if e.is_file() and not e.name.startswith(".")
-        ]
-        parts = []
-        if dirs:
-            parts.append("Directories: " + ", ".join(dirs[:20]))
-        if files:
-            parts.append("Files: " + ", ".join(files[:20]))
-        return "\n".join(parts)
-    except Exception:
-        return "Structure unavailable."

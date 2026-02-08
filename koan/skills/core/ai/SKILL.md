@@ -6,14 +6,14 @@ version: 1.0.0
 commands:
   - name: ai
     description: Queue an AI exploration mission for a project
-    aliases: [ia, magic]
+    aliases: [ia]
     usage: |
       /ai [project]
       /ia [project]
 
-      Queues a mission that explores a project in depth and suggests
-      creative improvements. Unlike /magic (instant, lightweight),
-      /ai runs as a full agent mission with access to the codebase.
+      Queues a mission that explores a project in depth via a dedicated
+      CLI runner (app.ai_runner) and suggests creative improvements.
+      Runs as a full agent mission with access to the codebase.
 
       Examples:
         /ai         — explore a random project
