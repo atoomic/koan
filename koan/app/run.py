@@ -739,13 +739,13 @@ def main_loop():
     os.environ["KOAN_CURRENT_PROJECT"] = projects[0][0]
     os.environ["KOAN_CURRENT_PROJECT_PATH"] = projects[0][1]
 
-    # Startup sequence
-    max_runs, interval, branch_prefix = run_startup(koan_root, instance, projects)
-
-    git_sync_interval = int(os.environ.get("KOAN_GIT_SYNC_INTERVAL", "5"))
     count = 0
-
     try:
+        # Startup sequence
+        max_runs, interval, branch_prefix = run_startup(koan_root, instance, projects)
+
+        git_sync_interval = int(os.environ.get("KOAN_GIT_SYNC_INTERVAL", "5"))
+
         while True:
             # --- Stop check ---
             stop_file = Path(koan_root, ".koan-stop")
@@ -1073,15 +1073,6 @@ def main_loop():
         release_pid(Path(koan_root), "run")
         log("koan", f"Shutdown. {count} runs executed.")
 
-        # End-of-session daily report
-        try:
-            subprocess.run(
-                [sys.executable, Path(koan_root, "koan/app/daily_report.py").as_posix()],
-                capture_output=True, timeout=60,
-            )
-        except Exception:
-            pass
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1128,6 +1119,8 @@ def main():
         try:
             main_loop()
             break  # Normal exit
+        except KeyboardInterrupt:
+            break
         except SystemExit as e:
             if e.code == 42:
                 # Restart signal
