@@ -1,38 +1,13 @@
-"""Handler for /update and /restart commands.
+"""Handler for /update command (aliases: /restart, /upgrade).
 
-/update: Pull latest code from upstream/main, then restart both processes.
-/restart: Restart both processes without updating code.
+Pulls latest code from upstream/main, then restarts both processes.
 """
 
 from app.skills import SkillContext
 
 
 def handle(ctx: SkillContext) -> str:
-    """Dispatch /update or /restart based on command name."""
-    if ctx.command_name == "restart":
-        return _handle_restart(ctx)
-    return _handle_update(ctx)
-
-
-def _handle_restart(ctx: SkillContext) -> str:
-    """Restart both bridge and run loop processes."""
-    from app.restart_manager import request_restart, check_restart
-    from app.pause_manager import remove_pause
-
-    # Dedup: if restart file exists (any age), skip.  This prevents restart
-    # loops when Telegram re-delivers the /restart message after os.execv.
-    if check_restart(ctx.koan_root):
-        return "Restart already pending."
-
-    # Clear any pause state -- restart should start fresh
-    remove_pause(str(ctx.koan_root))
-
-    request_restart(ctx.koan_root)
-    return "🔄 Restart requested. Both processes will restart momentarily."
-
-
-def _handle_update(ctx: SkillContext) -> str:
-    """Pull latest code from upstream and restart."""
+    """Pull latest code from upstream and restart both processes."""
     from app.update_manager import pull_upstream
     from app.restart_manager import request_restart
     from app.pause_manager import remove_pause

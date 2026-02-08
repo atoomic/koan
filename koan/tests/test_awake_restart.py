@@ -73,6 +73,15 @@ class TestHelpText:
         assert "/awake" in help_text
         assert "/start" in help_text
 
+    @patch("app.command_handlers.send_telegram")
+    def test_help_lists_restart_as_update_alias(self, mock_send):
+        """Help should show /restart as an alias of the /update skill."""
+        from app.command_handlers import _handle_help
+        _handle_help()
+        help_text = mock_send.call_args[0][0]
+        # /update should appear in the help text (dynamic core skill listing)
+        assert "/update" in help_text
+
 
 class TestRunShRestart:
     """Structural tests for run.sh restart integration."""

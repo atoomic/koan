@@ -1,4 +1,4 @@
-"""Tests for the /restart command and restart_manager module."""
+"""Tests for the restart_manager module and /restart as /update alias."""
 
 import os
 import sys
@@ -108,16 +108,18 @@ class TestRestartExitCode:
 
 
 # ---------------------------------------------------------------------------
-# awake.py restart integration tests
+# /restart as /update alias — integration tests
 # ---------------------------------------------------------------------------
 
 
-class TestRestartSkillHandler:
-    """Test /restart behavior via the skill handler (moved from command_handlers)."""
+class TestRestartAsUpdateAlias:
+    """/restart is an alias for /update — both pull + restart."""
 
-    def test_restart_creates_signal_file(self, tmp_path):
-        from skills.core.update.handler import _handle_restart
+    def test_restart_alias_pulls_and_restarts(self, tmp_path):
+        """Invoking handler with command_name='restart' runs update logic."""
+        from skills.core.update.handler import handle
         from app.skills import SkillContext
+        from app.update_manager import UpdateResult
         from unittest.mock import MagicMock
 
         ctx = SkillContext(
@@ -128,19 +130,25 @@ class TestRestartSkillHandler:
             send_message=MagicMock(),
             handle_chat=MagicMock(),
         )
-        result = _handle_restart(ctx)
-        assert (tmp_path / RESTART_FILE).exists()
-        assert "Restart" in result
+        with patch("app.update_manager.pull_upstream") as mock_pull, \
+             patch("app.restart_manager.request_restart") as mock_request, \
+             patch("app.pause_manager.remove_pause"):
+            mock_pull.return_value = UpdateResult(
+                success=True, old_commit="aaa", new_commit="bbb",
+                commits_pulled=1,
+            )
+            result = handle(ctx)
 
-    def test_restart_clears_pause_state(self, tmp_path):
-        from skills.core.update.handler import _handle_restart
+        mock_pull.assert_called_once_with(tmp_path)
+        mock_request.assert_called_once_with(tmp_path)
+        assert "Restarting" in result
+
+    def test_restart_alias_no_changes(self, tmp_path):
+        """When already up to date, /restart reports no changes."""
+        from skills.core.update.handler import handle
         from app.skills import SkillContext
+        from app.update_manager import UpdateResult
         from unittest.mock import MagicMock
-
-        pause_file = tmp_path / ".koan-pause"
-        reason_file = tmp_path / ".koan-pause-reason"
-        pause_file.write_text("PAUSE")
-        reason_file.write_text("manual")
 
         ctx = SkillContext(
             koan_root=tmp_path,
@@ -150,28 +158,14 @@ class TestRestartSkillHandler:
             send_message=MagicMock(),
             handle_chat=MagicMock(),
         )
-        _handle_restart(ctx)
+        with patch("app.update_manager.pull_upstream") as mock_pull:
+            mock_pull.return_value = UpdateResult(
+                success=True, old_commit="abc", new_commit="abc",
+                commits_pulled=0,
+            )
+            result = handle(ctx)
 
-        assert not pause_file.exists()
-        assert not reason_file.exists()
-
-    def test_restart_dedup_skips_when_file_exists(self, tmp_path):
-        """Second /restart call is a no-op when file already exists (dedup)."""
-        from skills.core.update.handler import _handle_restart
-        from app.skills import SkillContext
-        from unittest.mock import MagicMock
-
-        (tmp_path / RESTART_FILE).write_text("already pending")
-        ctx = SkillContext(
-            koan_root=tmp_path,
-            instance_dir=tmp_path / "instance",
-            command_name="restart",
-            args="",
-            send_message=MagicMock(),
-            handle_chat=MagicMock(),
-        )
-        result = _handle_restart(ctx)
-        assert "pending" in result.lower()
+        assert "up to date" in result
 
     @patch("app.command_handlers._dispatch_skill")
     def test_command_routes_restart_to_skill(self, mock_dispatch):
@@ -180,25 +174,29 @@ class TestRestartSkillHandler:
         mock_dispatch.assert_called_once()
 
     @patch("app.command_handlers.send_telegram")
-    def test_handle_command_restart_creates_file_end_to_end(self, mock_send, tmp_path):
-        """End-to-end: handle_command('/restart') → skill dispatch → handler → file created.
+    def test_handle_command_restart_end_to_end(self, mock_send, tmp_path):
+        """End-to-end: handle_command('/restart') → skill dispatch → handler.
 
         This test does NOT mock _dispatch_skill — it verifies the full path
-        from command routing through skill execution to .koan-restart creation.
+        from command routing through skill execution.
         """
         from unittest.mock import MagicMock
         import app.command_handlers as ch
         from app.bridge_state import _reset_registry
+        from app.update_manager import UpdateResult
 
         _reset_registry()
         with patch.object(ch, "KOAN_ROOT", tmp_path), \
-             patch.object(ch, "INSTANCE_DIR", tmp_path / "instance"):
+             patch.object(ch, "INSTANCE_DIR", tmp_path / "instance"), \
+             patch("app.update_manager.pull_upstream") as mock_pull:
+            mock_pull.return_value = UpdateResult(
+                success=True, old_commit="abc", new_commit="abc",
+                commits_pulled=0,
+            )
             ch.handle_command("/restart")
 
-        assert (tmp_path / RESTART_FILE).exists(), \
-            "/restart should create .koan-restart via skill dispatch"
         assert mock_send.called
-        assert "Restart" in mock_send.call_args[0][0]
+        assert "up to date" in mock_send.call_args[0][0]
         _reset_registry()
 
     @patch("app.command_handlers.handle_resume")
@@ -237,59 +235,30 @@ class TestRestartLoopPrevention:
         request_restart(tmp_path)
         assert check_restart(tmp_path, since=startup_time) is True
 
-    def test_redelivered_restart_is_deduplicated(self, tmp_path):
-        """Simulates the restart loop scenario:
-        1. /restart creates file (via skill handler)
-        2. Process re-execs (file still exists as dedup guard)
-        3. Telegram re-delivers /restart in first poll
-        4. skill handler sees file exists → returns "already pending"
-        5. main() clears file after first poll
-        6. Future /restart works normally
-        """
-        from skills.core.update.handler import _handle_restart
-        from app.skills import SkillContext
-        from unittest.mock import MagicMock
 
-        ctx = SkillContext(
-            koan_root=tmp_path,
-            instance_dir=tmp_path / "instance",
-            command_name="restart",
-            args="",
-            send_message=MagicMock(),
-            handle_chat=MagicMock(),
-        )
-
-        # Step 1: First /restart
-        result = _handle_restart(ctx)
-        assert (tmp_path / RESTART_FILE).exists()
-        assert "Restart" in result
-
-        # Step 3-4: Re-delivered /restart — file still exists → dedup
-        result = _handle_restart(ctx)
-        assert "pending" in result.lower()
-
-        # Step 5: main() clears the file after first poll
-        clear_restart(tmp_path)
-        assert not (tmp_path / RESTART_FILE).exists()
-
-        # Step 6: New /restart is now honored
-        result = _handle_restart(ctx)
-        assert (tmp_path / RESTART_FILE).exists()
-        assert "Restart" in result
-
-
-class TestHelpExcludesRestartFromCore:
-    """Verify /restart is no longer listed as a core command in help."""
+class TestHelpListsRestartAsAlias:
+    """Verify /restart appears in help as an alias of /update."""
 
     @patch("app.command_handlers.send_telegram")
-    def test_help_resume_aliases_exclude_restart(self, mock_send):
+    def test_help_shows_restart_as_update_alias(self, mock_send):
         from app.command_handlers import _handle_help
         _handle_help()
         help_text = mock_send.call_args[0][0]
-        # Find the /resume line and check /restart is not listed as alias
+        # /restart should NOT appear in the resume aliases
         for line in help_text.split("\n"):
             if "/resume" in line and "alias" in line:
                 assert "/restart" not in line
+
+    def test_restart_in_update_skill_aliases(self):
+        """The skill registry should list /restart as an alias of /update."""
+        from app.skills import build_registry
+        registry = build_registry()
+        skill = registry.find_by_command("restart")
+        assert skill is not None
+        assert skill.name == "update"
+        # restart is an alias, not a separate command
+        assert len(skill.commands) == 1
+        assert "restart" in skill.commands[0].aliases
 
 
 class TestMainLoopRestartDetection:
