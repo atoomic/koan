@@ -2,7 +2,8 @@
 
 import pytest
 from pathlib import Path
-from app.usage_tracker import UsageTracker
+from unittest.mock import patch
+from app.usage_tracker import UsageTracker, _get_budget_mode
 
 
 @pytest.fixture
@@ -354,3 +355,115 @@ class TestCanAffordRun:
         assert tracker.can_afford_run("implement") is True
         # deep = 16.0 → 16.0 > 10
         assert tracker.can_afford_run("deep") is False
+
+
+class TestBudgetMode:
+    """Test budget_mode parameter for controlling which limits are active."""
+
+    def test_full_mode_uses_both_limits(self, tmp_path):
+        """budget_mode='full': min(session, weekly) determines available budget."""
+        usage = tmp_path / "usage.md"
+        usage.write_text("Session (5hr) : 20% (reset in 4h)\nWeekly (7 day) : 95% (Resets in 1d)")
+        tracker = UsageTracker(usage, budget_mode="full")
+
+        session_rem, weekly_rem = tracker.remaining_budget()
+        assert session_rem == 70.0  # 100 - 20 - 10
+        assert weekly_rem == 0.0    # max(0, 100 - 95 - 10)
+        assert tracker.decide_mode() == "wait"
+
+    def test_session_only_ignores_weekly(self, tmp_path):
+        """budget_mode='session_only': weekly limit is ignored."""
+        usage = tmp_path / "usage.md"
+        usage.write_text("Session (5hr) : 20% (reset in 4h)\nWeekly (7 day) : 95% (Resets in 1d)")
+        tracker = UsageTracker(usage, budget_mode="session_only")
+
+        session_rem, weekly_rem = tracker.remaining_budget()
+        assert session_rem == 70.0  # 100 - 20 - 10
+        assert weekly_rem == 90.0   # ignored, returns 90
+        # min(70, 90) = 70 → deep mode
+        assert tracker.decide_mode() == "deep"
+
+    def test_disabled_mode_always_deep(self, tmp_path):
+        """budget_mode='disabled': always returns high budget."""
+        usage = tmp_path / "usage.md"
+        usage.write_text("Session (5hr) : 95% (reset in 1h)\nWeekly (7 day) : 99% (Resets in 1d)")
+        tracker = UsageTracker(usage, budget_mode="disabled")
+
+        session_rem, weekly_rem = tracker.remaining_budget()
+        assert session_rem == 90.0
+        assert weekly_rem == 90.0
+        assert tracker.decide_mode() == "deep"
+
+    def test_session_only_still_respects_session(self, tmp_path):
+        """Session-only mode still pauses when session is exhausted."""
+        usage = tmp_path / "usage.md"
+        usage.write_text("Session (5hr) : 98% (reset in 0m)\nWeekly (7 day) : 10% (Resets in 5d)")
+        tracker = UsageTracker(usage, budget_mode="session_only")
+
+        session_rem, weekly_rem = tracker.remaining_budget()
+        assert session_rem == 0.0   # 100 - 98 - 10 → max(0, -8) = 0
+        assert weekly_rem == 90.0   # ignored
+        # min(0, 90) = 0 → wait mode
+        assert tracker.decide_mode() == "wait"
+
+    def test_default_budget_mode(self, usage_file_standard):
+        """Default budget_mode is 'full'."""
+        tracker = UsageTracker(usage_file_standard)
+        assert tracker.budget_mode == "full"
+
+    def test_budget_mode_affects_format_output(self, tmp_path):
+        """Format output reflects the effective available budget."""
+        usage = tmp_path / "usage.md"
+        usage.write_text("Session (5hr) : 20% (reset in 4h)\nWeekly (7 day) : 95% (Resets in 1d)")
+
+        # Full mode: available = 0
+        full = UsageTracker(usage, budget_mode="full")
+        assert "0" in full.format_output(full.decide_mode(), 0)
+
+        # Session-only: available = 70
+        session = UsageTracker(usage, budget_mode="session_only")
+        output = session.format_output(session.decide_mode(), 0)
+        assert "70" in output
+
+    def test_session_only_can_afford_run(self, tmp_path):
+        """Session-only mode allows runs even with high weekly usage."""
+        usage = tmp_path / "usage.md"
+        usage.write_text("Session (5hr) : 30% (reset in 3h)\nWeekly (7 day) : 95% (Resets in 1d)")
+        tracker = UsageTracker(usage, runs_completed=5, budget_mode="session_only")
+        # available = min(60, 90) = 60
+        assert tracker.can_afford_run("deep") is True
+
+
+class TestGetBudgetMode:
+    """Test _get_budget_mode() config reading."""
+
+    def test_default_is_session_only(self):
+        """Default budget_mode when not configured is 'session_only'."""
+        with patch("app.utils.load_config", return_value={}):
+            assert _get_budget_mode() == "session_only"
+
+    def test_reads_from_config(self):
+        """Reads usage.budget_mode from config.yaml."""
+        with patch("app.utils.load_config", return_value={
+            "usage": {"budget_mode": "full"}
+        }):
+            assert _get_budget_mode() == "full"
+
+    def test_disabled_from_config(self):
+        """Disabled mode from config."""
+        with patch("app.utils.load_config", return_value={
+            "usage": {"budget_mode": "disabled"}
+        }):
+            assert _get_budget_mode() == "disabled"
+
+    def test_invalid_value_falls_back(self):
+        """Invalid budget_mode value falls back to session_only."""
+        with patch("app.utils.load_config", return_value={
+            "usage": {"budget_mode": "bogus"}
+        }):
+            assert _get_budget_mode() == "session_only"
+
+    def test_config_load_error_falls_back(self):
+        """Config load failure falls back to session_only."""
+        with patch("app.utils.load_config", side_effect=Exception("nope")):
+            assert _get_budget_mode() == "session_only"

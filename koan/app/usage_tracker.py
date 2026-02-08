@@ -30,12 +30,20 @@ STALE_SAFETY_MARGIN = 15.0  # vs normal 10%
 class UsageTracker:
     """Track Claude usage and decide autonomous mode based on remaining budget."""
 
-    def __init__(self, usage_file: Path, runs_completed: int = 0):
+    def __init__(self, usage_file: Path, runs_completed: int = 0,
+                 budget_mode: str = "full"):
         """Initialize tracker by parsing usage.md file.
 
         Args:
             usage_file: Path to instance/usage.md
             runs_completed: Number of runs completed in current session
+            budget_mode: Controls which internal budget gates are active.
+                "full" (default): both session and weekly gates.
+                "session_only": ignore weekly limit — only session budget matters.
+                    Useful when the internal weekly token estimate drifts from
+                    the real Claude API quota.
+                "disabled": no internal budget gating — only real API quota
+                    exhaustion errors (from quota_handler.py) will pause.
 
         Raises:
             ValueError: If usage file cannot be parsed
@@ -46,6 +54,7 @@ class UsageTracker:
         self.weekly_reset = "unknown"
         self.runs_this_session = runs_completed
         self.safety_margin = 10.0  # Keep 10% buffer
+        self.budget_mode = budget_mode
 
         if usage_file.exists():
             self._parse_usage_file(usage_file)
@@ -89,10 +98,22 @@ class UsageTracker:
     def remaining_budget(self) -> Tuple[float, float]:
         """Calculate remaining budget after safety margin.
 
+        Respects budget_mode:
+        - "disabled": always returns (90, 90) — effectively unlimited
+        - "session_only": weekly_remaining is always 90 (ignored)
+        - "full": both limits active
+
         Returns:
             (session_remaining, weekly_remaining) in percentage points
         """
+        if self.budget_mode == "disabled":
+            return 90.0, 90.0
+
         session_remaining = max(0, 100 - self.session_pct - self.safety_margin)
+
+        if self.budget_mode == "session_only":
+            return session_remaining, 90.0
+
         weekly_remaining = max(0, 100 - self.weekly_pct - self.safety_margin)
         return session_remaining, weekly_remaining
 
@@ -226,6 +247,22 @@ class UsageTracker:
         return f"{mode}:{available:.0f}:{reason}:{project_idx}"
 
 
+def _get_budget_mode() -> str:
+    """Read budget_mode from config.yaml → usage.budget_mode.
+
+    Valid values: "full" (default), "session_only", "disabled".
+    """
+    try:
+        from app.utils import load_config
+        config = load_config()
+        mode = config.get("usage", {}).get("budget_mode", "session_only")
+        if mode in ("full", "session_only", "disabled"):
+            return mode
+    except Exception:
+        pass
+    return "session_only"
+
+
 def main():
     """CLI entry point for usage_tracker.py"""
     if len(sys.argv) < 3:
@@ -236,8 +273,10 @@ def main():
     run_count = int(sys.argv[2])
     projects = sys.argv[3] if len(sys.argv) > 3 else ""
 
+    budget_mode = _get_budget_mode()
+
     try:
-        tracker = UsageTracker(usage_file, run_count)
+        tracker = UsageTracker(usage_file, run_count, budget_mode=budget_mode)
         mode = tracker.decide_mode()
         project_idx = tracker.select_project(projects, mode, run_count + 1)  # +1 because next run
         output = tracker.format_output(mode, project_idx)
