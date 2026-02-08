@@ -313,9 +313,9 @@ class TestGetAuthorEnv:
         with patch.dict("os.environ", {"KOAN_EMAIL": "koan@example.com"}):
             env = get_author_env()
             assert env == {
-                "GIT_AUTHOR_NAME": "Koan",
+                "GIT_AUTHOR_NAME": "Kōan",
                 "GIT_AUTHOR_EMAIL": "koan@example.com",
-                "GIT_COMMITTER_NAME": "Koan",
+                "GIT_COMMITTER_NAME": "Kōan",
                 "GIT_COMMITTER_EMAIL": "koan@example.com",
             }
 
@@ -1197,7 +1197,7 @@ class TestHelperFunctions:
     def test_get_author_env_with_env(self, monkeypatch):
         monkeypatch.setenv("KOAN_EMAIL", "koan@example.com")
         env = get_author_env()
-        assert env["GIT_AUTHOR_NAME"] == "Koan"
+        assert env["GIT_AUTHOR_NAME"] == "Kōan"
         assert env["GIT_AUTHOR_EMAIL"] == "koan@example.com"
 
     def test_get_author_env_without_env(self, monkeypatch):

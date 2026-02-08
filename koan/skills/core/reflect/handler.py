@@ -1,4 +1,4 @@
-"""Koan reflect skill — write reflections to the shared journal."""
+"""Kōan reflect skill — write reflections to the shared journal."""
 
 import fcntl
 from datetime import datetime

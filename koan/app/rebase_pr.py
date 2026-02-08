@@ -1,5 +1,5 @@
 """
-Koan -- Pull Request rebase workflow.
+Kōan -- Pull Request rebase workflow.
 
 Rebases a PR branch onto its target branch, analyzing review comments
 and applying requested changes via Claude before pushing.
@@ -370,7 +370,7 @@ def _push_with_fallback(
             f"Supersedes #{pr_number}.\n\n"
             f"This PR contains the rebased version of `{branch}` onto `{base}`.\n"
             f"Original PR: {context.get('url', f'#{pr_number}')}\n\n"
-            f"---\n_Automated by Koan_"
+            f"---\n_Automated by Kōan_"
         )
         new_pr_url = pr_create(
             title=f"[Rebase] {title}",
@@ -393,7 +393,7 @@ def _push_with_fallback(
                 "--body",
                 f"This PR has been rebased and superseded by {new_pr_ref}.\n\n"
                 f"The new PR contains the same changes rebased onto `{base}`.\n\n"
-                f"---\n_Automated by Koan_",
+                f"---\n_Automated by Kōan_",
             )
             actions.append("Cross-linked original PR")
         except Exception:
@@ -440,7 +440,7 @@ def _build_rebase_comment(
         f"### Actions\n\n"
         f"{actions_md}\n\n"
         f"---\n"
-        f"_Automated by Koan_"
+        f"_Automated by Kōan_"
     )
 
 

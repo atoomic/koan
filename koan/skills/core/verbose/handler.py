@@ -1,4 +1,4 @@
-"""Koan verbose/silent skill — toggle progress update verbosity."""
+"""Kōan verbose/silent skill — toggle progress update verbosity."""
 
 
 def handle(ctx):

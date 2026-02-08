@@ -170,9 +170,9 @@ BRANCH_PREFIX=$("$PYTHON" -c "from app.utils import get_branch_prefix; print(get
 
 # Set git identity for koan commits (overrides local git config)
 if [ -n "${KOAN_EMAIL:-}" ]; then
-  export GIT_AUTHOR_NAME="Koan"
+  export GIT_AUTHOR_NAME="Kōan"
   export GIT_AUTHOR_EMAIL="$KOAN_EMAIL"
-  export GIT_COMMITTER_NAME="Koan"
+  export GIT_COMMITTER_NAME="Kōan"
   export GIT_COMMITTER_EMAIL="$KOAN_EMAIL"
 fi
 
@@ -221,7 +221,7 @@ cleanup() {
   "$PYTHON" -m app.pid_manager release-pid run "$KOAN_ROOT" 2>/dev/null || true
   log koan "Shutdown."
   CURRENT_PROJ=$(cat "$KOAN_ROOT/.koan-project" 2>/dev/null || echo "unknown")
-  notify "Koan interrupted after $count runs. Last project: $CURRENT_PROJ."
+  notify "Kōan interrupted after $count runs. Last project: $CURRENT_PROJ."
   exit 0
 }
 
@@ -315,7 +315,7 @@ STARTUP_PAUSE=""
 if [ -f "$KOAN_ROOT/.koan-pause" ]; then
   STARTUP_PAUSE=" Currently PAUSED."
 fi
-notify "Koan starting — $MAX_RUNS max runs, ${INTERVAL}s interval.
+notify "Kōan starting — $MAX_RUNS max runs, ${INTERVAL}s interval.
 Projects:
 $STARTUP_PROJECTS
 Current: ${PROJECT_NAMES[0]}.$STARTUP_PAUSE"
@@ -343,7 +343,7 @@ while true; do
     log koan "Stop requested."
     rm -f "$KOAN_ROOT/.koan-stop"
     CURRENT_PROJ=$(cat "$KOAN_ROOT/.koan-project" 2>/dev/null || echo "unknown")
-    notify "Koan stopped on request after $count runs. Last project: $CURRENT_PROJ."
+    notify "Kōan stopped on request after $count runs. Last project: $CURRENT_PROJ."
     break
   fi
 
@@ -367,7 +367,7 @@ while true; do
     RESUME_MSG=$("$PYTHON" -m app.pause_manager check "$KOAN_ROOT" 2>/dev/null) && {
       log pause "Auto-resume: $RESUME_MSG"
       count=0  # Reset run counter on auto-resume — start fresh at MAX capacity
-      notify "🔄 Koan auto-resumed: $RESUME_MSG. Starting fresh (0/$MAX_RUNS runs)."
+      notify "🔄 Kōan auto-resumed: $RESUME_MSG. Starting fresh (0/$MAX_RUNS runs)."
       continue
     }
 
@@ -555,7 +555,7 @@ $KNOWN_PROJECTS"
       echo ""
       "$PYTHON" "$APP_DIR/send_retrospective.py" "$INSTANCE" "$PROJECT_NAME" 2>/dev/null || true
       "$PYTHON" -m app.pause_manager create "$KOAN_ROOT" "quota"
-      notify "⏸️ Koan paused: budget exhausted after $count runs on [$PROJECT_NAME]. Auto-resume in 5h or use /resume."
+      notify "⏸️ Kōan paused: budget exhausted after $count runs on [$PROJECT_NAME]. Auto-resume in 5h or use /resume."
       continue
     fi
 
@@ -676,7 +676,7 @@ $KNOWN_PROJECTS"
 
     notify "⚠️ Claude quota exhausted. $RESET_DISPLAY
 
-Koan paused after $count runs. $RESUME_MSG or use /resume to restart manually."
+Kōan paused after $count runs. $RESUME_MSG or use /resume to restart manually."
     rm -f "$CLAUDE_OUT" "$CLAUDE_ERR"
     CLAUDE_OUT=""
     continue  # Go back to start of loop (will enter pause mode)
@@ -718,7 +718,7 @@ Koan paused after $count runs. $RESUME_MSG or use /resume to restart manually."
     "$PYTHON" "$RITUALS" evening "$INSTANCE" || true
     log pause "Entering pause mode (auto-resume in 5h)."
     "$PYTHON" -m app.pause_manager create "$KOAN_ROOT" "max_runs"
-    notify "⏸️ Koan paused: $MAX_RUNS runs completed. Auto-resume in 5h or use /resume to restart."
+    notify "⏸️ Kōan paused: $MAX_RUNS runs completed. Auto-resume in 5h or use /resume to restart."
     # Don't reset count here — it gets reset on auto-resume or manual /resume
     continue  # Go back to start of loop (will enter pause mode)
   fi

@@ -1,4 +1,4 @@
-"""Koan sparring skill — strategic challenge session."""
+"""Kōan sparring skill — strategic challenge session."""
 
 import subprocess
 from datetime import datetime

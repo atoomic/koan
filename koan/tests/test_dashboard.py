@@ -22,7 +22,7 @@ def instance_dir(tmp_path):
     (inst / "memory" / "projects" / "koan").mkdir(parents=True)
     (inst / "journal" / "2026-02-01").mkdir(parents=True)
 
-    (inst / "soul.md").write_text("You are Koan.")
+    (inst / "soul.md").write_text("You are Kōan.")
     (inst / "memory" / "summary.md").write_text("Session 1: bootstrapped.")
     (inst / "missions.md").write_text(
         "# Missions\n\n"

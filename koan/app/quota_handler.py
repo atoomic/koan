@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- Quota Exhaustion Handler
+Kōan -- Quota Exhaustion Handler
 
 Detects quota exhaustion from Claude CLI output, parses reset times,
 writes journal entries, and creates pause state. Replaces the fragile

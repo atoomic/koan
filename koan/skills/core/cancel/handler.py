@@ -1,4 +1,4 @@
-"""Koan cancel skill -- cancel pending missions from the queue."""
+"""Kōan cancel skill -- cancel pending missions from the queue."""
 
 
 def handle(ctx):

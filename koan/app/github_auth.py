@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- GitHub CLI authentication helper.
+Kōan -- GitHub CLI authentication helper.
 
 Manages GitHub CLI identity switching for gh commands. When GITHUB_USER
 is configured, retrieves a session token via `gh auth token --user <user>`

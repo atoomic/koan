@@ -1,7 +1,7 @@
-# Koan Instance
+# Kōan Instance
 
 <p align="center">
-  <img src="avatar.png" alt="Koan" width="200" />
+  <img src="avatar.png" alt="Kōan" width="200" />
 </p>
 
 <p align="center"><em>The agent proposes. The human decides.</em></p>
@@ -10,11 +10,11 @@
 
 ## What is this?
 
-This directory is a **template** for a Koan instance. Copy it to `instance/` and customize it to create your own running agent.
+This directory is a **template** for a Kōan instance. Copy it to `instance/` and customize it to create your own running agent.
 
 ## Identity
 
-**Koan** — Semi-autonomous cognitive sparring partner.
+**Kōan** — Semi-autonomous cognitive sparring partner.
 
 Not an assistant. Not a bot. A collaborator that thinks while the human acts.
 

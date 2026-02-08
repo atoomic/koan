@@ -1,4 +1,4 @@
-"""Koan /check skill -- inspect a PR or issue and take appropriate action."""
+"""Kōan /check skill -- inspect a PR or issue and take appropriate action."""
 
 import json
 import re

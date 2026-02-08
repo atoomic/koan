@@ -1,4 +1,4 @@
-"""Koan -- Skill package manager.
+"""Kōan -- Skill package manager.
 
 Manages external skill sources: install from Git repos, update, remove, and
 track installed sources in a skills.yaml manifest.

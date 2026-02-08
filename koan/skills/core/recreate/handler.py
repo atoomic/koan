@@ -1,4 +1,4 @@
-"""Koan recreate skill -- queue a PR recreation mission."""
+"""Kōan recreate skill -- queue a PR recreation mission."""
 
 import re
 

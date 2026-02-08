@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Koan -- Quota Reset Time Parser
+Kōan -- Quota Reset Time Parser
 
 Parses Claude's "resets Xam/Xpm (Europe/Paris)" messages and computes
 the actual UNIX timestamp for when the quota resets.
