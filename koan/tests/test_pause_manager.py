@@ -551,12 +551,12 @@ class TestCLI:
 class TestBudgetLoopRegression:
     """Regression tests for the budget exhaustion infinite loop bug.
 
-    The bug: when usage_tracker decided "wait" mode, run.sh called
+    The bug: when usage_tracker decided "wait" mode, the agent loop called
     `pause_manager create quota` without a timestamp. This defaulted
     to `time.time()` (now), making should_auto_resume() immediately
     return True — causing an instant resume -> re-pause -> resume loop.
 
-    The fix: run.sh now passes the session reset timestamp from
+    The fix: the agent loop now passes the session reset timestamp from
     usage_estimator.py, ensuring the pause always has a future timestamp.
     """
 

@@ -187,7 +187,7 @@ def get_claude_flags_for_role(role: str, autonomous_mode: str = "") -> str:
     """Get CLI flags for a Claude invocation role, as a space-separated string.
 
     Provider-aware: delegates to the configured CLI provider for proper flag generation.
-    Designed to be called from run.sh to get model/fallback flags.
+    Designed to be called from run.py to get model/fallback flags.
 
     Args:
         role: One of "mission", "chat", "lightweight", "contemplative"
@@ -226,7 +226,7 @@ def get_cli_binary_for_shell() -> str:
     """Get the CLI binary name for shell scripts.
 
     Returns the binary command (e.g., "claude", "copilot", "gh copilot").
-    Called from run.sh to set CLI_BIN.
+    Called from run.py to set CLI_BIN.
     """
     from app.cli_provider import get_cli_binary
     return get_cli_binary()

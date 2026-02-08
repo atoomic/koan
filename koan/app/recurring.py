@@ -260,7 +260,7 @@ def check_and_inject(
 ) -> List[str]:
     """Check all recurring missions and inject due ones into missions.md.
 
-    This is the main scheduler entry point. Called from run.sh at the top
+    This is the main scheduler entry point. Called from run.py at the top
     of each loop iteration.
 
     Args:

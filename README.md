@@ -28,8 +28,8 @@ Kōan runs as a continuous loop on your local machine: it pulls missions from a 
                           ┌─────────────────────►│
                           │                      │
                    ┌──────┴───────┐     ┌────────▼─────────┐
-                   │ dashboard.py │     │   run.sh          │
-                   │ (local web)  │     │  (agent loop)     │
+                   │ dashboard.py │     │   run.py           │
+                   │ (local web)  │     │  (agent loop)      │
                    └──────────────┘     └────────┬─────────┘
                                                  │
                                         ┌────────▼─────────┐
@@ -73,7 +73,7 @@ koan/
   Makefile                      # Build & run targets
   env.example                   # Template for .env
   koan/                         # Application package
-    run.sh                      #   Main loop orchestrator (bash)
+    app/run.py                  #   Main loop orchestrator
     system-prompts/             #   Claude prompt templates
       agent.md                  #     Mission execution prompt
       chat.md                   #     Telegram chat prompt

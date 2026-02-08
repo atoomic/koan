@@ -2,7 +2,7 @@
 
 Provides file-based restart signaling between bridge and run loop:
 - Bridge creates .koan-restart to signal both processes
-- run.sh checks at loop start and exits with code 42
+- run.py checks at loop start and exits with code 42
 - Bridge detects the signal and re-execs itself via os.execv()
 
 The restart flow:
@@ -10,8 +10,8 @@ The restart flow:
 2. Bridge writes .koan-restart
 3. Bridge sends ack to Telegram
 4. Bridge re-execs itself (os.execv replaces process in-place)
-5. run.sh detects .koan-restart at next iteration, exits with code 42
-6. run.sh wrapper script re-launches run.sh
+5. run.py detects .koan-restart at next iteration, exits with code 42
+6. Wrapper re-launches run.py
 
 Exit code 42 is the restart sentinel — any other exit is a real stop.
 """
@@ -29,7 +29,7 @@ def request_restart(koan_root: Path) -> None:
     """Create the restart signal file.
 
     Both processes check for this file:
-    - run.sh: at loop start, exits with code 42
+    - run.py: at loop start, exits with code 42
     - awake.py: in main loop, triggers os.execv()
     """
     restart_file = koan_root / RESTART_FILE

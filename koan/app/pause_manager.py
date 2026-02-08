@@ -3,11 +3,10 @@
 Kōan -- Pause State Manager
 
 Manages the .koan-pause and .koan-pause-reason files that control the
-agent loop's pause/resume behavior. Replaces fragile bash logic (sed,
-timestamp math, multi-line file parsing) with testable Python.
+agent loop's pause/resume behavior.
 
 Pause state format:
-  .koan-pause          — existence = paused (empty file, touched by run.sh)
+  .koan-pause          — existence = paused (empty file, touched by run.py)
   .koan-pause-reason   — 3-line file:
     line 1: reason (e.g., "quota", "max_runs")
     line 2: timestamp (UNIX epoch — reset time for quota, pause time for max_runs)
@@ -172,7 +171,7 @@ def check_and_resume(koan_root: str) -> Optional[str]:
         return f"5h have passed since pause ({state.reason})"
 
 
-# CLI interface for run.sh
+# CLI interface
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print(
@@ -208,7 +207,7 @@ if __name__ == "__main__":
             sys.exit(1)
 
     elif cmd == "status":
-        # Print pause state as JSON (for run.sh to parse)
+        # Print pause state as JSON
         state = get_pause_state(koan_root)
         if state:
             result = {

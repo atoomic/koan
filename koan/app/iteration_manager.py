@@ -10,7 +10,7 @@ Consolidates per-iteration decision-making into a single Python call:
 6. Handle autonomous mode decisions (contemplative, focus, WAIT)
 7. Resolve focus area description
 
-CLI interface for run.sh:
+CLI interface:
     python -m app.iteration_manager plan-iteration \\
         --instance <dir> --koan-root <dir> \\
         --run-num <int> --count <int> \\

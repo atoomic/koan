@@ -395,7 +395,7 @@ class TestHandleQuotaExhaustion:
 
 
 class TestCLI:
-    """Test CLI interface for run.sh integration."""
+    """Test CLI interface for run.py integration."""
 
     def test_cli_detects_quota(self, tmp_path):
         stdout_file = str(tmp_path / "stdout")

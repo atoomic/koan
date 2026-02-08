@@ -3,7 +3,7 @@ Kōan -- Plan runner.
 
 Generates structured implementation plans and posts them as GitHub issues
 or comments. Extracted from the /plan skill handler so it can run as a
-queued mission via run.sh instead of inline in the bridge process.
+queued mission via run.py instead of inline in the bridge process.
 
 CLI:
     python3 -m app.plan_runner --project-path <path> --idea "Add dark mode"

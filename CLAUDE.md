@@ -35,7 +35,7 @@ KOAN_ROOT=/tmp/test-koan .venv/bin/pytest koan/tests/test_missions.py -v
 Two parallel processes run independently:
 
 - **`awake.py`** (Telegram bridge): Polls Telegram every 3s. Classifies messages as "chat" (instant Claude reply) or "mission" (queued to `missions.md`). Flushes `outbox.md` messages back to Telegram. Command handling is split into `command_handlers.py`, shared state in `bridge_state.py`, colored log output in `bridge_log.py`.
-- **`run.sh`** (agent loop): Picks pending missions from `missions.md`, executes via Claude Code CLI, writes journal entries and reports. Supports multi-project rotation. Heavy lifting delegated to Python modules: `mission_runner.py` (execution pipeline), `loop_manager.py` (sleep/focus/validation), `quota_handler.py` (quota detection), `contemplative_runner.py` (reflection sessions).
+- **`run.py`** (agent loop): Picks pending missions from `missions.md`, executes via Claude Code CLI, writes journal entries and reports. Supports multi-project rotation. Uses `mission_runner.py` (execution pipeline), `loop_manager.py` (sleep/focus/validation), `quota_handler.py` (quota detection), `contemplative_runner.py` (reflection sessions).
 
 Communication between processes happens through shared files in `instance/` with atomic writes (`utils.atomic_write()` using temp file + rename + `fcntl.flock()`). Exclusive process instances enforced via `pid_manager.py` (PID file + `fcntl.flock()`).
 
@@ -45,19 +45,19 @@ Communication between processes happens through shared files in `instance/` with
 - **`missions.py`** — Single source of truth for `missions.md` parsing (sections: Pending / In Progress / Done; French equivalents also accepted). Missions can be tagged `[project:name]`.
 - **`utils.py`** — File locking (thread + file locks), config loading, atomic writes, `get_branch_prefix()`, `get_known_projects()`
 
-**Agent loop pipeline** (called from `run.sh`):
-- **`iteration_manager.py`** — Per-iteration decision-making: usage refresh, mode selection, recurring injection, mission picking, project resolution. CLI outputs JSON consumed by `run.sh` via `jq`.
+**Agent loop pipeline** (called from `run.py`):
+- **`iteration_manager.py`** — Per-iteration decision-making: usage refresh, mode selection, recurring injection, mission picking, project resolution.
 - **`mission_runner.py`** — Full mission lifecycle: build CLI command, execute, parse JSON output, usage tracking, archival, reflection, auto-merge
 - **`loop_manager.py`** — Focus area resolution, pending.md creation, interruptible sleep with wake-on-mission, project validation
 - **`contemplative_runner.py`** — Contemplative session runner (probability roll, prompt building, CLI invocation)
 - **`quota_handler.py`** — Quota exhaustion detection from CLI output; parses reset times, creates pause state, writes journal entries
-- **`prompt_builder.py`** — Agent prompt assembly for `run.sh`
+- **`prompt_builder.py`** — Agent prompt assembly for the agent loop
 
 **Bridge (Telegram):**
 - **`awake.py`** — Main bridge loop, Telegram polling, outbox flushing
 - **`command_handlers.py`** — Telegram command handlers extracted from awake.py; core commands (help, stop, pause, resume, skill) + skill dispatch
 - **`bridge_state.py`** — Shared module-level state for bridge (config, paths, registries); avoids circular imports
-- **`bridge_log.py`** — Colored log output for bridge process (mirrors run.sh's `log()`)
+- **`bridge_log.py`** — Colored log output for bridge process (mirrors run.py's `log()`)
 - **`notify.py`** — Telegram notification helper with flood protection
 
 **Process management:**

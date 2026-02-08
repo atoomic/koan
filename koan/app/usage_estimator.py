@@ -210,7 +210,7 @@ def cmd_refresh(state_file: Path, usage_md: Path):
 def cmd_reset_time(state_file: Path) -> int:
     """Compute when the current session resets (UNIX timestamp).
 
-    Used by run.sh to set a proper future pause timestamp when
+    Used by run.py to set a proper future pause timestamp when
     entering wait mode (budget exhausted).
 
     Returns:

@@ -239,7 +239,7 @@ def main():
     # Format via Claude
     formatted = format_for_telegram(raw_message, soul, prefs, memory)
 
-    # Output to stdout (will be captured by run.sh and appended to outbox)
+    # Output to stdout (will be captured by run.py and appended to outbox)
     print(formatted)
 
 

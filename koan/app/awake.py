@@ -391,7 +391,7 @@ def flush_outbox():
 
     ALL outbox messages are formatted via Claude before sending to Telegram.
     This ensures consistent personality, French language, and conversational tone
-    regardless of the message source (Claude session, run.sh, retrospective).
+    regardless of the message source (Claude session, run.py, retrospective).
     """
     if not OUTBOX_FILE.exists():
         return

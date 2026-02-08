@@ -508,37 +508,3 @@ class TestStatusHandlerFocusIntegration:
         assert "Focus" not in result
 
 
-class TestRunShFocusIntegration:
-    """Test run.sh has focus mode gates (structural tests)."""
-
-    def _read_run_sh(self):
-        run_sh = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "run.sh"
-        )
-        with open(run_sh) as f:
-            return f.read()
-
-    def test_pause_contemplative_has_focus_gate(self):
-        content = self._read_run_sh()
-        assert "focus_manager check" in content
-        # The pause-mode contemplative roll should check focus
-        assert "app.focus_manager check" in content
-
-    def test_autonomous_contemplative_has_focus_gate(self):
-        content = self._read_run_sh()
-        # Should have focus gate before contemplative runner
-        lines = content.split("\n")
-        focus_check_lines = [
-            i for i, l in enumerate(lines)
-            if "focus_manager check" in l
-        ]
-        # Pause mode has focus gate in run.sh; autonomous mode focus gate
-        # is in iteration_manager.py (_should_contemplate + _check_focus)
-        assert len(focus_check_lines) >= 1  # Pause mode gate
-        # Contemplative runner is still invoked from run.sh
-        assert "contemplative_runner run" in content
-
-    def test_focus_sleep_block_exists(self):
-        content = self._read_run_sh()
-        assert "Focus mode active" in content
-        assert "waiting for missions" in content

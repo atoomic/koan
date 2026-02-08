@@ -23,7 +23,7 @@ def test_agent_prompt_has_audit_github_issue_instructions():
 
 
 def test_agent_prompt_has_all_required_placeholders():
-    """Agent prompt should have all required placeholders for run.sh substitution."""
+    """Agent prompt should have all required placeholders for prompt_builder substitution."""
     agent_prompt = (PROMPTS_DIR / "agent.md").read_text()
 
     required_placeholders = [

@@ -1,14 +1,14 @@
-"""Kōan — Main run loop (Python implementation).
+"""Kōan — Main agent loop.
 
-Full Python replacement for run.sh. Manages the agent loop:
-mission picking, Claude CLI execution, post-mission processing,
-pause/resume, signal handling, and lifecycle notifications.
+Manages the agent loop: mission picking, Claude CLI execution,
+post-mission processing, pause/resume, signal handling, and
+lifecycle notifications.
 
 Usage:
     python -m app.run              # Normal start
     python -m app.run --restart    # Re-exec after restart signal (exit 42)
 
-The module preserves all run.sh behaviors:
+Features:
 - Double-tap CTRL-C protection (first warns, second aborts)
 - Restart wrapper (exit code 42 → re-exec)
 - Process group isolation for Claude subprocess (SIGINT ignored)
@@ -31,7 +31,7 @@ from app.utils import get_contemplative_chance
 
 
 # ---------------------------------------------------------------------------
-# Colored logging (mirrors run.sh log() function)
+# Colored logging
 # ---------------------------------------------------------------------------
 
 _COLORS = {}
@@ -73,7 +73,7 @@ _CATEGORY_COLORS = {
 
 
 def log(category: str, message: str):
-    """Print a colored log message matching run.sh categories."""
+    """Print a colored log message."""
     if not _COLORS:
         _init_colors()
     color_spec = _CATEGORY_COLORS.get(category, "white")
@@ -703,7 +703,7 @@ def plan_iteration(
 # ---------------------------------------------------------------------------
 
 def main_loop():
-    """The Kōan main loop — equivalent to run.sh."""
+    """The Kōan main loop."""
     _init_colors()
 
     # Validate environment

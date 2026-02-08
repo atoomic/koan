@@ -7,11 +7,7 @@ Handles the full lifecycle of a single mission run:
 3. Post-mission processing (usage tracking, pending.md archival, reflection,
    auto-merge)
 
-Extracted from run.sh to consolidate scattered subprocess calls into a
-single testable Python module. Follows the pattern set by
-contemplative_runner.py and quota_handler.py.
-
-CLI interface for run.sh:
+CLI interface:
     python -m app.mission_runner build-command \\
         --instance ... --autonomous-mode ... [--mission-title ...]
     python -m app.mission_runner parse-output <json_file>
@@ -352,7 +348,7 @@ def commit_instance(instance_dir: str) -> bool:
         return False
 
 
-# --- CLI interface for run.sh ---
+# --- CLI interface ---
 
 def _cli_build_command(args: list) -> None:
     """CLI: python -m app.mission_runner build-command ..."""

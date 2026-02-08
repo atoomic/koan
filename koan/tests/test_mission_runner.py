@@ -587,35 +587,3 @@ class TestCLIMain:
             assert exc_info.value.code == 1
 
 
-class TestRunShIntegration:
-    """Test that run.sh correctly references mission_runner.py."""
-
-    def test_run_sh_calls_parse_output(self):
-        """run.sh should use mission_runner parse-output instead of jq."""
-        run_sh = Path(__file__).parent.parent / "run.sh"
-        content = run_sh.read_text()
-        assert "app.mission_runner parse-output" in content
-        # jq should NOT be used for output parsing anymore
-        assert "jq -r '.result" not in content
-
-    def test_run_sh_calls_post_mission(self):
-        """run.sh should use mission_runner post-mission."""
-        run_sh = Path(__file__).parent.parent / "run.sh"
-        content = run_sh.read_text()
-        assert "app.mission_runner post-mission" in content
-
-    def test_run_sh_no_direct_usage_estimator_update(self):
-        """run.sh should not call usage_estimator update/refresh directly —
-        iteration_manager handles refresh, mission_runner handles update.
-        reset-time is allowed (computes pause timestamp for wait mode)."""
-        run_sh = Path(__file__).parent.parent / "run.sh"
-        content = run_sh.read_text()
-        lines = [l for l in content.splitlines()
-                 if "usage_estimator" in l and "reset-time" not in l]
-        assert len(lines) == 0, f"Direct usage_estimator calls remain: {lines}"
-
-    def test_run_sh_no_dead_mission_summary_var(self):
-        """MISSION_SUMMARY variable should be removed (dead code)."""
-        run_sh = Path(__file__).parent.parent / "run.sh"
-        content = run_sh.read_text()
-        assert "MISSION_SUMMARY" not in content

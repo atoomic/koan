@@ -3,7 +3,7 @@ Koan -- Check runner.
 
 Inspects a GitHub PR or issue and takes appropriate action (rebase,
 review, plan). Extracted from the /check skill handler so it runs as a
-queued mission via run.sh instead of inline in the bridge process.
+queued mission via run.py instead of inline in the bridge process.
 
 CLI:
     python3 -m app.check_runner <github-url>

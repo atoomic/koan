@@ -3,9 +3,7 @@
 Kōan -- Quota Exhaustion Handler
 
 Detects quota exhaustion from Claude CLI output, parses reset times,
-writes journal entries, and creates pause state. Replaces the fragile
-bash block in run.sh (grep + sed + multiple Python CLI calls) with a
-single testable Python module.
+writes journal entries, and creates pause state.
 
 Usage:
     python -m app.quota_handler check <koan_root> <instance> <project_name> <run_count> <stdout_file> <stderr_file>
@@ -193,7 +191,7 @@ def handle_quota_exhaustion(
 _CLI_USAGE = "Usage: quota_handler.py check <koan_root> <instance> <project_name> <run_count> <stdout_file> <stderr_file>"
 
 
-# CLI interface for run.sh
+# CLI interface
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] != "check":
         print(_CLI_USAGE, file=sys.stderr)
