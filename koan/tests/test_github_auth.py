@@ -14,6 +14,7 @@ from app.github_auth import (
     get_gh_env,
     setup_github_auth,
 )
+from tests._helpers import run_module
 
 
 # ── get_github_user ──────────────────────────────────────────────
