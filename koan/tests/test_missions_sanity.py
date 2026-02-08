@@ -1,10 +1,10 @@
-"""Tests for missions_sanity.py — missions.md structural health checker."""
+"""Tests for sanity.missions_structure — missions.md structural health checker."""
 
 import os
 import pytest
 from pathlib import Path
 
-from app.missions_sanity import find_issues, sanitize, run_sanity_check
+from sanity.missions_structure import find_issues, sanitize, run_sanity_check
 
 
 # ---------------------------------------------------------------------------

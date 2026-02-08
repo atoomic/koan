@@ -273,14 +273,14 @@ def run_startup(koan_root: str, instance: str, projects: list):
     except Exception:
         pass
 
-    # Missions sanity check
-    log("health", "Running missions sanity check...")
+    # Sanity checks (all modules in koan/sanity/, alphabetical order)
+    log("health", "Running sanity checks...")
     try:
-        from app.missions_sanity import run_sanity_check
-        modified, changes = run_sanity_check(os.path.join(instance, "missions.md"))
-        if modified:
-            for change in changes:
-                log("health", f"  Missions fix: {change}")
+        from sanity import run_all
+        for name, modified, changes in run_all(instance):
+            if modified:
+                for change in changes:
+                    log("health", f"  [{name}] {change}")
     except Exception:
         pass
 
