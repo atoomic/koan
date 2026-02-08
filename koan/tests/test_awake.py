@@ -714,6 +714,28 @@ class TestHandleMessage:
         mock_mission.assert_not_called()
         mock_worker.assert_not_called()
 
+    @patch("app.awake.reset_flood_state")
+    @patch("app.awake.handle_command")
+    def test_resets_flood_state_on_command(self, mock_cmd, mock_reset):
+        """Each user message resets flood protection so /help twice works."""
+        handle_message("/help")
+        mock_reset.assert_called_once()
+
+    @patch("app.awake.reset_flood_state")
+    @patch("app.awake._run_in_worker")
+    def test_resets_flood_state_on_chat(self, mock_worker, mock_reset):
+        handle_message("how are you?")
+        mock_reset.assert_called_once()
+
+    @patch("app.awake.reset_flood_state")
+    @patch("app.awake.handle_command")
+    @patch("app.awake.handle_mission")
+    @patch("app.awake._run_in_worker")
+    def test_no_flood_reset_on_empty(self, mock_worker, mock_mission, mock_cmd, mock_reset):
+        """Empty messages skip flood reset (no message to respond to)."""
+        handle_message("")
+        mock_reset.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # get_updates
