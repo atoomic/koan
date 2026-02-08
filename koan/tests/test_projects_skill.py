@@ -1,5 +1,6 @@
 """Tests for the /projects core skill — list configured projects."""
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -36,7 +37,7 @@ class TestProjectsHandler:
 
     @patch(
         "app.utils.get_known_projects",
-        return_value=[("koan", "/home/user/koan"), ("webapp", "/home/user/webapp")],
+        return_value=[("koan", "/tmp/fakehome/koan"), ("webapp", "/tmp/fakehome/webapp")],
     )
     def test_multiple_projects(self, mock_projects, tmp_path):
         from skills.core.projects.handler import handle
@@ -46,8 +47,6 @@ class TestProjectsHandler:
         assert "Configured projects:" in result
         assert "koan" in result
         assert "webapp" in result
-        assert "/home/user/koan" in result
-        assert "/home/user/webapp" in result
 
     @patch(
         "app.utils.get_known_projects",
@@ -79,14 +78,16 @@ class TestProjectsHandler:
 
     @patch(
         "app.utils.get_known_projects",
-        return_value=[("koan", "/home/koan")],
+        return_value=[("koan", "/path/to/koan")],
     )
-    def test_shows_path_in_parens(self, mock_projects, tmp_path):
+    def test_shows_path_with_colon_not_parens(self, mock_projects, tmp_path):
         from skills.core.projects.handler import handle
 
         ctx = self._make_ctx(tmp_path)
         result = handle(ctx)
-        assert "koan (/home/koan)" in result
+        assert "koan: /path/to/koan" in result
+        assert "(" not in result
+        assert ")" not in result
 
     @patch("app.utils.get_known_projects", return_value=[])
     def test_args_ignored(self, mock_projects, tmp_path):
@@ -96,6 +97,74 @@ class TestProjectsHandler:
         ctx = self._make_ctx(tmp_path, args="extra stuff")
         result = handle(ctx)
         assert "No projects configured" in result
+
+
+# ---------------------------------------------------------------------------
+# _shorten_path tests
+# ---------------------------------------------------------------------------
+
+class TestShortenPath:
+    """Test HOME directory shortening in path display."""
+
+    def test_path_under_home_is_shortened(self):
+        from skills.core.projects.handler import _shorten_path
+
+        home = os.path.expanduser("~")
+        path = os.path.join(home, "workspace", "koan")
+        result = _shorten_path(path)
+        assert result.startswith("~" + os.sep)
+        assert "workspace" in result
+        assert home not in result
+
+    def test_path_not_under_home_unchanged(self):
+        from skills.core.projects.handler import _shorten_path
+
+        result = _shorten_path("/opt/projects/koan")
+        assert result == "/opt/projects/koan"
+
+    def test_home_itself_becomes_tilde(self):
+        from skills.core.projects.handler import _shorten_path
+
+        home = os.path.expanduser("~")
+        result = _shorten_path(home)
+        assert result == "~"
+
+    def test_partial_home_prefix_not_shortened(self):
+        """A path like /home/userextra should NOT be shortened."""
+        from skills.core.projects.handler import _shorten_path
+
+        home = os.path.expanduser("~")
+        # Append chars without a separator — should not match
+        fake_path = home + "extra/project"
+        result = _shorten_path(fake_path)
+        assert result == fake_path
+
+    @patch.dict(os.environ, {"HOME": "/Users/testuser"})
+    def test_shorten_with_custom_home(self):
+        from skills.core.projects.handler import _shorten_path
+
+        result = _shorten_path("/Users/testuser/workspace/myapp")
+        assert result == "~/workspace/myapp"
+
+    @patch.dict(os.environ, {"HOME": "/Users/testuser"})
+    def test_handler_output_uses_tilde(self):
+        """End-to-end: handler output shows ~ instead of full HOME."""
+        from skills.core.projects.handler import handle
+        from app.skills import SkillContext
+
+        with patch(
+            "app.utils.get_known_projects",
+            return_value=[("koan", "/Users/testuser/workspace/koan")],
+        ):
+            ctx = SkillContext(
+                koan_root="/tmp",
+                instance_dir="/tmp/instance",
+                command_name="projects",
+                args="",
+            )
+            result = handle(ctx)
+        assert "koan: ~/workspace/koan" in result
+        assert "/Users/testuser" not in result
 
 
 # ---------------------------------------------------------------------------
