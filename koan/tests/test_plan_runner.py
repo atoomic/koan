@@ -445,7 +445,7 @@ class TestGenerateIterationPlan:
 # ---------------------------------------------------------------------------
 
 class TestRunClaudePlan:
-    @patch("app.claude_step.run_claude_command", return_value="result with spaces")
+    @patch("app.cli_provider.run_command", return_value="result with spaces")
     def test_returns_stripped_output(self, mock_cmd):
         result = _run_claude_plan("test prompt", "/project")
         assert result == "result with spaces"
@@ -455,10 +455,10 @@ class TestRunClaudePlan:
             max_turns=3, timeout=300,
         )
 
-    @patch("app.claude_step.run_claude_command",
-           side_effect=RuntimeError("Claude invocation failed: error msg"))
+    @patch("app.cli_provider.run_command",
+           side_effect=RuntimeError("CLI invocation failed: error msg"))
     def test_raises_on_non_zero_exit(self, mock_cmd):
-        with pytest.raises(RuntimeError, match="Claude invocation failed"):
+        with pytest.raises(RuntimeError, match="CLI invocation failed"):
             _run_claude_plan("prompt", "/project")
 
 

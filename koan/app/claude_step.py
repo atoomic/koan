@@ -8,8 +8,11 @@ used by pr_review.py, rebase_pr.py, and other pipeline modules.
 import subprocess
 from typing import List, Optional
 
-from app.cli_provider import build_full_command
+from app.cli_provider import build_full_command, run_command
 from app.config import get_model_config
+
+# Backward-compatible alias — callers should import from app.cli_provider
+run_claude_command = run_command
 
 
 def _run_git(cmd: list, cwd: str = None, timeout: int = 60) -> str:
@@ -81,46 +84,6 @@ def run_claude(cmd: list, cwd: str, timeout: int = 600) -> dict:
             "output": "",
             "error": f"Timeout ({timeout}s)",
         }
-
-
-def run_claude_command(
-    prompt: str,
-    project_path: str,
-    allowed_tools: List[str],
-    model_key: str = "chat",
-    max_turns: int = 3,
-    timeout: int = 300,
-) -> str:
-    """Build and run a Claude CLI command, returning stripped stdout.
-
-    Higher-level helper for runner modules that need to invoke Claude
-    with a prompt and get back text output.  Combines build_full_command
-    + subprocess execution + error handling.
-
-    Raises:
-        RuntimeError: If the Claude command exits with non-zero code.
-    """
-    models = get_model_config()
-    cmd = build_full_command(
-        prompt=prompt,
-        allowed_tools=allowed_tools,
-        model=models.get(model_key, ""),
-        fallback=models.get("fallback", ""),
-        max_turns=max_turns,
-    )
-
-    result = subprocess.run(
-        cmd,
-        capture_output=True, text=True, timeout=timeout,
-        cwd=project_path,
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Claude invocation failed: {result.stderr[:300]}"
-        )
-
-    return result.stdout.strip()
 
 
 def commit_if_changes(project_path: str, message: str) -> bool:

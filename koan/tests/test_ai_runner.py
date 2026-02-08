@@ -148,62 +148,62 @@ class TestCleanResponse:
 
 
 # ---------------------------------------------------------------------------
-# run_claude_command (shared helper, tested via ai_runner integration)
+# run_command (provider-level helper, tested via ai_runner integration)
 # ---------------------------------------------------------------------------
 
-class TestRunClaudeCommand:
-    """Tests for the shared run_claude_command helper in claude_step."""
+class TestRunCommand:
+    """Tests for the shared run_command helper in app.provider."""
 
-    @patch("app.claude_step.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
-    @patch("app.claude_step.build_full_command", return_value=["claude", "-p", "test"])
-    @patch("app.claude_step.subprocess.run")
+    @patch("app.config.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
+    @patch("app.provider.build_full_command", return_value=["claude", "-p", "test"])
+    @patch("app.provider.subprocess.run")
     def test_returns_stdout_on_success(self, mock_run, mock_cmd, mock_model):
-        from app.claude_step import run_claude_command
+        from app.cli_provider import run_command
         mock_run.return_value = MagicMock(
             returncode=0, stdout="Exploration results", stderr=""
         )
-        result = run_claude_command("test prompt", "/tmp", allowed_tools=["Read"])
+        result = run_command("test prompt", "/tmp", allowed_tools=["Read"])
         assert result == "Exploration results"
 
-    @patch("app.claude_step.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
-    @patch("app.claude_step.build_full_command", return_value=["claude", "-p", "test"])
-    @patch("app.claude_step.subprocess.run")
+    @patch("app.config.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
+    @patch("app.provider.build_full_command", return_value=["claude", "-p", "test"])
+    @patch("app.provider.subprocess.run")
     def test_raises_on_failure(self, mock_run, mock_cmd, mock_model):
-        from app.claude_step import run_claude_command
+        from app.cli_provider import run_command
         mock_run.return_value = MagicMock(
             returncode=1, stdout="", stderr="quota exceeded"
         )
-        with pytest.raises(RuntimeError, match="invocation failed"):
-            run_claude_command("test prompt", "/tmp", allowed_tools=["Read"])
+        with pytest.raises(RuntimeError, match="CLI invocation failed"):
+            run_command("test prompt", "/tmp", allowed_tools=["Read"])
 
-    @patch("app.claude_step.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
-    @patch("app.claude_step.build_full_command", return_value=["claude", "-p", "test"])
-    @patch("app.claude_step.subprocess.run")
+    @patch("app.config.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
+    @patch("app.provider.build_full_command", return_value=["claude", "-p", "test"])
+    @patch("app.provider.subprocess.run")
     def test_passes_allowed_tools(self, mock_run, mock_cmd, mock_model):
-        from app.claude_step import run_claude_command
+        from app.cli_provider import run_command
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        run_claude_command("test", "/tmp", allowed_tools=["Read", "Glob", "Grep", "Bash"])
+        run_command("test", "/tmp", allowed_tools=["Read", "Glob", "Grep", "Bash"])
         call_kwargs = mock_cmd.call_args[1]
         assert "Read" in call_kwargs["allowed_tools"]
         assert "Bash" in call_kwargs["allowed_tools"]
 
-    @patch("app.claude_step.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
-    @patch("app.claude_step.build_full_command", return_value=["claude", "-p", "test"])
-    @patch("app.claude_step.subprocess.run")
+    @patch("app.config.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
+    @patch("app.provider.build_full_command", return_value=["claude", "-p", "test"])
+    @patch("app.provider.subprocess.run")
     def test_passes_max_turns(self, mock_run, mock_cmd, mock_model):
-        from app.claude_step import run_claude_command
+        from app.cli_provider import run_command
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        run_claude_command("test", "/tmp", allowed_tools=["Read"], max_turns=5)
+        run_command("test", "/tmp", allowed_tools=["Read"], max_turns=5)
         call_kwargs = mock_cmd.call_args[1]
         assert call_kwargs["max_turns"] == 5
 
-    @patch("app.claude_step.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
-    @patch("app.claude_step.build_full_command", return_value=["claude", "-p", "test"])
-    @patch("app.claude_step.subprocess.run")
+    @patch("app.config.get_model_config", return_value={"chat": "sonnet", "fallback": ""})
+    @patch("app.provider.build_full_command", return_value=["claude", "-p", "test"])
+    @patch("app.provider.subprocess.run")
     def test_sets_cwd_to_project_path(self, mock_run, mock_cmd, mock_model):
-        from app.claude_step import run_claude_command
+        from app.cli_provider import run_command
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        run_claude_command("test", "/my/project", allowed_tools=["Read"])
+        run_command("test", "/my/project", allowed_tools=["Read"])
         assert mock_run.call_args[1]["cwd"] == "/my/project"
 
 
@@ -212,7 +212,7 @@ class TestRunClaudeCommand:
 # ---------------------------------------------------------------------------
 
 class TestRunExploration:
-    @patch("app.claude_step.run_claude_command", return_value="Found 3 issues")
+    @patch("app.cli_provider.run_command", return_value="Found 3 issues")
     @patch("app.ai_runner._get_missions_context", return_value="No active missions.")
     @patch("app.ai_runner._gather_project_structure", return_value="Directories: src/")
     @patch("app.ai_runner._gather_git_activity", return_value="Recent commits: abc")
@@ -229,7 +229,7 @@ class TestRunExploration:
         assert success is True
         assert "completed" in summary.lower()
 
-    @patch("app.claude_step.run_claude_command", return_value="Found 3 issues")
+    @patch("app.cli_provider.run_command", return_value="Found 3 issues")
     @patch("app.ai_runner._get_missions_context", return_value="No active missions.")
     @patch("app.ai_runner._gather_project_structure", return_value="Directories: src/")
     @patch("app.ai_runner._gather_git_activity", return_value="Recent commits: abc")
@@ -249,7 +249,7 @@ class TestRunExploration:
         # Second call: exploration result
         assert "myapp" in notify.call_args_list[1][0][0]
 
-    @patch("app.claude_step.run_claude_command", side_effect=RuntimeError("quota exceeded"))
+    @patch("app.cli_provider.run_command", side_effect=RuntimeError("quota exceeded"))
     @patch("app.ai_runner._get_missions_context", return_value="No active missions.")
     @patch("app.ai_runner._gather_project_structure", return_value="Directories: src/")
     @patch("app.ai_runner._gather_git_activity", return_value="Recent commits: abc")
@@ -266,7 +266,7 @@ class TestRunExploration:
         assert success is False
         assert "failed" in summary.lower()
 
-    @patch("app.claude_step.run_claude_command", return_value="")
+    @patch("app.cli_provider.run_command", return_value="")
     @patch("app.ai_runner._get_missions_context", return_value="No active missions.")
     @patch("app.ai_runner._gather_project_structure", return_value="Directories: src/")
     @patch("app.ai_runner._gather_git_activity", return_value="Recent commits: abc")
@@ -283,7 +283,7 @@ class TestRunExploration:
         assert success is False
         assert "empty" in summary.lower()
 
-    @patch("app.claude_step.run_claude_command", return_value="Found 3 issues")
+    @patch("app.cli_provider.run_command", return_value="Found 3 issues")
     @patch("app.ai_runner._get_missions_context", return_value="No active missions.")
     @patch("app.ai_runner._gather_project_structure", return_value="Directories: src/")
     @patch("app.ai_runner._gather_git_activity", return_value="Recent commits: abc")
@@ -302,7 +302,7 @@ class TestRunExploration:
         assert mock_prompt.call_args[0][0] == custom_dir
         assert mock_prompt.call_args[0][1] == "ai-explore"
 
-    @patch("app.claude_step.run_claude_command", return_value="Found 3 issues")
+    @patch("app.cli_provider.run_command", return_value="Found 3 issues")
     @patch("app.ai_runner._get_missions_context", return_value="No active missions.")
     @patch("app.ai_runner._gather_project_structure", return_value="Directories: src/")
     @patch("app.ai_runner._gather_git_activity", return_value="Recent commits: abc")
@@ -323,7 +323,7 @@ class TestRunExploration:
         assert "PROJECT_STRUCTURE" in kwargs
         assert "MISSIONS_CONTEXT" in kwargs
 
-    @patch("app.claude_step.run_claude_command", return_value="x" * 3000)
+    @patch("app.cli_provider.run_command", return_value="x" * 3000)
     @patch("app.ai_runner._get_missions_context", return_value="No active missions.")
     @patch("app.ai_runner._gather_project_structure", return_value="Directories: src/")
     @patch("app.ai_runner._gather_git_activity", return_value="Recent commits: abc")

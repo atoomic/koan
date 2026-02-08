@@ -211,8 +211,8 @@ def _generate_iteration_plan(project_path, issue_context, skill_dir=None):
 
 def _run_claude_plan(prompt, project_path):
     """Execute Claude CLI with the given prompt and return the output."""
-    from app.claude_step import run_claude_command
-    return run_claude_command(
+    from app.cli_provider import run_command
+    return run_command(
         prompt, project_path,
         allowed_tools=["Read", "Glob", "Grep", "WebFetch"],
         max_turns=3, timeout=300,
