@@ -272,6 +272,15 @@ def run_startup(koan_root: str, instance: str, projects: list):
     except Exception:
         pass
 
+    # Auto-migrate env vars to projects.yaml (one-shot, idempotent)
+    try:
+        from app.projects_migration import run_migration
+        migration_msgs = run_migration(koan_root)
+        for msg in migration_msgs:
+            log("init", f"[migration] {msg}")
+    except Exception:
+        pass
+
     # Sanity checks (all modules in koan/sanity/, alphabetical order)
     log("health", "Running sanity checks...")
     try:
