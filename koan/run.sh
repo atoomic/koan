@@ -255,7 +255,7 @@ on_sigint() {
 }
 
 trap on_sigint INT
-trap cleanup TERM
+trap cleanup EXIT
 
 # wait_for_claude_task
 # Waits for the background process $CLAUDE_PID with graceful CTRL-C protection.
@@ -391,7 +391,7 @@ while true; do
       export KOAN_CURRENT_PROJECT="$PROJECT_NAME"
       export KOAN_CURRENT_PROJECT_PATH="$PROJECT_PATH"
 
-      cd "$INSTANCE"
+      pushd "$INSTANCE" > /dev/null
       log pause "Running contemplative session..."
       (trap '' INT; exec "$PYTHON" -m app.contemplative_runner run \
         --instance "$INSTANCE" \
@@ -400,6 +400,7 @@ while true; do
       CLAUDE_PID=$!
       wait_for_claude_task
       log pause "Contemplative session ended."
+      popd > /dev/null
     fi
 
     # Sleep in 5s increments — allows /resume, /restart, or auto-resume to take effect quickly
@@ -509,7 +510,7 @@ $KNOWN_PROJECTS"
         echo ""
         notify "🪷 Run $RUN_NUM/$MAX_RUNS — Contemplative mode (chance: $CONTEMPLATIVE_CHANCE%)"
 
-        cd "$INSTANCE"
+        pushd "$INSTANCE" > /dev/null
         log pause "Running contemplative session..."
         (trap '' INT; exec "$PYTHON" -m app.contemplative_runner run \
           --instance "$INSTANCE" \
@@ -518,6 +519,7 @@ $KNOWN_PROJECTS"
         CLAUDE_PID=$!
         wait_for_claude_task
         log pause "Contemplative session ended."
+        popd > /dev/null
 
         # Contemplative session done — increment counter and loop
         count=$((count + 1))
@@ -622,7 +624,7 @@ $KNOWN_PROJECTS"
   MISSION_START_TIME=$(date +%s)
   CLAUDE_OUT="$(mktemp)"
   CLAUDE_ERR="$(mktemp)"
-  MISSION_FLAGS=$("$PYTHON" -c "from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('mission', '$AUTONOMOUS_MODE'))" 2>/dev/null || echo "")
+  MISSION_FLAGS=$(KOAN_MODE="$AUTONOMOUS_MODE" "$PYTHON" -c "import os; from app.utils import get_claude_flags_for_role; print(get_claude_flags_for_role('mission', os.environ['KOAN_MODE']))" 2>/dev/null || echo "")
   # Run claude with graceful CTRL-C protection (background + wait pattern)
   # Child ignores SIGINT so first CTRL-C only warns; double CTRL-C sends SIGTERM via on_sigint
   # shellcheck disable=SC2086
@@ -669,8 +671,8 @@ $KNOWN_PROJECTS"
     cd "$INSTANCE"
     git add -A
     git diff --cached --quiet || \
-      git commit -m "koan: quota exhausted $(date +%Y-%m-%d-%H:%M)" && \
-      git push origin main 2>/dev/null || true
+      { git commit -m "koan: quota exhausted $(date +%Y-%m-%d-%H:%M)" && \
+        git push origin main 2>/dev/null; } || true
 
     notify "⚠️ Claude quota exhausted. $RESET_DISPLAY
 
@@ -697,8 +699,8 @@ Koan paused after $count runs. $RESUME_MSG or use /resume to restart manually."
   cd "$INSTANCE"
   git add -A
   git diff --cached --quiet || \
-    git commit -m "koan: $(date +%Y-%m-%d-%H:%M)" && \
-    git push origin main 2>/dev/null || true
+    { git commit -m "koan: $(date +%Y-%m-%d-%H:%M)" && \
+      git push origin main 2>/dev/null; } || true
 
   count=$((count + 1))
 
