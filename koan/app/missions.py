@@ -56,14 +56,35 @@ def parse_sections(content: str) -> Dict[str, List[str]]:
 
     Returns {"pending": [...], "in_progress": [...], "done": [...]}.
     Each item is either a simple "- ..." line or a multi-line block
-    (for ### complex missions).
+    (for ### complex missions). Continuation lines (indented text,
+    code-fenced blocks) are attached to their parent "- ..." item.
     """
     sections = {"pending": [], "in_progress": [], "done": []}
     current = None
     current_block = []
+    in_code_fence = False
 
     for line in content.splitlines():
         stripped = line.strip()
+
+        # Track code fences — content inside fences is never structural
+        if stripped.startswith("```"):
+            in_code_fence = not in_code_fence
+            if current is not None:
+                if current_block:
+                    current_block.append(line)
+                elif sections[current]:
+                    sections[current][-1] += "\n" + line
+            continue
+
+        if in_code_fence:
+            if current is not None:
+                if current_block:
+                    current_block.append(line)
+                elif sections[current]:
+                    sections[current][-1] += "\n" + line
+            continue
+
         if stripped.startswith("## "):
             # Flush any pending complex block
             if current_block and current:
@@ -164,7 +185,10 @@ def count_pending(content: str) -> int:
 
 
 def extract_next_pending(content: str, project_name: str = "") -> str:
-    """Return the first pending mission line, or empty string if none.
+    """Return the first pending mission block, or empty string if none.
+
+    A mission block starts with ``- ...`` and includes any continuation lines
+    that follow (indented lines, code-fence blocks, or other non-item content).
 
     If project_name is given, only returns missions tagged [projet:name]
     or [project:name], or under a ### project:name / ### projet:name sub-header,
@@ -172,7 +196,10 @@ def extract_next_pending(content: str, project_name: str = "") -> str:
     """
     in_pending = False
     current_subheader_project = ""  # project from ### sub-header, empty = no sub-header
-    for line in content.splitlines():
+    lines = content.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
         stripped_lower = stripped.lower()
 
@@ -183,9 +210,11 @@ def extract_next_pending(content: str, project_name: str = "") -> str:
                 current_subheader_project = ""
             elif in_pending:
                 break  # Left the pending section
+            i += 1
             continue
 
         if not in_pending:
+            i += 1
             continue
 
         # Track ### project:X sub-headers within pending section
@@ -197,9 +226,11 @@ def extract_next_pending(content: str, project_name: str = "") -> str:
                 current_subheader_project = subheader_match.group(1).lower()
             else:
                 current_subheader_project = ""
+            i += 1
             continue
 
         if not stripped.startswith("- "):
+            i += 1
             continue
 
         if project_name:
@@ -207,14 +238,51 @@ def extract_next_pending(content: str, project_name: str = "") -> str:
             tag_match = re.search(r"\[projec?t:([a-zA-Z0-9_-]+)\]", line)
             if tag_match:
                 if tag_match.group(1).lower() != project_name.lower():
+                    i += 1
                     continue
             elif current_subheader_project:
                 # 2. Check sub-header project context
                 if current_subheader_project != project_name.lower():
+                    i += 1
                     continue
             # 3. No tag and no sub-header = untagged, always matches
 
-        return stripped
+        # Found a matching mission — collect continuation lines
+        block_lines = [stripped]
+        i += 1
+        in_code_fence = False
+        while i < len(lines):
+            cont_line = lines[i]
+            cont_stripped = cont_line.strip()
+
+            # Track code fences
+            if cont_stripped.startswith("```"):
+                in_code_fence = not in_code_fence
+                block_lines.append(cont_line)
+                i += 1
+                continue
+
+            # Inside code fence — always include
+            if in_code_fence:
+                block_lines.append(cont_line)
+                i += 1
+                continue
+
+            # New item, section header, or sub-header — stop
+            if (cont_stripped.startswith("- ") or
+                    cont_stripped.startswith("## ") or
+                    cont_stripped.startswith("### ")):
+                break
+
+            # Empty line — stop (unless inside code fence, handled above)
+            if cont_stripped == "":
+                break
+
+            # Continuation line (indented or other non-item content)
+            block_lines.append(cont_line)
+            i += 1
+
+        return "\n".join(block_lines)
 
     return ""
 
