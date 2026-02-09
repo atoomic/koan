@@ -34,8 +34,8 @@ class TestFocusCommand:
         ctx = _make_ctx("focus", tmp_path)
         result = handle(ctx)
 
-        # Default is 5h
-        assert "5h" in result or "5 h" in result
+        # Default is 5h — must show exact "5h00m", not "4h59m" (regression: PR #204)
+        assert "5h00m" in result
         marker = tmp_path / ".koan-focus"
         assert marker.exists()
 
@@ -68,6 +68,35 @@ class TestFocusCommand:
         assert "Invalid" in result or "❌" in result
         marker = tmp_path / ".koan-focus"
         assert not marker.exists()
+
+    def test_focus_shows_full_duration_despite_time_drift(self, tmp_path):
+        """Regression test: handler must show full duration, not remaining-after-drift.
+
+        Previously, create_focus() called time.time() and remaining_display()
+        called time.time() again — a 1s drift on slow CI produced "4h59m"
+        instead of "5h00m". Fix: handler passes now=state.activated_at.
+        """
+        from unittest.mock import patch
+
+        from skills.core.focus.handler import handle
+
+        # Simulate 2s drift between create_focus and remaining_display
+        call_count = 0
+        base_time = 1700000000
+
+        def drifting_time():
+            nonlocal call_count
+            call_count += 1
+            # Each time.time() call returns a slightly later timestamp
+            return base_time + call_count
+
+        with patch("app.focus_manager.time") as mock_time:
+            mock_time.time.side_effect = drifting_time
+            ctx = _make_ctx("focus", tmp_path, args="5h")
+            result = handle(ctx)
+
+        # Must show "5h00m" — the full requested duration
+        assert "5h00m" in result
 
     def test_focus_response_mentions_missions_only(self, tmp_path):
         from skills.core.focus.handler import handle

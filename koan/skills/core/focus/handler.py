@@ -33,7 +33,7 @@ def handle(ctx):
             return f"❌ Invalid duration: '{args}'. Examples: 5h, 3h30m, 90m"
 
     state = create_focus(koan_root, duration=duration, reason="missions")
-    remaining = state.remaining_display()
+    remaining = state.remaining_display(now=state.activated_at)
     return (
         f"🎯 Focus mode ON for {remaining}. "
         "Missions only — no reflection, no free exploration. "
