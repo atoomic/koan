@@ -95,13 +95,7 @@ def _get_projects(ctx) -> List[Tuple[str, str]]:
         projects = get_known_projects()
         return [(name, path) for name, path in projects if Path(path).is_dir()]
     except Exception:
-        pass
-
-    project_path = os.environ.get("KOAN_PROJECT_PATH", "")
-    if project_path and Path(project_path).is_dir():
-        return [(Path(project_path).name, project_path)]
-
-    return []
+        return []
 
 
 def _get_missions_context(instance_dir: Path) -> str:

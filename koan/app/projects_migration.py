@@ -71,18 +71,16 @@ def _load_config_auto_merge(koan_root: str) -> dict:
     except (yaml.YAMLError, OSError):
         return {}
 
-    result = {}
-
-    # Per-project overrides from config.yaml projects: section
     projects_section = config.get("projects", {})
-    if isinstance(projects_section, dict):
-        for name, proj_config in projects_section.items():
-            if isinstance(proj_config, dict):
-                am = proj_config.get("git_auto_merge")
-                if isinstance(am, dict):
-                    result[name] = am
+    if not isinstance(projects_section, dict):
+        return {}
 
-    return result
+    return {
+        name: proj_config["git_auto_merge"]
+        for name, proj_config in projects_section.items()
+        if isinstance(proj_config, dict)
+        and isinstance(proj_config.get("git_auto_merge"), dict)
+    }
 
 
 def build_projects_yaml(
@@ -98,8 +96,7 @@ def build_projects_yaml(
     Returns:
         YAML string ready to write to projects.yaml.
     """
-    if auto_merge_overrides is None:
-        auto_merge_overrides = {}
+    auto_merge_overrides = auto_merge_overrides or {}
 
     data = {
         "defaults": {

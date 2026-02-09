@@ -573,7 +573,8 @@ projects:
         assert len(result) == 1
         assert result[0] == ("fallback", "/fallback")
 
-    def test_legacy_project_path_still_works(self, tmp_path, monkeypatch):
+    def test_legacy_project_path_no_longer_supported(self, tmp_path, monkeypatch):
+        """KOAN_PROJECT_PATH is no longer a fallback — returns empty list."""
         from app import utils
         monkeypatch.setattr(utils, "KOAN_ROOT", tmp_path)
         monkeypatch.delenv("KOAN_PROJECTS", raising=False)
@@ -582,7 +583,7 @@ projects:
         # No projects.yaml
         from app.utils import get_known_projects
         result = get_known_projects()
-        assert result == [("default", "/legacy/path")]
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +613,8 @@ projects:
         assert result["strategy"] == "merge"
         assert result["enabled"] is True
 
-    def test_falls_back_to_config_yaml(self, tmp_path, monkeypatch):
+    def test_falls_back_to_config_yaml_global(self, tmp_path, monkeypatch):
+        """Without projects.yaml, config.yaml global settings are used (projects: section ignored)."""
         monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
         # No projects.yaml
 
@@ -622,7 +624,8 @@ projects:
         }
         from app.config import get_auto_merge_config
         result = get_auto_merge_config(config, "app")
-        assert result["strategy"] == "rebase"
+        # config.yaml projects: section is ignored — global "squash" used
+        assert result["strategy"] == "squash"
         assert result["enabled"] is True
 
     def test_unknown_project_in_yaml_falls_back(self, tmp_path, monkeypatch):

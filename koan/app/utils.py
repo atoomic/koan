@@ -199,7 +199,6 @@ def get_known_projects() -> list:
     Resolution order:
     1. projects.yaml (if file exists at KOAN_ROOT)
     2. KOAN_PROJECTS env var (fallback)
-    3. KOAN_PROJECT_PATH env var (legacy fallback)
 
     Returns empty list if none is configured.
     """
@@ -210,7 +209,7 @@ def get_known_projects() -> list:
         if config is not None:
             return get_projects_from_config(config)
     except Exception:
-        # Invalid YAML or import error — fall through to env vars
+        # Invalid YAML or import error — fall through to env var
         pass
 
     # 2. KOAN_PROJECTS env var
@@ -224,11 +223,6 @@ def get_known_projects() -> list:
                 result.append((name.strip(), path.strip()))
         return sorted(result, key=lambda x: x[0].lower())
 
-    # 3. KOAN_PROJECT_PATH (legacy single-project)
-    single_path = os.environ.get("KOAN_PROJECT_PATH", "")
-    if single_path:
-        return [("default", single_path)]
-
     return []
 
 
@@ -239,7 +233,6 @@ def resolve_project_path(repo_name: str) -> Optional[str]:
     1. Exact match on project name (case-insensitive)
     2. Match on directory basename (case-insensitive)
     3. Fallback to single project if only one configured
-    4. KOAN_PROJECT_PATH env var
     """
     projects = get_known_projects()
 
@@ -256,10 +249,6 @@ def resolve_project_path(repo_name: str) -> Optional[str]:
     # Fallback to single project
     if len(projects) == 1:
         return projects[0][1]
-
-    project_path = os.environ.get("KOAN_PROJECT_PATH", "")
-    if project_path:
-        return project_path
 
     return None
 

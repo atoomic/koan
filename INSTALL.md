@@ -92,14 +92,13 @@ projects:
 
 Each project only needs a `path`. All other fields are optional and inherit from `defaults`.
 
-**Alternative (legacy):** You can use env vars in `.env` instead:
+**Fallback:** You can also use the `KOAN_PROJECTS` env var in `.env`:
 
 ```bash
-KOAN_PROJECT_PATH=/Users/yourname/myproject
-# or: KOAN_PROJECTS=myapp:/Users/yourname/myapp;backend:/Users/yourname/backend
+KOAN_PROJECTS=myapp:/Users/yourname/myapp;backend:/Users/yourname/backend
 ```
 
-If `projects.yaml` exists, env vars are ignored.
+If `projects.yaml` exists, the env var is ignored. On first startup, Kōan will auto-migrate env vars to `projects.yaml`.
 
 ### 5. Set up project memory (optional but recommended)
 
@@ -155,7 +154,7 @@ Your `missions.md` file references a project name that doesn't match your config
 
 **Fix:** Either:
 1. Remove project tags from missions: `- My task` instead of `- [project:example] My task`
-2. Or ensure the project name matches your `KOAN_PROJECTS` config
+2. Or ensure the project name matches your `projects.yaml` config
 
 ### Telegram bot not responding
 
@@ -224,7 +223,7 @@ Alternatively: **System Settings → Energy → Prevent automatic sleeping when 
 | `KOAN_TELEGRAM_TOKEN` | Telegram bot token from @BotFather |
 | `KOAN_TELEGRAM_CHAT_ID` | Your Telegram chat ID |
 
-> **Note:** Project paths are configured in `projects.yaml` (recommended) or via `KOAN_PROJECTS` / `KOAN_PROJECT_PATH` env vars (legacy fallback).
+> **Note:** Project paths are configured in `projects.yaml` (see step 4 above). The `KOAN_PROJECTS` env var is supported as a fallback.
 
 ### Optional
 
@@ -243,7 +242,7 @@ Alternatively: **System Settings → Energy → Prevent automatic sleeping when 
 
 Kōan can work on up to 50 projects, rotating between them.
 
-**Recommended:** Configure in `projects.yaml`:
+Configure in `projects.yaml`:
 
 ```yaml
 projects:
@@ -255,11 +254,7 @@ projects:
       base_branch: "staging"
 ```
 
-**Legacy:** You can also use the `KOAN_PROJECTS` env var:
-
-```bash
-KOAN_PROJECTS=myapp:/Users/yourname/myapp;backend:/Users/yourname/backend
-```
+Per-project `git_auto_merge` overrides are defined directly in `projects.yaml`. See `projects.example.yaml` for the full schema.
 
 For each project, create a memory folder:
 ```bash

@@ -276,7 +276,7 @@ def get_auto_merge_config(config: dict, project_name: str) -> dict:
 
     Resolution order:
     1. projects.yaml (if it exists) — per-project git_auto_merge
-    2. config.yaml — global git_auto_merge + projects section overrides
+    2. config.yaml — global git_auto_merge only
 
     Args:
         config: Full config dict from load_config()
@@ -295,14 +295,11 @@ def get_auto_merge_config(config: dict, project_name: str) -> dict:
     except Exception:
         pass
 
-    # Fall back to config.yaml
+    # Fall back to config.yaml global settings
     global_cfg = config.get("git_auto_merge", {})
-    project_cfg = config.get("projects", {}).get(project_name, {}).get("git_auto_merge", {})
-
-    # Deep merge: project overrides global
     return {
-        "enabled": project_cfg.get("enabled", global_cfg.get("enabled", True)),
-        "base_branch": project_cfg.get("base_branch", global_cfg.get("base_branch", "main")),
-        "strategy": project_cfg.get("strategy", global_cfg.get("strategy", "squash")),
-        "rules": project_cfg.get("rules", global_cfg.get("rules", []))
+        "enabled": global_cfg.get("enabled", True),
+        "base_branch": global_cfg.get("base_branch", "main"),
+        "strategy": global_cfg.get("strategy", "squash"),
+        "rules": global_cfg.get("rules", []),
     }

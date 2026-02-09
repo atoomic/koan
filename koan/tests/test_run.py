@@ -74,7 +74,7 @@ class TestLog:
 class TestParseProjects:
     """Tests for parse_projects() — delegates to get_known_projects().
 
-    Since parse_projects() now reads from projects.yaml > KOAN_PROJECTS > KOAN_PROJECT_PATH,
+    Since parse_projects() now reads from projects.yaml > KOAN_PROJECTS,
     tests must set env vars or create projects.yaml.
     """
 
@@ -92,23 +92,21 @@ class TestParseProjects:
         assert result[0] == ("a", str(p1))
         assert result[1] == ("b", str(p2))
 
-    def test_single_project(self, tmp_path, monkeypatch):
+    def test_single_project_via_env(self, tmp_path, monkeypatch):
         from app import utils
         monkeypatch.setattr(utils, "KOAN_ROOT", tmp_path)
         from app.run import parse_projects
         p = tmp_path / "proj"
         p.mkdir()
-        monkeypatch.delenv("KOAN_PROJECTS", raising=False)
-        monkeypatch.setenv("KOAN_PROJECT_PATH", str(p))
+        monkeypatch.setenv("KOAN_PROJECTS", f"proj:{p}")
         result = parse_projects()
         assert len(result) == 1
-        assert result[0] == ("default", str(p))
+        assert result[0] == ("proj", str(p))
 
     def test_no_project_exits(self, tmp_path, monkeypatch):
         from app import utils
         monkeypatch.setattr(utils, "KOAN_ROOT", tmp_path)
         monkeypatch.delenv("KOAN_PROJECTS", raising=False)
-        monkeypatch.delenv("KOAN_PROJECT_PATH", raising=False)
         from app.run import parse_projects
         with pytest.raises(SystemExit):
             parse_projects()
@@ -148,7 +146,6 @@ projects:
     path: "{p}"
 """)
         monkeypatch.delenv("KOAN_PROJECTS", raising=False)
-        monkeypatch.delenv("KOAN_PROJECT_PATH", raising=False)
         result = parse_projects()
         assert len(result) == 1
         assert result[0][0] == "myproject"

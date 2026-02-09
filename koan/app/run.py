@@ -210,8 +210,7 @@ def parse_projects() -> list:
 
     Delegates to get_known_projects() which checks:
     1. projects.yaml (if exists)
-    2. KOAN_PROJECTS env var
-    3. KOAN_PROJECT_PATH env var
+    2. KOAN_PROJECTS env var (fallback)
 
     Returns list of (name, path) tuples. Exits on error.
     """
@@ -749,7 +748,7 @@ def main_loop():
     # Set PYTHONPATH
     os.environ["PYTHONPATH"] = os.path.join(koan_root, "koan")
 
-    # Parse projects (projects.yaml > KOAN_PROJECTS > KOAN_PROJECT_PATH)
+    # Parse projects (projects.yaml > KOAN_PROJECTS)
     projects = parse_projects()
 
     # Record startup time
