@@ -117,4 +117,9 @@ usage:
   weekly_token_limit: 5000000   # Tokens per 7-day window
 
 # Per-project overrides are now configured in projects.yaml.
-# See projects.example.yaml for documentation.
+# Supported per-project settings:
+#   - git_auto_merge: per-project merge rules
+#   - cli_provider: override AI provider ("claude", "copilot", "local")
+#   - models: override model selection (mission, chat, lightweight, etc.)
+#   - tools: restrict available tools (mission, chat tool lists)
+# See projects.example.yaml for documentation and examples.

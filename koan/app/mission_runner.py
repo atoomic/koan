@@ -30,6 +30,7 @@ def build_mission_command(
     prompt: str,
     autonomous_mode: str = "implement",
     extra_flags: str = "",
+    project_name: str = "",
 ) -> List[str]:
     """Build the Claude CLI command for mission execution.
 
@@ -37,11 +38,14 @@ def build_mission_command(
         prompt: The full agent prompt text.
         autonomous_mode: Current mode (review/implement/deep).
         extra_flags: Space-separated extra CLI flags from config.
+        project_name: Optional project name for per-project tool overrides.
 
     Returns:
         Complete command list ready for subprocess.
     """
-    tools = "Bash,Read,Write,Glob,Grep,Edit"
+    from app.config import get_mission_tools
+
+    tools = get_mission_tools(project_name)
 
     cmd = [
         "claude", "-p", prompt,
@@ -55,18 +59,19 @@ def build_mission_command(
     return cmd
 
 
-def get_mission_flags(autonomous_mode: str = "") -> str:
+def get_mission_flags(autonomous_mode: str = "", project_name: str = "") -> str:
     """Get CLI flags for mission role from config.
 
     Args:
         autonomous_mode: Current mode (review/implement/deep).
+        project_name: Optional project name for per-project model overrides.
 
     Returns:
         Space-separated CLI flags string (may be empty).
     """
     from app.config import get_claude_flags_for_role
 
-    return get_claude_flags_for_role("mission", autonomous_mode)
+    return get_claude_flags_for_role("mission", autonomous_mode, project_name)
 
 
 def parse_claude_output(raw_text: str) -> str:

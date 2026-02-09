@@ -9,6 +9,9 @@ from app.projects_config import (
     get_projects_from_config,
     get_project_config,
     get_project_auto_merge,
+    get_project_cli_provider,
+    get_project_models,
+    get_project_tools,
     validate_project_paths,
     _validate_config,
 )
@@ -644,3 +647,352 @@ projects:
         result = get_auto_merge_config(config, "unknown")
         assert result["enabled"] is True
         assert result["strategy"] == "squash"
+
+
+# ---------------------------------------------------------------------------
+# get_project_cli_provider
+# ---------------------------------------------------------------------------
+
+
+class TestGetProjectCliProvider:
+    """Tests for get_project_cli_provider() — per-project CLI provider."""
+
+    def test_returns_project_provider(self):
+        config = {
+            "defaults": {"cli_provider": "claude"},
+            "projects": {"app": {"path": "/app", "cli_provider": "copilot"}},
+        }
+        assert get_project_cli_provider(config, "app") == "copilot"
+
+    def test_inherits_default_provider(self):
+        config = {
+            "defaults": {"cli_provider": "claude"},
+            "projects": {"app": {"path": "/app"}},
+        }
+        assert get_project_cli_provider(config, "app") == "claude"
+
+    def test_returns_empty_when_not_configured(self):
+        config = {
+            "projects": {"app": {"path": "/app"}},
+        }
+        assert get_project_cli_provider(config, "app") == ""
+
+    def test_unknown_project_returns_default(self):
+        config = {
+            "defaults": {"cli_provider": "local"},
+            "projects": {"app": {"path": "/app"}},
+        }
+        assert get_project_cli_provider(config, "unknown") == "local"
+
+    def test_normalizes_to_lowercase(self):
+        config = {
+            "projects": {"app": {"path": "/app", "cli_provider": "Claude"}},
+        }
+        assert get_project_cli_provider(config, "app") == "claude"
+
+    def test_strips_whitespace(self):
+        config = {
+            "projects": {"app": {"path": "/app", "cli_provider": "  copilot  "}},
+        }
+        assert get_project_cli_provider(config, "app") == "copilot"
+
+
+# ---------------------------------------------------------------------------
+# get_project_models
+# ---------------------------------------------------------------------------
+
+
+class TestGetProjectModels:
+    """Tests for get_project_models() — per-project model overrides."""
+
+    def test_returns_project_models(self):
+        config = {
+            "defaults": {"models": {"mission": "opus", "chat": "sonnet"}},
+            "projects": {"app": {"path": "/app", "models": {"mission": "haiku"}}},
+        }
+        result = get_project_models(config, "app")
+        # Project override merged with defaults
+        assert result["mission"] == "haiku"
+        assert result["chat"] == "sonnet"
+
+    def test_inherits_defaults_when_no_project_models(self):
+        config = {
+            "defaults": {"models": {"mission": "opus"}},
+            "projects": {"app": {"path": "/app"}},
+        }
+        result = get_project_models(config, "app")
+        assert result["mission"] == "opus"
+
+    def test_returns_empty_when_not_configured(self):
+        config = {
+            "projects": {"app": {"path": "/app"}},
+        }
+        result = get_project_models(config, "app")
+        assert result == {}
+
+    def test_handles_non_dict_models(self):
+        config = {
+            "projects": {"app": {"path": "/app", "models": "invalid"}},
+        }
+        result = get_project_models(config, "app")
+        assert result == {}
+
+    def test_project_overrides_specific_keys(self):
+        config = {
+            "defaults": {"models": {"mission": "opus", "chat": "opus", "lightweight": "haiku"}},
+            "projects": {
+                "small": {"path": "/small", "models": {"mission": "sonnet"}},
+            },
+        }
+        result = get_project_models(config, "small")
+        assert result["mission"] == "sonnet"
+        assert result["chat"] == "opus"
+        assert result["lightweight"] == "haiku"
+
+    def test_unknown_project_returns_defaults(self):
+        config = {
+            "defaults": {"models": {"mission": "opus"}},
+            "projects": {"app": {"path": "/app"}},
+        }
+        result = get_project_models(config, "unknown")
+        assert result["mission"] == "opus"
+
+
+# ---------------------------------------------------------------------------
+# get_project_tools
+# ---------------------------------------------------------------------------
+
+
+class TestGetProjectTools:
+    """Tests for get_project_tools() — per-project tool restrictions."""
+
+    def test_returns_project_tools(self):
+        config = {
+            "defaults": {
+                "tools": {"mission": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]},
+            },
+            "projects": {
+                "readonly": {
+                    "path": "/readonly",
+                    "tools": {"mission": ["Read", "Glob", "Grep"]},
+                },
+            },
+        }
+        result = get_project_tools(config, "readonly")
+        assert result["mission"] == ["Read", "Glob", "Grep"]
+
+    def test_inherits_default_tools(self):
+        config = {
+            "defaults": {"tools": {"mission": ["Read", "Bash"]}},
+            "projects": {"app": {"path": "/app"}},
+        }
+        result = get_project_tools(config, "app")
+        assert result["mission"] == ["Read", "Bash"]
+
+    def test_returns_empty_when_not_configured(self):
+        config = {
+            "projects": {"app": {"path": "/app"}},
+        }
+        result = get_project_tools(config, "app")
+        assert result == {}
+
+    def test_handles_non_dict_tools(self):
+        config = {
+            "projects": {"app": {"path": "/app", "tools": "invalid"}},
+        }
+        result = get_project_tools(config, "app")
+        assert result == {}
+
+    def test_chat_tools_override(self):
+        config = {
+            "defaults": {"tools": {"chat": ["Read", "Glob", "Grep"]}},
+            "projects": {
+                "app": {
+                    "path": "/app",
+                    "tools": {"chat": ["Read"]},
+                },
+            },
+        }
+        result = get_project_tools(config, "app")
+        assert result["chat"] == ["Read"]
+
+    def test_mixed_mission_and_chat(self):
+        config = {
+            "projects": {
+                "app": {
+                    "path": "/app",
+                    "tools": {
+                        "mission": ["Read", "Glob", "Grep"],
+                        "chat": ["Read"],
+                    },
+                },
+            },
+        }
+        result = get_project_tools(config, "app")
+        assert result["mission"] == ["Read", "Glob", "Grep"]
+        assert result["chat"] == ["Read"]
+
+
+# ---------------------------------------------------------------------------
+# Per-project config integration with config.py
+# ---------------------------------------------------------------------------
+
+
+class TestPerProjectModelConfig:
+    """Integration tests for get_model_config() with per-project overrides."""
+
+    def test_project_model_overrides(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        (tmp_path / "projects.yaml").write_text("""
+defaults:
+  models:
+    mission: "opus"
+    chat: "opus"
+projects:
+  small-lib:
+    path: /tmp/small-lib
+    models:
+      mission: "sonnet"
+""")
+        from app.config import get_model_config
+
+        with patch("app.config._load_config", return_value={"models": {"mission": "opus", "chat": "opus"}}):
+            result = get_model_config("small-lib")
+        assert result["mission"] == "sonnet"
+        assert result["chat"] == "opus"
+
+    def test_no_project_override_uses_global(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        (tmp_path / "projects.yaml").write_text("""
+projects:
+  app:
+    path: /tmp/app
+""")
+        from app.config import get_model_config
+
+        with patch("app.config._load_config", return_value={"models": {"mission": "opus"}}):
+            result = get_model_config("app")
+        assert result["mission"] == "opus"
+
+    def test_empty_project_name_uses_global(self):
+        from app.config import get_model_config
+
+        with patch("app.config._load_config", return_value={"models": {"mission": "opus"}}):
+            result = get_model_config("")
+        assert result["mission"] == "opus"
+
+    def test_unknown_project_uses_global(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        (tmp_path / "projects.yaml").write_text("""
+projects:
+  app:
+    path: /tmp/app
+""")
+        from app.config import get_model_config
+
+        with patch("app.config._load_config", return_value={"models": {"mission": "opus"}}):
+            result = get_model_config("nonexistent")
+        assert result["mission"] == "opus"
+
+
+class TestPerProjectToolConfig:
+    """Integration tests for get_mission_tools()/get_chat_tools() with per-project overrides."""
+
+    def test_project_mission_tools_override(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        (tmp_path / "projects.yaml").write_text("""
+projects:
+  readonly:
+    path: /tmp/readonly
+    tools:
+      mission: ["Read", "Glob", "Grep"]
+""")
+        from app.config import get_mission_tools
+
+        with patch("app.config._load_config", return_value={}):
+            result = get_mission_tools("readonly")
+        assert result == "Read,Glob,Grep"
+
+    def test_project_chat_tools_override(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        (tmp_path / "projects.yaml").write_text("""
+projects:
+  restricted:
+    path: /tmp/restricted
+    tools:
+      chat: ["Read"]
+""")
+        from app.config import get_chat_tools
+
+        with patch("app.config._load_config", return_value={}):
+            result = get_chat_tools("restricted")
+        assert result == "Read"
+
+    def test_no_project_override_uses_global(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        (tmp_path / "projects.yaml").write_text("""
+projects:
+  app:
+    path: /tmp/app
+""")
+        from app.config import get_mission_tools
+
+        with patch("app.config._load_config", return_value={}):
+            result = get_mission_tools("app")
+        assert result == "Read,Glob,Grep,Edit,Write,Bash"
+
+    def test_empty_project_name_uses_global(self):
+        from app.config import get_mission_tools
+
+        with patch("app.config._load_config", return_value={}):
+            result = get_mission_tools("")
+        assert result == "Read,Glob,Grep,Edit,Write,Bash"
+
+    def test_defaults_section_tools_inherited(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        (tmp_path / "projects.yaml").write_text("""
+defaults:
+  tools:
+    mission: ["Read", "Bash"]
+projects:
+  app:
+    path: /tmp/app
+""")
+        from app.config import get_mission_tools
+
+        with patch("app.config._load_config", return_value={}):
+            result = get_mission_tools("app")
+        assert result == "Read,Bash"
+
+
+class TestPerProjectFlagsForRole:
+    """Integration tests for get_claude_flags_for_role() with per-project overrides."""
+
+    def test_project_model_used_in_flags(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        (tmp_path / "projects.yaml").write_text("""
+projects:
+  small:
+    path: /tmp/small
+    models:
+      mission: "sonnet"
+""")
+        from app.config import get_claude_flags_for_role
+        from app.provider import reset_provider
+
+        reset_provider()
+        with patch("app.config._load_config", return_value={}):
+            result = get_claude_flags_for_role("mission", project_name="small")
+        assert "--model" in result
+        assert "sonnet" in result
+
+    def test_no_project_uses_global_model(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        # No projects.yaml
+        from app.config import get_claude_flags_for_role
+        from app.provider import reset_provider
+
+        reset_provider()
+        with patch("app.config._load_config", return_value={"models": {"mission": "opus"}}):
+            result = get_claude_flags_for_role("mission", project_name="nonexistent")
+        assert "opus" in result

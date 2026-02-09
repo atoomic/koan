@@ -22,37 +22,86 @@ def _load_config() -> dict:
     return load_config()
 
 
-def get_chat_tools() -> str:
+def _load_project_overrides(project_name: str) -> dict:
+    """Load per-project overrides from projects.yaml.
+
+    Returns the merged project config (defaults + project-specific) or
+    empty dict if projects.yaml doesn't exist or the project isn't found.
+    """
+    if not project_name:
+        return {}
+    try:
+        from app.projects_config import load_projects_config, get_project_config
+        koan_root = os.environ.get("KOAN_ROOT", "")
+        if not koan_root:
+            return {}
+        projects_config = load_projects_config(koan_root)
+        if not projects_config:
+            return {}
+        if project_name not in projects_config.get("projects", {}):
+            return {}
+        return get_project_config(projects_config, project_name)
+    except Exception:
+        return {}
+
+
+def _get_tools_for_role(role: str, default: List[str], project_name: str = "") -> str:
+    """Get comma-separated tool list for a role, with per-project override.
+
+    Args:
+        role: Tool role key ("chat" or "mission").
+        default: Default tool list if nothing is configured.
+        project_name: Optional project name for per-project overrides.
+
+    Returns:
+        Comma-separated tool names.
+    """
+    # Check per-project override first
+    project_overrides = _load_project_overrides(project_name)
+    project_tools = project_overrides.get("tools", {})
+    if isinstance(project_tools, dict) and role in project_tools:
+        tools = project_tools[role]
+        if isinstance(tools, list):
+            return ",".join(tools)
+
+    config = _load_config()
+    tools = config.get("tools", {}).get(role, default)
+    return ",".join(tools)
+
+
+def get_chat_tools(project_name: str = "") -> str:
     """Get comma-separated list of tools for chat responses.
 
     Chat uses a restricted set by default (read-only) to prevent prompt
     injection attacks from Telegram messages. Bash is explicitly excluded.
 
     Config key: tools.chat (default: Read, Glob, Grep)
+    Per-project override: projects.yaml tools.chat
+
+    Args:
+        project_name: Optional project name for per-project overrides.
 
     Returns:
         Comma-separated tool names.
     """
-    config = _load_config()
-    default_chat_tools = ["Read", "Glob", "Grep"]
-    tools = config.get("tools", {}).get("chat", default_chat_tools)
-    return ",".join(tools)
+    return _get_tools_for_role("chat", ["Read", "Glob", "Grep"], project_name)
 
 
-def get_mission_tools() -> str:
+def get_mission_tools(project_name: str = "") -> str:
     """Get comma-separated list of tools for mission execution.
 
     Missions run with full tool access including Bash for code execution.
 
     Config key: tools.mission (default: Read, Glob, Grep, Edit, Write, Bash)
+    Per-project override: projects.yaml tools.mission
+
+    Args:
+        project_name: Optional project name for per-project overrides.
 
     Returns:
         Comma-separated tool names.
     """
-    config = _load_config()
-    default_mission_tools = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
-    tools = config.get("tools", {}).get("mission", default_mission_tools)
-    return ",".join(tools)
+    return _get_tools_for_role("mission", ["Read", "Glob", "Grep", "Edit", "Write", "Bash"], project_name)
 
 
 # Backward compatibility alias
@@ -67,11 +116,20 @@ def get_tools_description() -> str:
     return config.get("tools", {}).get("description", "")
 
 
-def get_model_config() -> dict:
-    """Get model configuration from config.yaml.
+def get_model_config(project_name: str = "") -> dict:
+    """Get model configuration from config.yaml with per-project overrides.
 
-    Returns dict with keys: mission, chat, lightweight, fallback, review_mode.
-    Empty strings mean "use default model".
+    Resolution order for each key:
+    1. projects.yaml models.{key} for the project (if set)
+    2. config.yaml models.{key}
+    3. Built-in default
+
+    Args:
+        project_name: Optional project name for per-project overrides.
+
+    Returns:
+        Dict with keys: mission, chat, lightweight, fallback, review_mode.
+        Empty strings mean "use default model".
     """
     config = _load_config()
     defaults = {
@@ -81,8 +139,19 @@ def get_model_config() -> dict:
         "fallback": "sonnet",
         "review_mode": "",
     }
-    models = config.get("models", {})
-    return {k: models.get(k, v) for k, v in defaults.items()}
+    # Start with global config
+    global_models = config.get("models", {})
+    result = {k: global_models.get(k, v) for k, v in defaults.items()}
+
+    # Apply per-project overrides
+    project_overrides = _load_project_overrides(project_name)
+    project_models = project_overrides.get("models", {})
+    if isinstance(project_models, dict):
+        for key in defaults:
+            if key in project_models:
+                result[key] = project_models[key]
+
+    return result
 
 
 def get_start_on_pause() -> bool:
@@ -184,22 +253,25 @@ def build_claude_flags(
     return build_cli_flags(model=model, fallback=fallback, disallowed_tools=disallowed_tools)
 
 
-def get_claude_flags_for_role(role: str, autonomous_mode: str = "") -> str:
+def get_claude_flags_for_role(
+    role: str, autonomous_mode: str = "", project_name: str = ""
+) -> str:
     """Get CLI flags for a Claude invocation role, as a space-separated string.
 
     Provider-aware: delegates to the configured CLI provider for proper flag generation.
-    Designed to be called from run.py to get model/fallback flags.
+    Supports per-project model overrides from projects.yaml.
 
     Args:
         role: One of "mission", "chat", "lightweight", "contemplative"
         autonomous_mode: Current mode (review/implement/deep) — affects tool restrictions
+        project_name: Optional project name for per-project model overrides
 
     Returns:
         Space-separated CLI flags string (may be empty)
     """
     from app.cli_provider import get_provider
 
-    models = get_model_config()
+    models = get_model_config(project_name)
     provider = get_provider()
 
     model = ""

@@ -16,23 +16,58 @@ defaults:
     enabled: false
     base_branch: "main"
     strategy: "squash"
-  # cli_provider: "claude"          # Future: per-project provider
-  # model: ""                       # Future: per-project model
+
+  # CLI provider — which AI CLI to use ("claude", "copilot", "local")
+  # Per-project overrides allow different providers for different repos.
+  # Can also be set globally in config.yaml or via KOAN_CLI_PROVIDER env var.
+  # cli_provider: "claude"
+
+  # Model overrides — control which models are used per project.
+  # Keys match config.yaml models section: mission, chat, lightweight,
+  # fallback, review_mode. Empty string = use default model.
+  # models:
+  #   mission: ""
+  #   chat: ""
+
+  # Tool restrictions — control which tools are available per project.
+  # Keys: mission (for autonomous work), chat (for Telegram conversations).
+  # Useful for restricting write access on certain repos.
+  # tools:
+  #   mission: ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
+  #   chat: ["Read", "Glob", "Grep"]
 
 projects:
-  # Example: your main project
+  # Example: your main project (minimal config — inherits all defaults)
   myapp:
     path: "/Users/yourname/workspace/myapp"
     # git_auto_merge:
     #   enabled: true
     #   strategy: "merge"
 
-  # Example: a backend project with custom base branch
+  # Example: a backend project with custom model and base branch
   # backend:
   #   path: "/Users/yourname/workspace/backend"
   #   git_auto_merge:
   #     base_branch: "staging"
+  #   models:
+  #     mission: "opus"          # Use Opus for complex backend work
+  #     review_mode: "sonnet"    # Use Sonnet for cheaper reviews
 
-  # Example: minimal config (inherits all defaults — only path required)
-  # frontend:
-  #   path: "/Users/yourname/workspace/frontend"
+  # Example: a small Perl module with restricted tools and cheaper model
+  # perl-lib:
+  #   path: "/Users/yourname/workspace/perl-lib"
+  #   models:
+  #     mission: "sonnet"        # Sonnet is sufficient for small modules
+  #   tools:
+  #     mission: ["Read", "Glob", "Grep", "Edit", "Write"]  # No Bash
+
+  # Example: a read-only repo (audit/review only)
+  # vendor-lib:
+  #   path: "/Users/yourname/workspace/vendor-lib"
+  #   tools:
+  #     mission: ["Read", "Glob", "Grep"]  # Read-only — no modifications
+
+  # Example: a project using GitHub Copilot instead of Claude
+  # copilot-project:
+  #   path: "/Users/yourname/workspace/copilot-project"
+  #   cli_provider: "copilot"
