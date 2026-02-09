@@ -1124,6 +1124,11 @@ def main_loop():
                 except Exception:
                     pass
 
+            # Complete/fail mission in missions.md (safety net — idempotent if Claude already did it)
+            # Done BEFORE post-mission pipeline so quota exhaustion can't skip it.
+            if mission_title:
+                _finalize_mission(instance, mission_title, project_name, claude_exit)
+
             # Post-mission pipeline
             set_status(koan_root, f"Run {run_num}/{max_runs} — post-mission processing")
             try:
@@ -1165,10 +1170,6 @@ def main_loop():
                 log("error", f"Post-mission processing error: {e}")
 
             _cleanup_temp(stdout_file, stderr_file)
-
-            # Complete/fail mission in missions.md (safety net — idempotent if Claude already did it)
-            if mission_title:
-                _finalize_mission(instance, mission_title, project_name, claude_exit)
 
             # Report result
             if claude_exit == 0:
@@ -1291,16 +1292,21 @@ def _reset_usage_session(instance: str):
 def _update_mission_in_file(instance: str, mission_title: str, *, failed: bool = False):
     """Move mission from Pending to Done/Failed via locked write (idempotent)."""
     try:
+        from app.missions import complete_mission, fail_mission
         from app.utils import modify_missions_file
         missions_path = Path(instance, "missions.md")
         if not missions_path.exists():
             return
-        if failed:
-            from app.missions import fail_mission
-            modify_missions_file(missions_path, lambda c: fail_mission(c, mission_title))
-        else:
-            from app.missions import complete_mission
-            modify_missions_file(missions_path, lambda c: complete_mission(c, mission_title))
+        transform = fail_mission if failed else complete_mission
+        before = [None]
+
+        def tracked(content):
+            before[0] = content
+            return transform(content, mission_title)
+
+        after = modify_missions_file(missions_path, tracked)
+        if before[0] is not None and after == before[0]:
+            log("warning", f"Mission not found in Pending (no change): {mission_title[:80]}")
     except Exception as e:
         label = "fail" if failed else "complete"
         log("error", f"Could not {label} mission in missions.md: {e}")
