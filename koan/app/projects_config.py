@@ -5,6 +5,9 @@ Provides:
 - get_projects_from_config(config) -> list[tuple[str, str]]: Extract (name, path) tuples
 - get_project_config(config, name) -> dict: Get merged defaults + project overrides
 - get_project_auto_merge(config, name) -> dict: Get auto-merge config for a project
+- get_project_cli_provider(config, name) -> str: Get CLI provider for a project
+- get_project_models(config, name) -> dict: Get model overrides for a project
+- get_project_tools(config, name) -> dict: Get tool restrictions for a project
 
 File location: projects.yaml at KOAN_ROOT (next to .env).
 """
@@ -153,3 +156,41 @@ def get_project_auto_merge(config: dict, project_name: str) -> dict:
         "strategy": am.get("strategy", "squash"),
         "rules": am.get("rules", []),
     }
+
+
+def get_project_cli_provider(config: dict, project_name: str) -> str:
+    """Get CLI provider for a project from projects.yaml.
+
+    Returns the provider name ("claude", "copilot", "local") or empty string
+    if not configured (meaning: use the global provider).
+    """
+    project_cfg = get_project_config(config, project_name)
+    return str(project_cfg.get("cli_provider", "")).strip().lower()
+
+
+def get_project_models(config: dict, project_name: str) -> dict:
+    """Get model overrides for a project from projects.yaml.
+
+    Returns a dict with model role keys (mission, chat, lightweight, etc.).
+    Only includes keys that are explicitly set — caller should merge with
+    global defaults.
+    """
+    project_cfg = get_project_config(config, project_name)
+    models = project_cfg.get("models", {})
+    if not isinstance(models, dict):
+        return {}
+    return models
+
+
+def get_project_tools(config: dict, project_name: str) -> dict:
+    """Get tool restrictions for a project from projects.yaml.
+
+    Returns a dict with keys: mission, chat (lists of tool names).
+    Only includes keys that are explicitly set — caller should merge with
+    global defaults.
+    """
+    project_cfg = get_project_config(config, project_name)
+    tools = project_cfg.get("tools", {})
+    if not isinstance(tools, dict):
+        return {}
+    return tools

@@ -1077,11 +1077,12 @@ def main_loop():
             stdout_file = tempfile.mktemp(prefix="koan-out-")
             stderr_file = tempfile.mktemp(prefix="koan-err-")
 
-            # Build CLI command
-            from app.utils import get_claude_flags_for_role
-            mission_flags_str = get_claude_flags_for_role("mission", autonomous_mode)
+            # Build CLI command (with per-project model/tools overrides)
+            from app.config import get_claude_flags_for_role, get_mission_tools
+            mission_flags_str = get_claude_flags_for_role("mission", autonomous_mode, project_name)
+            mission_tools = get_mission_tools(project_name)
             cmd = ["claude", "-p", prompt,
-                   "--allowedTools", "Bash,Read,Write,Glob,Grep,Edit",
+                   "--allowedTools", mission_tools,
                    "--output-format", "json"]
             if mission_flags_str:
                 cmd.extend(mission_flags_str.split())

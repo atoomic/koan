@@ -63,7 +63,7 @@ class TestGetMissionFlags:
 
         result = get_mission_flags("deep")
         assert result == "--model opus"
-        mock_flags.assert_called_once_with("mission", "deep")
+        mock_flags.assert_called_once_with("mission", "deep", "")
 
     @patch("app.config.get_claude_flags_for_role", return_value="")
     def test_returns_empty_string_when_no_flags(self, mock_flags):
