@@ -45,6 +45,30 @@ def _load_project_overrides(project_name: str) -> dict:
         return {}
 
 
+def _get_tools_for_role(role: str, default: List[str], project_name: str = "") -> str:
+    """Get comma-separated tool list for a role, with per-project override.
+
+    Args:
+        role: Tool role key ("chat" or "mission").
+        default: Default tool list if nothing is configured.
+        project_name: Optional project name for per-project overrides.
+
+    Returns:
+        Comma-separated tool names.
+    """
+    # Check per-project override first
+    project_overrides = _load_project_overrides(project_name)
+    project_tools = project_overrides.get("tools", {})
+    if isinstance(project_tools, dict) and role in project_tools:
+        tools = project_tools[role]
+        if isinstance(tools, list):
+            return ",".join(tools)
+
+    config = _load_config()
+    tools = config.get("tools", {}).get(role, default)
+    return ",".join(tools)
+
+
 def get_chat_tools(project_name: str = "") -> str:
     """Get comma-separated list of tools for chat responses.
 
@@ -60,19 +84,7 @@ def get_chat_tools(project_name: str = "") -> str:
     Returns:
         Comma-separated tool names.
     """
-    default_chat_tools = ["Read", "Glob", "Grep"]
-
-    # Check per-project override first
-    project_overrides = _load_project_overrides(project_name)
-    project_tools = project_overrides.get("tools", {})
-    if isinstance(project_tools, dict) and "chat" in project_tools:
-        tools = project_tools["chat"]
-        if isinstance(tools, list):
-            return ",".join(tools)
-
-    config = _load_config()
-    tools = config.get("tools", {}).get("chat", default_chat_tools)
-    return ",".join(tools)
+    return _get_tools_for_role("chat", ["Read", "Glob", "Grep"], project_name)
 
 
 def get_mission_tools(project_name: str = "") -> str:
@@ -89,19 +101,7 @@ def get_mission_tools(project_name: str = "") -> str:
     Returns:
         Comma-separated tool names.
     """
-    default_mission_tools = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
-
-    # Check per-project override first
-    project_overrides = _load_project_overrides(project_name)
-    project_tools = project_overrides.get("tools", {})
-    if isinstance(project_tools, dict) and "mission" in project_tools:
-        tools = project_tools["mission"]
-        if isinstance(tools, list):
-            return ",".join(tools)
-
-    config = _load_config()
-    tools = config.get("tools", {}).get("mission", default_mission_tools)
-    return ",".join(tools)
+    return _get_tools_for_role("mission", ["Read", "Glob", "Grep", "Edit", "Write", "Bash"], project_name)
 
 
 # Backward compatibility alias
