@@ -976,7 +976,7 @@ def main_loop():
                     from app.mission_history import should_skip_mission
                     if should_skip_mission(instance, mission_title, max_executions=3):
                         log("mission", f"Skipping repeated mission (3+ attempts): {mission_title[:60]}")
-                        _fail_mission_in_file(instance, mission_title)
+                        _update_mission_in_file(instance, mission_title, failed=True)
                         _notify(instance, f"⚠️ Mission failed 3+ times, moved to Failed: {mission_title[:60]}")
                         _commit_instance(instance)
                         continue
@@ -1027,9 +1027,9 @@ def main_loop():
 
                     if exit_code == 0:
                         log("mission", f"Run {run_num}/{max_runs} — [{project_name}] skill completed")
-                        _complete_mission_in_file(instance, mission_title)
+                        _update_mission_in_file(instance, mission_title)
                     else:
-                        _fail_mission_in_file(instance, mission_title)
+                        _update_mission_in_file(instance, mission_title, failed=True)
                         _notify(instance, f"❌ Run {run_num}/{max_runs} — [{project_name}] Skill failed: {mission_title}")
 
                     try:
@@ -1176,9 +1176,9 @@ def main_loop():
             # Complete/fail mission in missions.md (safety net — idempotent if Claude already did it)
             if mission_title:
                 if claude_exit == 0:
-                    _complete_mission_in_file(instance, mission_title)
+                    _update_mission_in_file(instance, mission_title)
                 else:
-                    _fail_mission_in_file(instance, mission_title)
+                    _update_mission_in_file(instance, mission_title, failed=True)
 
                 try:
                     from app.mission_history import record_execution
@@ -1304,28 +1304,22 @@ def _reset_usage_session(instance: str):
         pass
 
 
-def _complete_mission_in_file(instance: str, mission_title: str):
-    """Remove completed mission from Pending, add to Done (locked, idempotent)."""
+def _update_mission_in_file(instance: str, mission_title: str, *, failed: bool = False):
+    """Move mission from Pending to Done/Failed via locked write (idempotent)."""
     try:
-        from app.missions import complete_mission
         from app.utils import modify_missions_file
         missions_path = Path(instance, "missions.md")
-        if missions_path.exists():
+        if not missions_path.exists():
+            return
+        if failed:
+            from app.missions import fail_mission
+            modify_missions_file(missions_path, lambda c: fail_mission(c, mission_title))
+        else:
+            from app.missions import complete_mission
             modify_missions_file(missions_path, lambda c: complete_mission(c, mission_title))
     except Exception as e:
-        log("error", f"Could not complete mission in missions.md: {e}")
-
-
-def _fail_mission_in_file(instance: str, mission_title: str):
-    """Remove failed mission from Pending, add to Failed (locked, idempotent)."""
-    try:
-        from app.missions import fail_mission
-        from app.utils import modify_missions_file
-        missions_path = Path(instance, "missions.md")
-        if missions_path.exists():
-            modify_missions_file(missions_path, lambda c: fail_mission(c, mission_title))
-    except Exception as e:
-        log("error", f"Could not fail mission in missions.md: {e}")
+        label = "fail" if failed else "complete"
+        log("error", f"Could not {label} mission in missions.md: {e}")
 
 
 def _run_skill_mission(

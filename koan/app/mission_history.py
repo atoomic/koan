@@ -7,7 +7,6 @@ Prevents infinite re-execution of missions that fail repeatedly.
 import json
 import time
 from pathlib import Path
-from typing import Optional
 
 
 _HISTORY_FILE = "mission_history.json"

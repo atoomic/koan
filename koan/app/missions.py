@@ -619,68 +619,12 @@ def cancel_pending_mission(content: str, identifier: str) -> Tuple[str, str]:
     return result[0], target_text
 
 
-def complete_mission(content: str, mission_text: str) -> str:
-    """Move a mission from Pending to Done with a completion timestamp.
+def _move_pending_to_section(
+    content: str, mission_text: str, section_key: str, marker: str, header: str,
+) -> str:
+    """Move a mission from Pending to a target section with a timestamp.
 
-    Finds the mission in the Pending section by matching its text content,
-    removes it, and appends it to the Done section.
-
-    Args:
-        content: Full missions.md content.
-        mission_text: The mission text to match (e.g. "/plan Add dark mode").
-
-    Returns:
-        Updated content string. Returns original content unchanged if
-        the mission is not found in the Pending section.
-    """
-    pending = list_pending(content)
-    if not pending:
-        return content
-
-    # Find the matching pending item (by substring match on the mission text)
-    target_idx = None
-    needle = mission_text.strip()
-    for i, item in enumerate(pending):
-        if needle in item:
-            target_idx = i
-            break
-
-    if target_idx is None:
-        return content
-
-    result = _remove_pending_by_index(content, target_idx)
-    if result is None:
-        return content
-
-    updated = result[0]
-
-    # Add to Done section with timestamp
-    timestamp = time.strftime("%Y-%m-%d %H:%M")
-    done_entry = f"- {needle} ✅ ({timestamp})"
-
-    # Find the Done section and append
-    done_lines = updated.splitlines()
-    done_boundaries = find_section_boundaries(done_lines)
-    if "done" in done_boundaries:
-        done_start, done_end = done_boundaries["done"]
-        # Insert at the top of the Done section (right after header)
-        insert_at = done_start + 1
-        # Skip blank lines after header
-        while insert_at < done_end and done_lines[insert_at].strip() == "":
-            insert_at += 1
-        done_lines.insert(insert_at, done_entry)
-        return normalize_content("\n".join(done_lines))
-
-    # No Done section — append one
-    return normalize_content(updated + f"\n## Done\n\n{done_entry}\n")
-
-
-def fail_mission(content: str, mission_text: str) -> str:
-    """Move a mission from Pending to Failed with a failure timestamp.
-
-    Same pattern as complete_mission() but moves to ## Failed instead of ## Done.
-    Creates the ## Failed section if it doesn't exist.
-
+    Shared implementation for complete_mission() and fail_mission().
     Returns content unchanged if the mission is not found in Pending.
     """
     pending = list_pending(content)
@@ -704,20 +648,47 @@ def fail_mission(content: str, mission_text: str) -> str:
     updated = result[0]
 
     timestamp = time.strftime("%Y-%m-%d %H:%M")
-    failed_entry = f"- {needle} \u274c ({timestamp})"
+    entry = f"- {needle} {marker} ({timestamp})"
 
     lines = updated.splitlines()
     boundaries = find_section_boundaries(lines)
-    if "failed" in boundaries:
-        start, end = boundaries["failed"]
+    if section_key in boundaries:
+        start, end = boundaries[section_key]
         insert_at = start + 1
         while insert_at < end and lines[insert_at].strip() == "":
             insert_at += 1
-        lines.insert(insert_at, failed_entry)
+        lines.insert(insert_at, entry)
         return normalize_content("\n".join(lines))
 
-    # No Failed section — append one
-    return normalize_content(updated + f"\n## Failed\n\n{failed_entry}\n")
+    return normalize_content(updated + f"\n## {header}\n\n{entry}\n")
+
+
+def complete_mission(content: str, mission_text: str) -> str:
+    """Move a mission from Pending to Done with a completion timestamp.
+
+    Finds the mission in the Pending section by matching its text content,
+    removes it, and appends it to the Done section.
+
+    Args:
+        content: Full missions.md content.
+        mission_text: The mission text to match (e.g. "/plan Add dark mode").
+
+    Returns:
+        Updated content string. Returns original content unchanged if
+        the mission is not found in the Pending section.
+    """
+    return _move_pending_to_section(content, mission_text, "done", "\u2705", "Done")
+
+
+def fail_mission(content: str, mission_text: str) -> str:
+    """Move a mission from Pending to Failed with a failure timestamp.
+
+    Same pattern as complete_mission() but moves to ## Failed instead of ## Done.
+    Creates the ## Failed section if it doesn't exist.
+
+    Returns content unchanged if the mission is not found in Pending.
+    """
+    return _move_pending_to_section(content, mission_text, "failed", "\u274c", "Failed")
 
 
 def clean_mission_display(text: str, max_length: int = 120) -> str:
