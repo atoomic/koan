@@ -75,36 +75,15 @@ def get_installation_status() -> dict:
 def _load_wizard_projects() -> list:
     """Load project list for wizard display.
 
-    Reads from projects.yaml first, falls back to KOAN_PROJECTS env var.
+    Reuses get_known_projects() (projects.yaml > KOAN_PROJECTS).
     Returns list of dicts with 'name' and 'path' keys.
     """
-    projects_yaml = KOAN_ROOT / "projects.yaml"
-    if projects_yaml.exists():
-        try:
-            import yaml
-            with open(projects_yaml) as f:
-                config = yaml.safe_load(f) or {}
-            projects_section = config.get("projects", {})
-            if isinstance(projects_section, dict):
-                return [
-                    {"name": name, "path": proj.get("path", "")}
-                    for name, proj in projects_section.items()
-                    if isinstance(proj, dict)
-                ]
-        except Exception:
-            pass
+    from app.utils import get_known_projects
 
-    # Fallback to KOAN_PROJECTS env var
-    projects_str = get_env_var("KOAN_PROJECTS") or ""
-    if projects_str and "/path/to" not in projects_str:
-        projects = []
-        for entry in projects_str.split(";"):
-            if ":" in entry:
-                name, path = entry.split(":", 1)
-                projects.append({"name": name, "path": path})
-        return projects
-
-    return []
+    try:
+        return [{"name": name, "path": path} for name, path in get_known_projects()]
+    except Exception:
+        return []
 
 
 def create_instance_dir() -> bool:

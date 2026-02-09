@@ -57,8 +57,7 @@ def _get_projects(ctx) -> List[Tuple[str, str]]:
     from app.utils import get_known_projects
 
     try:
-        projects = get_known_projects()
-        return [(name, path) for name, path in projects if Path(path).is_dir()]
+        return [(n, p) for n, p in get_known_projects() if Path(p).is_dir()]
     except Exception:
         return []
 

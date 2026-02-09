@@ -25,6 +25,7 @@ MISSIONS_FILE = INSTANCE_DIR / "missions.md"
 OUTBOX_FILE = INSTANCE_DIR / "outbox.md"
 TELEGRAM_HISTORY_FILE = INSTANCE_DIR / "telegram-history.jsonl"
 TOPICS_FILE = INSTANCE_DIR / "previous-discussions-topics.json"
+
 def _resolve_default_project_path() -> str:
     """Get the first project's path for CLI cwd fallback."""
     try:
