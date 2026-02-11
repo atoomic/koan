@@ -635,12 +635,22 @@ def _remove_pending_by_text(
 
     Returns ``(updated_content, removed_text)`` or ``None`` when no match.
     """
+    return _remove_item_by_text(content, needle, "pending")
+
+
+def _remove_item_by_text(
+    content: str, needle: str, section_key: str,
+) -> Optional[Tuple[str, str]]:
+    """Remove the first ``- `` item containing *needle* from the given section.
+
+    Returns ``(updated_content, removed_text)`` or ``None`` when no match.
+    """
     lines = content.splitlines()
     boundaries = find_section_boundaries(lines)
-    if "pending" not in boundaries:
+    if section_key not in boundaries:
         return None
 
-    start, end = boundaries["pending"]
+    start, end = boundaries[section_key]
 
     for i in range(start + 1, end):
         stripped = lines[i].strip()
@@ -653,13 +663,16 @@ def _remove_pending_by_text(
 def _move_pending_to_section(
     content: str, mission_text: str, section_key: str, marker: str, header: str,
 ) -> str:
-    """Move a mission from Pending to a target section with a timestamp.
+    """Move a mission from Pending (or In Progress) to a target section.
 
     Shared implementation for complete_mission() and fail_mission().
-    Returns content unchanged if the mission is not found in Pending.
+    Searches Pending first, then falls back to In Progress.
+    Returns content unchanged if the mission is not found in either section.
     """
     needle = mission_text.strip()
     result = _remove_pending_by_text(content, needle)
+    if result is None:
+        result = _remove_item_by_text(content, needle, "in_progress")
     if result is None:
         return content
 
@@ -681,30 +694,54 @@ def _move_pending_to_section(
     return normalize_content(updated + f"\n## {header}\n\n{entry}\n")
 
 
+def start_mission(content: str, mission_text: str) -> str:
+    """Move a mission from Pending to In Progress (no timestamp).
+
+    Used at the beginning of mission execution to mark it as active.
+    Returns content unchanged if the mission is not found in Pending.
+    """
+    needle = mission_text.strip()
+    result = _remove_pending_by_text(content, needle)
+    if result is None:
+        return content
+
+    updated = result[0]
+    removed = result[1].strip()
+    # Keep the original line text (with project tag etc), no timestamp/marker
+    entry = removed if removed.startswith("- ") else f"- {removed}"
+
+    lines = updated.splitlines()
+    boundaries = find_section_boundaries(lines)
+    if "in_progress" in boundaries:
+        start, end = boundaries["in_progress"]
+        insert_at = start + 1
+        while insert_at < end and lines[insert_at].strip() == "":
+            insert_at += 1
+        lines.insert(insert_at, entry)
+        return normalize_content("\n".join(lines))
+
+    return normalize_content(updated + f"\n## In Progress\n\n{entry}\n")
+
+
 def complete_mission(content: str, mission_text: str) -> str:
-    """Move a mission from Pending to Done with a completion timestamp.
+    """Move a mission from Pending (or In Progress) to Done with a timestamp.
 
-    Finds the mission in the Pending section by matching its text content,
-    removes it, and appends it to the Done section.
-
-    Args:
-        content: Full missions.md content.
-        mission_text: The mission text to match (e.g. "/plan Add dark mode").
+    Searches Pending first, then In Progress.
 
     Returns:
         Updated content string. Returns original content unchanged if
-        the mission is not found in the Pending section.
+        the mission is not found in either section.
     """
     return _move_pending_to_section(content, mission_text, "done", "\u2705", "Done")
 
 
 def fail_mission(content: str, mission_text: str) -> str:
-    """Move a mission from Pending to Failed with a failure timestamp.
+    """Move a mission from Pending (or In Progress) to Failed with a timestamp.
 
     Same pattern as complete_mission() but moves to ## Failed instead of ## Done.
-    Creates the ## Failed section if it doesn't exist.
+    Searches Pending first, then In Progress.
 
-    Returns content unchanged if the mission is not found in Pending.
+    Returns content unchanged if the mission is not found in either section.
     """
     return _move_pending_to_section(content, mission_text, "failed", "\u274c", "Failed")
 

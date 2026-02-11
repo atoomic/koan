@@ -894,6 +894,10 @@ def _run_iteration(
     print(bold_green(f">>> Current project: {project_name}") + f" ({project_path})")
     print()
 
+    # --- Mark mission as In Progress ---
+    if mission_title:
+        _start_mission_in_file(instance, mission_title)
+
     # --- Check for skill-dispatched mission ---
     # Missions starting with /command (e.g. "/plan Add dark mode")
     # are dispatched directly to the skill's CLI runner, bypassing
@@ -1234,8 +1238,21 @@ def _reset_usage_session(instance: str):
         pass
 
 
+def _start_mission_in_file(instance: str, mission_title: str):
+    """Move mission from Pending to In Progress via locked write."""
+    try:
+        from app.missions import start_mission
+        from app.utils import modify_missions_file
+        missions_path = Path(instance, "missions.md")
+        if not missions_path.exists():
+            return
+        modify_missions_file(missions_path, lambda c: start_mission(c, mission_title))
+    except Exception as e:
+        log("error", f"Could not start mission in missions.md: {e}")
+
+
 def _update_mission_in_file(instance: str, mission_title: str, *, failed: bool = False):
-    """Move mission from Pending to Done/Failed via locked write (idempotent)."""
+    """Move mission from Pending/In Progress to Done/Failed via locked write."""
     try:
         from app.missions import complete_mission, fail_mission
         from app.utils import modify_missions_file
@@ -1251,7 +1268,7 @@ def _update_mission_in_file(instance: str, mission_title: str, *, failed: bool =
 
         after = modify_missions_file(missions_path, tracked)
         if before[0] is not None and after == before[0]:
-            log("warning", f"Mission not found in Pending (no change): {mission_title[:80]}")
+            log("warning", f"Mission not found (no change): {mission_title[:80]}")
     except Exception as e:
         label = "fail" if failed else "complete"
         log("error", f"Could not {label} mission in missions.md: {e}")

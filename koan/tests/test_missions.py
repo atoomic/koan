@@ -15,6 +15,7 @@ from app.missions import (
     find_section_boundaries,
     normalize_content,
     reorder_mission,
+    start_mission,
     DEFAULT_SKELETON,
 )
 
@@ -1234,3 +1235,266 @@ class TestCompleteMissionWithSubHeaders:
         assert "Fix auth in beta" in pending_text
         done_text = "\n".join(sections["done"])
         assert "Add tests for alpha" in done_text
+
+
+# ---------------------------------------------------------------------------
+# start_mission — move from Pending to In Progress
+# ---------------------------------------------------------------------------
+
+class TestStartMission:
+    CONTENT = (
+        "# Missions\n\n"
+        "## Pending\n\n"
+        "- /plan Add dark mode\n"
+        "- Fix the login bug\n\n"
+        "## In Progress\n\n"
+        "## Done\n\n"
+        "- Old completed task\n"
+    )
+
+    def test_moves_to_in_progress(self):
+        result = start_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        assert len(sections["pending"]) == 1
+        assert "/plan Add dark mode" not in "\n".join(sections["pending"])
+        in_progress = "\n".join(sections["in_progress"])
+        assert "/plan Add dark mode" in in_progress
+
+    def test_remaining_pending_preserved(self):
+        result = start_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        assert "- Fix the login bug" in sections["pending"]
+
+    def test_nonexistent_mission_unchanged(self):
+        result = start_mission(self.CONTENT, "/nonexistent thing")
+        assert result == normalize_content(self.CONTENT)
+
+    def test_with_project_tag(self):
+        content = (
+            "# Missions\n\n"
+            "## Pending\n\n"
+            "- [project:koan] /plan Add dark mode\n\n"
+            "## In Progress\n\n"
+            "## Done\n"
+        )
+        result = start_mission(content, "/plan Add dark mode")
+        sections = parse_sections(result)
+        assert len(sections["pending"]) == 0
+        assert len(sections["in_progress"]) == 1
+        assert "/plan Add dark mode" in sections["in_progress"][0]
+
+    def test_creates_in_progress_section_if_missing(self):
+        content = (
+            "# Missions\n\n"
+            "## Pending\n\n"
+            "- /plan Test\n\n"
+            "## Done\n"
+        )
+        result = start_mission(content, "/plan Test")
+        assert "## In Progress" in result
+        sections = parse_sections(result)
+        assert len(sections["pending"]) == 0
+        assert len(sections["in_progress"]) == 1
+
+    def test_no_timestamp_added(self):
+        """start_mission should NOT add a timestamp (unlike complete/fail)."""
+        import re
+        result = start_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        in_progress_text = "\n".join(sections["in_progress"])
+        # Should not have a YYYY-MM-DD HH:MM timestamp
+        assert not re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", in_progress_text)
+
+    def test_existing_in_progress_preserved(self):
+        content = (
+            "# Missions\n\n"
+            "## Pending\n\n"
+            "- New task\n\n"
+            "## In Progress\n\n"
+            "- Already running task\n\n"
+            "## Done\n"
+        )
+        result = start_mission(content, "New task")
+        sections = parse_sections(result)
+        assert len(sections["in_progress"]) == 2
+        in_progress_text = "\n".join(sections["in_progress"])
+        assert "Already running task" in in_progress_text
+        assert "New task" in in_progress_text
+
+
+# ---------------------------------------------------------------------------
+# complete_mission / fail_mission — from In Progress (Bug fix)
+# ---------------------------------------------------------------------------
+
+class TestCompleteMissionFromInProgress:
+    """Bug: complete_mission only searched Pending, not In Progress.
+
+    When Claude moves a mission to In Progress before execution, _finalize_mission
+    couldn't find it for completion because _remove_pending_by_text only searched
+    the Pending section. These tests verify the fix.
+    """
+
+    CONTENT = (
+        "# Missions\n\n"
+        "## Pending\n\n"
+        "- Another pending task\n\n"
+        "## In Progress\n\n"
+        "- /plan Add dark mode\n\n"
+        "## Done\n\n"
+        "- Old completed task\n"
+    )
+
+    def test_completes_from_in_progress(self):
+        result = complete_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        assert len(sections["in_progress"]) == 0
+        done_text = "\n".join(sections["done"])
+        assert "/plan Add dark mode" in done_text
+
+    def test_done_entry_has_timestamp(self):
+        import re
+        result = complete_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        done_text = "\n".join(sections["done"])
+        assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", done_text)
+
+    def test_done_entry_has_checkmark(self):
+        result = complete_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        done_text = "\n".join(sections["done"])
+        assert "\u2705" in done_text
+
+    def test_pending_section_untouched(self):
+        result = complete_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        assert len(sections["pending"]) == 1
+        assert "Another pending task" in sections["pending"][0]
+
+    def test_with_project_tag_in_progress(self):
+        content = (
+            "# Missions\n\n"
+            "## Pending\n\n"
+            "## In Progress\n\n"
+            "- [project:koan] /plan Add dark mode\n\n"
+            "## Done\n"
+        )
+        result = complete_mission(content, "/plan Add dark mode")
+        sections = parse_sections(result)
+        assert len(sections["in_progress"]) == 0
+        assert len(sections["done"]) == 1
+
+    def test_prefers_pending_over_in_progress(self):
+        """If mission exists in BOTH sections (edge case), prefer Pending."""
+        content = (
+            "# Missions\n\n"
+            "## Pending\n\n"
+            "- /plan Add dark mode\n\n"
+            "## In Progress\n\n"
+            "- /plan Add dark mode\n\n"
+            "## Done\n"
+        )
+        result = complete_mission(content, "/plan Add dark mode")
+        sections = parse_sections(result)
+        # Should remove from Pending first
+        assert len(sections["pending"]) == 0
+        assert len(sections["in_progress"]) == 1
+        assert len(sections["done"]) == 1
+
+
+class TestFailMissionFromInProgress:
+    """Same bug as complete_mission — fail_mission should also search In Progress."""
+
+    CONTENT = (
+        "# Missions\n\n"
+        "## Pending\n\n"
+        "- Another pending task\n\n"
+        "## In Progress\n\n"
+        "- /plan Add dark mode\n\n"
+        "## Done\n\n"
+        "## Failed\n"
+    )
+
+    def test_fails_from_in_progress(self):
+        result = fail_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        assert len(sections["in_progress"]) == 0
+        failed_text = "\n".join(sections["failed"])
+        assert "/plan Add dark mode" in failed_text
+
+    def test_failed_entry_has_cross_mark(self):
+        result = fail_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        failed_text = "\n".join(sections["failed"])
+        assert "\u274c" in failed_text
+
+    def test_pending_section_untouched(self):
+        result = fail_mission(self.CONTENT, "/plan Add dark mode")
+        sections = parse_sections(result)
+        assert len(sections["pending"]) == 1
+        assert "Another pending task" in sections["pending"][0]
+
+
+# ---------------------------------------------------------------------------
+# Full lifecycle: Pending -> In Progress -> Done
+# ---------------------------------------------------------------------------
+
+class TestMissionLifecycle:
+    """End-to-end tests for the full mission lifecycle."""
+
+    INITIAL = (
+        "# Missions\n\n"
+        "## Pending\n\n"
+        "- [project:koan] /plan Add dark mode\n"
+        "- [project:koan] Fix the login bug\n\n"
+        "## In Progress\n\n"
+        "## Done\n\n"
+        "## Failed\n"
+    )
+
+    def test_full_lifecycle_pending_to_in_progress_to_done(self):
+        # Step 1: Start mission (Pending -> In Progress)
+        after_start = start_mission(self.INITIAL, "/plan Add dark mode")
+        sections = parse_sections(after_start)
+        assert len(sections["pending"]) == 1
+        assert len(sections["in_progress"]) == 1
+        assert "/plan Add dark mode" in sections["in_progress"][0]
+
+        # Step 2: Complete mission (In Progress -> Done)
+        after_done = complete_mission(after_start, "/plan Add dark mode")
+        sections = parse_sections(after_done)
+        assert len(sections["pending"]) == 1
+        assert len(sections["in_progress"]) == 0
+        assert len(sections["done"]) == 1
+        assert "/plan Add dark mode" in sections["done"][0]
+
+    def test_full_lifecycle_pending_to_in_progress_to_failed(self):
+        after_start = start_mission(self.INITIAL, "/plan Add dark mode")
+        after_fail = fail_mission(after_start, "/plan Add dark mode")
+        sections = parse_sections(after_fail)
+        assert len(sections["pending"]) == 1
+        assert len(sections["in_progress"]) == 0
+        assert len(sections["failed"]) == 1
+        assert "/plan Add dark mode" in sections["failed"][0]
+
+    def test_direct_pending_to_done_still_works(self):
+        """Skill dispatch skips In Progress — direct Pending -> Done."""
+        result = complete_mission(self.INITIAL, "/plan Add dark mode")
+        sections = parse_sections(result)
+        assert len(sections["pending"]) == 1
+        assert len(sections["done"]) == 1
+        assert "/plan Add dark mode" in sections["done"][0]
+
+    def test_multiple_missions_lifecycle(self):
+        """Two missions, one started, one still pending."""
+        after_start = start_mission(self.INITIAL, "/plan Add dark mode")
+        after_done = complete_mission(after_start, "/plan Add dark mode")
+        # Second mission still in Pending
+        sections = parse_sections(after_done)
+        assert "Fix the login bug" in sections["pending"][0]
+        # Start and complete second mission
+        after_start2 = start_mission(after_done, "Fix the login bug")
+        after_done2 = complete_mission(after_start2, "Fix the login bug")
+        sections = parse_sections(after_done2)
+        assert len(sections["pending"]) == 0
+        assert len(sections["in_progress"]) == 0
+        assert len(sections["done"]) == 2
