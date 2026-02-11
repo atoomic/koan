@@ -16,6 +16,7 @@ Module layout:
 """
 
 import fcntl
+import os
 import re
 import subprocess
 import sys
@@ -490,6 +491,16 @@ def main():
     from app.restart_manager import check_restart, clear_restart, reexec_bridge
 
     check_config()
+
+    # Ensure PYTHONPATH includes the koan/ package directory so that
+    # subprocess calls (e.g. local LLM runner via python -m app.local_llm_runner)
+    # can resolve app.* modules regardless of the subprocess CWD.
+    koan_pkg_dir = str(KOAN_ROOT / "koan")
+    current = os.environ.get("PYTHONPATH", "")
+    if koan_pkg_dir not in current.split(os.pathsep):
+        os.environ["PYTHONPATH"] = (
+            f"{koan_pkg_dir}{os.pathsep}{current}" if current else koan_pkg_dir
+        )
 
     # Run pending data migrations (e.g. French→English header conversion)
     from app.migration_runner import run_pending_migrations
