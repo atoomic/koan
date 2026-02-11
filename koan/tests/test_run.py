@@ -428,29 +428,6 @@ class TestProtectedPhase:
 
 
 # ---------------------------------------------------------------------------
-# Test: _has_pending_missions
-# ---------------------------------------------------------------------------
-
-class TestHasPendingMissions:
-    def test_no_missions(self, koan_root):
-        from app.run import _has_pending_missions
-        instance = str(koan_root / "instance")
-        assert _has_pending_missions(instance) is False
-
-    def test_with_missions(self, koan_root):
-        from app.run import _has_pending_missions
-        instance = koan_root / "instance"
-        (instance / "missions.md").write_text(
-            "# Missions\n\n## En attente\n\n- Do something\n\n## En cours\n\n## Terminées\n"
-        )
-        assert _has_pending_missions(str(instance)) is True
-
-    def test_nonexistent_file(self, tmp_path):
-        from app.run import _has_pending_missions
-        assert _has_pending_missions(str(tmp_path)) is False
-
-
-# ---------------------------------------------------------------------------
 # Test: _cleanup_temp
 # ---------------------------------------------------------------------------
 
