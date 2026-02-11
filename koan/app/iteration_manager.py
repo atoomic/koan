@@ -28,6 +28,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from app.loop_manager import resolve_focus_area
+
 
 def _log_iteration(category: str, message: str):
     """Log iteration events to stderr. Uses stderr to avoid polluting
@@ -208,28 +210,6 @@ def _get_project_by_index(projects: List[Tuple[str, str]], idx: int):
 def _get_known_project_names(projects: List[Tuple[str, str]]) -> list:
     """Extract sorted list of project names."""
     return sorted(name for name, _ in projects)
-
-
-def _resolve_focus_area(autonomous_mode: str, has_mission: bool) -> str:
-    """Map autonomous mode to a focus area description.
-
-    Args:
-        autonomous_mode: One of wait/review/implement/deep
-        has_mission: Whether a mission is assigned
-
-    Returns:
-        Human-readable focus area description
-    """
-    if has_mission:
-        return "Execute assigned mission"
-
-    focus_areas = {
-        "review": "Low-cost review: audit code, find issues, suggest improvements (READ-ONLY)",
-        "implement": "Medium-cost implementation: prototype fixes, small improvements",
-        "deep": "High-cost deep work: refactoring, architectural changes",
-        "wait": "Budget exhausted — entering pause mode",
-    }
-    return focus_areas.get(autonomous_mode, "General autonomous work")
 
 
 def _should_contemplate(autonomous_mode: str, focus_active: bool,
@@ -445,7 +425,7 @@ def plan_iteration(
             if focus_state is not None:
                 action = "focus_wait"
 
-                focus_area = _resolve_focus_area(autonomous_mode, has_mission=False)
+                focus_area = resolve_focus_area(autonomous_mode, has_mission=False)
 
                 try:
                     focus_remaining = focus_state.remaining_display()
@@ -472,7 +452,7 @@ def plan_iteration(
             if schedule_state is not None and schedule_state.in_work_hours:
                 action = "schedule_wait"
 
-                focus_area = _resolve_focus_area(autonomous_mode, has_mission=False)
+                focus_area = resolve_focus_area(autonomous_mode, has_mission=False)
 
                 return {
                     "action": action,
@@ -496,7 +476,7 @@ def plan_iteration(
 
     # Step 7: Resolve focus area
     has_mission = bool(mission_title)
-    focus_area = _resolve_focus_area(autonomous_mode, has_mission=has_mission)
+    focus_area = resolve_focus_area(autonomous_mode, has_mission=has_mission)
 
     return {
         "action": action,

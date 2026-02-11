@@ -34,6 +34,7 @@ _FOCUS_AREAS = {
     "review": "Low-cost review: audit code, find issues, suggest improvements (READ-ONLY)",
     "implement": "Medium-cost implementation: prototype fixes, small improvements",
     "deep": "High-cost deep work: refactoring, architectural changes",
+    "wait": "Budget exhausted — entering pause mode",
 }
 
 

@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.iteration_manager import plan_iteration
+from app.loop_manager import check_pending_missions, interruptible_sleep
 from app.pid_manager import acquire_pid, release_pid
 from app.utils import atomic_write
 
@@ -873,13 +874,13 @@ def _run_iteration(
         log("pause", "Contemplative session ended.")
 
         # Check for pending before sleeping
-        if _has_pending_missions(instance):
+        if check_pending_missions(instance):
             log("koan", "Pending missions found after contemplation — skipping sleep")
         else:
             set_status(koan_root, f"Idle — post-contemplation sleep ({time.strftime('%H:%M')})")
             log("pause", f"Contemplative session complete. Sleeping {interval}s...")
             with protected_phase("Sleeping between runs"):
-                wake = _interruptible_sleep(interval, koan_root, instance)
+                wake = interruptible_sleep(interval, koan_root, instance)
             if wake == "mission":
                 log("koan", "New mission detected during sleep — waking up early")
         return
@@ -889,7 +890,7 @@ def _run_iteration(
         log("koan", f"Focus mode active ({remaining} remaining) — no missions pending, sleeping")
         set_status(koan_root, f"Focus mode — waiting for missions ({remaining} remaining)")
         with protected_phase("Focus mode — waiting for missions"):
-            wake = _interruptible_sleep(interval, koan_root, instance)
+            wake = interruptible_sleep(interval, koan_root, instance)
         if wake == "mission":
             log("koan", "New mission detected during focus sleep — waking up")
         return
@@ -898,7 +899,7 @@ def _run_iteration(
         log("koan", "Work hours active — waiting for missions (exploration suppressed)")
         set_status(koan_root, f"Work hours — waiting for missions ({time.strftime('%H:%M')})")
         with protected_phase("Work hours — waiting for missions"):
-            wake = _interruptible_sleep(interval, koan_root, instance)
+            wake = interruptible_sleep(interval, koan_root, instance)
         if wake == "mission":
             log("koan", "New mission detected during work hours sleep — waking up")
         return
@@ -1020,12 +1021,12 @@ def _run_iteration(
             _finalize_mission(instance, mission_title, project_name, exit_code)
             _commit_instance(instance)
 
-            if _has_pending_missions(instance):
+            if check_pending_missions(instance):
                 log("koan", "Pending missions — skipping sleep")
             else:
                 set_status(koan_root, f"Idle — sleeping ({time.strftime('%H:%M')})")
                 with protected_phase("Sleeping between runs"):
-                    wake = _interruptible_sleep(interval, koan_root, instance)
+                    wake = interruptible_sleep(interval, koan_root, instance)
                 if wake == "mission":
                     log("koan", "New mission detected during sleep — waking up early")
             return
@@ -1214,14 +1215,14 @@ def _run_iteration(
         return
 
     # Sleep between runs (skip if pending missions)
-    if _has_pending_missions(instance):
+    if check_pending_missions(instance):
         log("koan", "Pending missions found — skipping sleep, starting next run immediately")
         set_status(koan_root, f"Run {run_num}/{max_runs} — done, next run starting")
     else:
         set_status(koan_root, f"Idle — sleeping {interval}s ({time.strftime('%H:%M')})")
         log("koan", f"Sleeping {interval}s (checking for new missions every 10s)...")
         with protected_phase("Sleeping between runs"):
-            wake = _interruptible_sleep(interval, koan_root, instance)
+            wake = interruptible_sleep(interval, koan_root, instance)
         if wake == "mission":
             log("koan", "New mission detected during sleep — waking up early")
             set_status(koan_root, f"Run {run_num}/{max_runs} — done, new mission detected")
@@ -1274,28 +1275,6 @@ def _handle_iteration_error(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _has_pending_missions(instance: str) -> bool:
-    """Quick check for pending missions (delegates to loop_manager)."""
-    try:
-        from app.loop_manager import check_pending_missions
-        return check_pending_missions(instance)
-    except Exception as e:
-        log("error", f"Pending missions check failed: {e}")
-        return False
-
-
-def _interruptible_sleep(interval: int, koan_root: str, instance: str) -> str:
-    """Sleep with interruption checks. Returns wake reason."""
-    try:
-        from app.loop_manager import interruptible_sleep
-        return interruptible_sleep(interval, koan_root, instance)
-    except KeyboardInterrupt:
-        raise
-    except Exception as e:
-        log("error", f"Interruptible sleep failed: {e}")
-        time.sleep(min(interval, 30))
-        return "timeout"
 
 
 def _reset_usage_session(instance: str):

@@ -52,12 +52,11 @@ class TestResolveFocusArea:
         result = resolve_focus_area("review", has_mission=True)
         assert result == "Execute assigned mission"
 
-    def test_wait_mode_no_special_handling(self):
+    def test_wait_mode(self):
         from app.loop_manager import resolve_focus_area
 
-        # wait mode is handled separately in run.py before resolve_focus_area
         result = resolve_focus_area("wait")
-        assert result == "General autonomous work"
+        assert "pause" in result.lower() or "exhausted" in result.lower()
 
 
 # --- Test validate_projects ---

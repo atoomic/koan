@@ -20,11 +20,11 @@ from app.iteration_manager import (
     _inject_recurring,
     _pick_mission,
     _refresh_usage,
-    _resolve_focus_area,
     _resolve_project_path,
     _should_contemplate,
     plan_iteration,
 )
+from app.loop_manager import resolve_focus_area
 
 
 # === Helper fixtures ===
@@ -119,32 +119,32 @@ class TestGetKnownProjectNames:
         assert names == []
 
 
-# === Tests: _resolve_focus_area ===
+# === Tests: resolve_focus_area ===
 
 
 class TestResolveFocusArea:
 
     def test_mission_mode(self):
-        assert _resolve_focus_area("deep", has_mission=True) == "Execute assigned mission"
+        assert resolve_focus_area("deep", has_mission=True) == "Execute assigned mission"
 
     def test_review_mode(self):
-        result = _resolve_focus_area("review", has_mission=False)
+        result = resolve_focus_area("review", has_mission=False)
         assert "review" in result.lower() or "READ-ONLY" in result
 
     def test_implement_mode(self):
-        result = _resolve_focus_area("implement", has_mission=False)
+        result = resolve_focus_area("implement", has_mission=False)
         assert "implementation" in result.lower() or "implement" in result.lower()
 
     def test_deep_mode(self):
-        result = _resolve_focus_area("deep", has_mission=False)
+        result = resolve_focus_area("deep", has_mission=False)
         assert "deep" in result.lower() or "refactoring" in result.lower()
 
     def test_wait_mode(self):
-        result = _resolve_focus_area("wait", has_mission=False)
+        result = resolve_focus_area("wait", has_mission=False)
         assert "pause" in result.lower() or "exhausted" in result.lower()
 
     def test_unknown_mode(self):
-        result = _resolve_focus_area("unknown", has_mission=False)
+        result = resolve_focus_area("unknown", has_mission=False)
         assert "General" in result
 
 
