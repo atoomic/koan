@@ -12,6 +12,7 @@ from app.schedule_manager import (
     ScheduleState,
     TimeRange,
     adjust_contemplative_chance,
+    cap_mode_for_schedule,
     check_schedule,
     get_current_schedule,
     get_schedule_config,
@@ -277,6 +278,51 @@ class TestShouldSuppressExploration:
     def test_normal_does_not_suppress(self):
         state = ScheduleState(in_deep_hours=False, in_work_hours=False)
         assert should_suppress_exploration(state) is False
+
+
+# === Tests: cap_mode_for_schedule ===
+
+
+class TestCapModeForSchedule:
+    """Tests for cap_mode_for_schedule()."""
+
+    def test_deep_capped_outside_deep_hours(self):
+        """Budget 'deep' is capped to 'implement' when outside configured deep_hours."""
+        state = ScheduleState(in_deep_hours=False, in_work_hours=False)
+        assert cap_mode_for_schedule("deep", state, deep_hours_configured=True) == "implement"
+
+    def test_deep_allowed_during_deep_hours(self):
+        """Budget 'deep' stays 'deep' when inside deep_hours."""
+        state = ScheduleState(in_deep_hours=True, in_work_hours=False)
+        assert cap_mode_for_schedule("deep", state, deep_hours_configured=True) == "deep"
+
+    def test_deep_allowed_when_no_deep_hours_configured(self):
+        """Budget 'deep' stays 'deep' when deep_hours is not configured at all."""
+        state = ScheduleState(in_deep_hours=False, in_work_hours=False)
+        assert cap_mode_for_schedule("deep", state, deep_hours_configured=False) == "deep"
+
+    def test_implement_not_capped(self):
+        """Non-deep modes pass through unchanged."""
+        state = ScheduleState(in_deep_hours=False, in_work_hours=False)
+        assert cap_mode_for_schedule("implement", state, deep_hours_configured=True) == "implement"
+
+    def test_review_not_capped(self):
+        state = ScheduleState(in_deep_hours=False, in_work_hours=False)
+        assert cap_mode_for_schedule("review", state, deep_hours_configured=True) == "review"
+
+    def test_wait_not_capped(self):
+        state = ScheduleState(in_deep_hours=False, in_work_hours=False)
+        assert cap_mode_for_schedule("wait", state, deep_hours_configured=True) == "wait"
+
+    def test_deep_during_work_hours_is_capped(self):
+        """Even if work_hours are active, the cap logic applies to deep mode."""
+        state = ScheduleState(in_deep_hours=False, in_work_hours=True)
+        assert cap_mode_for_schedule("deep", state, deep_hours_configured=True) == "implement"
+
+    def test_implement_during_deep_hours_unchanged(self):
+        """Implement mode is not promoted to deep during deep_hours (cap is one-way)."""
+        state = ScheduleState(in_deep_hours=True, in_work_hours=False)
+        assert cap_mode_for_schedule("implement", state, deep_hours_configured=True) == "implement"
 
 
 # === Tests: get_schedule_config ===

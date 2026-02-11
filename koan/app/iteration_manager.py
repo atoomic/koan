@@ -312,6 +312,28 @@ def plan_iteration(
     recommended_idx = decision["project_idx"]
     display_lines = decision["display_lines"]
 
+    # Step 2b: Check schedule and cap mode based on deep_hours config.
+    # This runs early (before mission pick) so the capped mode affects
+    # everything downstream — including the prompt sent for missions.
+    schedule_state = _check_schedule()
+    deep_hours_configured = False
+    try:
+        from app.schedule_manager import get_schedule_config, cap_mode_for_schedule
+        deep_spec, _ = get_schedule_config()
+        deep_hours_configured = bool(deep_spec.strip())
+        if schedule_state is not None:
+            original_mode = autonomous_mode
+            autonomous_mode = cap_mode_for_schedule(
+                autonomous_mode, schedule_state, deep_hours_configured,
+            )
+            if autonomous_mode != original_mode:
+                decision_reason = (
+                    f"{decision_reason} (capped from {original_mode}: "
+                    f"outside deep_hours schedule)"
+                )
+    except Exception:
+        pass
+
     # Step 3: Inject recurring missions
     recurring_injected = _inject_recurring(instance)
 
@@ -340,7 +362,7 @@ def plan_iteration(
                 "display_lines": display_lines,
                 "recurring_injected": recurring_injected,
                 "focus_remaining": None,
-                "schedule_mode": "normal",
+                "schedule_mode": schedule_state.mode if schedule_state else "normal",
                 "error": f"Unknown project '{project_name}'. Known: {', '.join(known)}",
             }
     else:
@@ -350,16 +372,13 @@ def plan_iteration(
 
     # Step 6: Determine action for autonomous mode
     action = "mission" if mission_title else "autonomous"
-    schedule_state = None  # Will be set for autonomous mode
+    # schedule_state already set in step 2b (used for mode cap + autonomous decisions)
 
     if not mission_title:
         # No mission — check autonomous mode decisions
 
         # Check focus state once (used by both contemplative and focus_wait)
         focus_state = _check_focus(koan_root)
-
-        # Check schedule state (time-of-day windows from config)
-        schedule_state = _check_schedule()
 
         # 6a: Contemplative chance (random reflection)
         try:
