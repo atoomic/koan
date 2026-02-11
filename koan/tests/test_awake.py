@@ -1085,6 +1085,71 @@ class TestMainLoop:
         captured = capsys.readouterr()
         assert "Shutting down" in captured.err
 
+    @patch("app.awake.write_heartbeat")
+    @patch("app.awake.flush_outbox")
+    @patch("app.awake.handle_message")
+    @patch("app.awake.get_updates", side_effect=KeyboardInterrupt)
+    @patch("app.awake.check_config")
+    def test_main_sets_pythonpath(self, mock_config, mock_updates,
+                                  mock_handle, mock_flush, mock_heartbeat,
+                                  tmp_path, monkeypatch):
+        """main() sets PYTHONPATH to include koan/ package directory."""
+        from app.awake import main
+        monkeypatch.setattr("app.awake.KOAN_ROOT", tmp_path)
+        monkeypatch.delenv("PYTHONPATH", raising=False)
+
+        with pytest.raises(SystemExit):
+            main()
+
+        pythonpath = os.environ.get("PYTHONPATH", "")
+        koan_dir = str(tmp_path / "koan")
+        assert koan_dir in pythonpath.split(os.pathsep)
+
+    @patch("app.awake.write_heartbeat")
+    @patch("app.awake.flush_outbox")
+    @patch("app.awake.handle_message")
+    @patch("app.awake.get_updates", side_effect=KeyboardInterrupt)
+    @patch("app.awake.check_config")
+    def test_main_preserves_existing_pythonpath(self, mock_config, mock_updates,
+                                                 mock_handle, mock_flush,
+                                                 mock_heartbeat,
+                                                 tmp_path, monkeypatch):
+        """main() prepends koan/ to PYTHONPATH without losing existing entries."""
+        from app.awake import main
+        monkeypatch.setattr("app.awake.KOAN_ROOT", tmp_path)
+        monkeypatch.setenv("PYTHONPATH", "/existing/path")
+
+        with pytest.raises(SystemExit):
+            main()
+
+        pythonpath = os.environ.get("PYTHONPATH", "")
+        parts = pythonpath.split(os.pathsep)
+        koan_dir = str(tmp_path / "koan")
+        assert koan_dir in parts
+        assert "/existing/path" in parts
+
+    @patch("app.awake.write_heartbeat")
+    @patch("app.awake.flush_outbox")
+    @patch("app.awake.handle_message")
+    @patch("app.awake.get_updates", side_effect=KeyboardInterrupt)
+    @patch("app.awake.check_config")
+    def test_main_does_not_duplicate_pythonpath(self, mock_config, mock_updates,
+                                                 mock_handle, mock_flush,
+                                                 mock_heartbeat,
+                                                 tmp_path, monkeypatch):
+        """main() does not add koan/ to PYTHONPATH if already present."""
+        from app.awake import main
+        koan_dir = str(tmp_path / "koan")
+        monkeypatch.setattr("app.awake.KOAN_ROOT", tmp_path)
+        monkeypatch.setenv("PYTHONPATH", koan_dir)
+
+        with pytest.raises(SystemExit):
+            main()
+
+        pythonpath = os.environ.get("PYTHONPATH", "")
+        # Should not be duplicated
+        assert pythonpath.count(koan_dir) == 1
+
 
 # ---------------------------------------------------------------------------
 # /pause command
