@@ -13,7 +13,7 @@ Mission format:
     /recreate <pr-url>                  -> recreate_pr <url>
     /ai [project]                       -> ai_runner
     /check <url>                        -> check_runner <url>
-    /claude.md                          -> claudemd_refresh <project-path>
+    /claudemd                           -> claudemd_refresh <project-path>
 
 Scoped skills:
     /core.plan <idea>                   -> same as /plan
@@ -33,9 +33,10 @@ _SKILL_RUNNERS = {
     "recreate": "app.recreate_pr",
     "ai": "app.ai_runner",
     "check": "app.check_runner",
-    "claude.md": "app.claudemd_refresh",
     "claudemd": "app.claudemd_refresh",
     "claude": "app.claudemd_refresh",
+    "claude.md": "app.claudemd_refresh",
+    "claude_md": "app.claudemd_refresh",
 }
 
 # PR URL pattern
@@ -200,7 +201,7 @@ def build_skill_command(
         return _build_ai_cmd(base_cmd, project_name, project_path, instance_dir)
     elif command == "check":
         return _build_check_cmd(base_cmd, args, instance_dir, koan_root)
-    elif command in ("claude.md", "claudemd", "claude"):
+    elif command in ("claudemd", "claude", "claude.md", "claude_md"):
         return _build_claudemd_cmd(base_cmd, project_name, project_path)
 
     return None
