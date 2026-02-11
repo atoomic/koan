@@ -5,9 +5,9 @@ description: Refresh or create CLAUDE.md for a project based on recent architect
 version: 1.0.0
 audience: hybrid
 commands:
-  - name: claude.md
+  - name: claudemd
     description: Refresh CLAUDE.md for a project
-    usage: /claude.md <project-name>
-    aliases: [claude, claudemd]
+    usage: /claudemd <project-name>
+    aliases: [claude, claude.md, claude_md]
 handler: handler.py
 ---

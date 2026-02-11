@@ -1,4 +1,4 @@
-"""Tests for the /claude.md core skill — handler, SKILL.md, and registry integration."""
+"""Tests for the /claudemd core skill — handler, SKILL.md, and registry integration."""
 
 import importlib.util
 from pathlib import Path
@@ -37,7 +37,7 @@ def ctx(tmp_path):
     return SkillContext(
         koan_root=tmp_path,
         instance_dir=instance_dir,
-        command_name="claude.md",
+        command_name="claudemd",
         args="",
         send_message=MagicMock(),
     )
@@ -51,7 +51,7 @@ class TestHandleRouting:
     def test_no_args_returns_usage(self, handler, ctx):
         result = handler.handle(ctx)
         assert "Usage:" in result
-        assert "/claude.md" in result
+        assert "/claudemd" in result
 
     def test_usage_mentions_project_name(self, handler, ctx):
         result = handler.handle(ctx)
@@ -93,7 +93,7 @@ class TestMissionQueuing:
             handler.handle(ctx)
             entry = mock_insert.call_args[0][1]
             assert entry.startswith("- [project:koan]")
-            assert "/claude.md koan" in entry
+            assert "/claudemd koan" in entry
             assert "run:" not in entry
             assert "python3 -m" not in entry
 
@@ -129,7 +129,7 @@ class TestMissionQueuing:
             handler.handle(ctx)
             entry = mock_insert.call_args[0][1]
             # Clean format doesn't embed koan_root — dispatch resolves it
-            assert "/claude.md koan" in entry
+            assert "/claudemd koan" in entry
 
     def test_multiple_projects_selects_correct_one(self, handler, ctx):
         ctx.args = "web"
@@ -140,7 +140,7 @@ class TestMissionQueuing:
             assert "queued" in result.lower()
             entry = mock_insert.call_args[0][1]
             assert "[project:web]" in entry
-            assert "/claude.md web" in entry
+            assert "/claudemd web" in entry
 
 
 # ---------------------------------------------------------------------------
@@ -162,25 +162,38 @@ class TestSkillMd:
         skill_md = Path(__file__).parent.parent / "skills" / "core" / "claudemd" / "SKILL.md"
         skill = parse_skill_md(skill_md)
         assert len(skill.commands) == 1
-        assert skill.commands[0].name == "claude.md"
+        assert skill.commands[0].name == "claudemd"
 
-    def test_skill_has_alias(self):
+    def test_skill_has_claude_dot_md_alias(self):
         from app.skills import parse_skill_md
         skill_md = Path(__file__).parent.parent / "skills" / "core" / "claudemd" / "SKILL.md"
         skill = parse_skill_md(skill_md)
-        assert "claudemd" in skill.commands[0].aliases
+        assert "claude.md" in skill.commands[0].aliases
+
+    def test_skill_has_claude_underscore_md_alias(self):
+        from app.skills import parse_skill_md
+        skill_md = Path(__file__).parent.parent / "skills" / "core" / "claudemd" / "SKILL.md"
+        skill = parse_skill_md(skill_md)
+        assert "claude_md" in skill.commands[0].aliases
 
     def test_skill_registered_in_registry(self):
+        from app.skills import build_registry
+        registry = build_registry()
+        skill = registry.find_by_command("claudemd")
+        assert skill is not None
+        assert skill.name == "claudemd"
+
+    def test_claude_dot_md_alias_registered_in_registry(self):
         from app.skills import build_registry
         registry = build_registry()
         skill = registry.find_by_command("claude.md")
         assert skill is not None
         assert skill.name == "claudemd"
 
-    def test_alias_registered_in_registry(self):
+    def test_claude_underscore_md_alias_registered_in_registry(self):
         from app.skills import build_registry
         registry = build_registry()
-        skill = registry.find_by_command("claudemd")
+        skill = registry.find_by_command("claude_md")
         assert skill is not None
         assert skill.name == "claudemd"
 

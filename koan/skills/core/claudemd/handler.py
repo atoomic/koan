@@ -2,7 +2,7 @@
 
 
 def handle(ctx):
-    """Handle /claude.md <project-name> command.
+    """Handle /claudemd <project-name> command.
 
     Queues a mission that updates or creates CLAUDE.md for the specified
     project, focusing on architecturally significant changes.
@@ -13,11 +13,11 @@ def handle(ctx):
 
     if not args:
         return (
-            "Usage: /claude.md <project-name>\n\n"
+            "Usage: /claudemd <project-name>\n\n"
             "Refreshes the CLAUDE.md file for a project based on recent "
             "architectural changes.\n"
             "If CLAUDE.md doesn't exist, creates one from scratch.\n\n"
-            "Example: /claude.md koan"
+            "Example: /claudemd koan"
         )
 
     # Extract project name (first word)
@@ -36,7 +36,7 @@ def handle(ctx):
         return f"Project '{project_name}' not found. Known projects: {names}"
 
     # Queue the mission with clean format
-    mission_entry = f"- [project:{matched_name}] /claude.md {matched_name}"
+    mission_entry = f"- [project:{matched_name}] /claudemd {matched_name}"
     missions_path = ctx.instance_dir / "missions.md"
     insert_pending_mission(missions_path, mission_entry)
 

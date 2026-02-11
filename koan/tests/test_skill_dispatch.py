@@ -87,9 +87,17 @@ class TestParseSkillMission:
         assert cmd == "anantys.review"
         assert args == "Check code"
 
-    def test_claude_md(self):
+    def test_claudemd(self):
+        pid, cmd, args = parse_skill_mission("/claudemd koan")
+        assert pid == ""
+        assert cmd == "claudemd"
+        assert args == "koan"
+
+    def test_claude_md_dot_alias(self):
+        """The old /claude.md form is parsed via dot-scope logic (core.md -> md)."""
         pid, cmd, args = parse_skill_mission("/claude.md koan")
         assert pid == ""
+        # dot in command triggers scope logic: scope=claude, skill=md
         assert cmd == "claude.md"
         assert args == "koan"
 
@@ -204,19 +212,24 @@ class TestBuildSkillCommand:
         assert cmd is None
 
     def test_claudemd(self):
-        cmd = self._build("claude.md", "koan")
+        cmd = self._build("claudemd", "koan")
         assert cmd is not None
         assert "app.claudemd_refresh" in cmd
         assert self.PROJECT_PATH in cmd
         assert "--project-name" in cmd
 
-    def test_claudemd_alias(self):
-        cmd = self._build("claudemd", "koan")
+    def test_claude_alias(self):
+        cmd = self._build("claude", "koan")
         assert cmd is not None
         assert "app.claudemd_refresh" in cmd
 
-    def test_claude_alias(self):
-        cmd = self._build("claude", "koan")
+    def test_claude_dot_md_alias(self):
+        cmd = self._build("claude.md", "koan")
+        assert cmd is not None
+        assert "app.claudemd_refresh" in cmd
+
+    def test_claude_underscore_md_alias(self):
+        cmd = self._build("claude_md", "koan")
         assert cmd is not None
         assert "app.claudemd_refresh" in cmd
 
@@ -274,7 +287,7 @@ class TestDispatchSkillMission:
         assert "app.check_runner" in cmd
 
     def test_claudemd_dispatch(self):
-        cmd = self._dispatch("/claude.md koan")
+        cmd = self._dispatch("/claudemd koan")
         assert cmd is not None
         assert "app.claudemd_refresh" in cmd
 
@@ -409,7 +422,7 @@ class TestHandlerCleanFormat:
         assert "run:" not in content
 
     def test_claudemd_handler_clean_format(self, tmp_path, monkeypatch):
-        """Claudemd handler should produce /claude.md format."""
+        """Claudemd handler should produce /claudemd format."""
         missions_file = tmp_path / "missions.md"
         missions_file.write_text("# Missions\n\n## Pending\n\n## In Progress\n\n## Done\n")
 
@@ -424,7 +437,7 @@ class TestHandlerCleanFormat:
 
         assert "queued" in result.lower()
         content = missions_file.read_text()
-        assert "/claude.md koan" in content
+        assert "/claudemd koan" in content
         assert "run:" not in content
 
     def test_recreate_handler_clean_format(self, tmp_path, monkeypatch):
