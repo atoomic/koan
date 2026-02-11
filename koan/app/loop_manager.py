@@ -16,6 +16,7 @@ CLI interface:
 """
 
 import argparse
+import logging
 import os
 import sys
 import time
@@ -156,6 +157,179 @@ Mode: {mode}
     return str(pending_path)
 
 
+# --- GitHub notification processing ---
+
+# Throttle: minimum seconds between GitHub notification checks
+_GITHUB_CHECK_INTERVAL = 60
+_last_github_check: float = 0
+
+log = logging.getLogger(__name__)
+
+
+def _load_github_config(config: dict, koan_root: str, instance_dir: str) -> Optional[dict]:
+    """Load and validate GitHub configuration.
+    
+    Returns:
+        Dict with config data or None if feature is disabled/invalid
+    """
+    from app.github_config import get_github_commands_enabled, get_github_max_age_hours, get_github_nickname
+    
+    if not get_github_commands_enabled(config):
+        return None
+    
+    nickname = get_github_nickname(config)
+    if not nickname:
+        return None
+    
+    bot_username = os.environ.get("GITHUB_USER", nickname)
+    max_age = get_github_max_age_hours(config)
+    
+    return {
+        "nickname": nickname,
+        "bot_username": bot_username,
+        "max_age": max_age,
+    }
+
+
+def _build_skill_registry(instance_dir: str):
+    """Build combined skill registry from core and instance skills.
+    
+    Returns:
+        Populated SkillRegistry
+    """
+    from app.skills import SkillRegistry, get_default_skills_dir
+    
+    registry = SkillRegistry(get_default_skills_dir())
+    
+    # Load instance skills
+    instance_skills = Path(instance_dir) / "skills"
+    if instance_skills.is_dir():
+        instance_registry = SkillRegistry(instance_skills)
+        for skill in instance_registry.list_all():
+            registry._register(skill)
+    
+    return registry
+
+
+def _get_known_repos_from_projects(koan_root: str) -> Optional[set]:
+    """Extract known repo names from projects config.
+    
+    Returns:
+        Set of "owner/repo" strings or None for all repos
+    """
+    from app.projects_config import load_projects_config
+    
+    projects_config = load_projects_config(koan_root)
+    if not projects_config:
+        return None
+    
+    known_repos = set()
+    for name, proj in projects_config.get("projects", {}).items():
+        gh_url = proj.get("github_url", "")
+        if gh_url:
+            known_repos.add(gh_url)
+    
+    return known_repos or None
+
+
+def process_github_notifications(
+    koan_root: str,
+    instance_dir: str,
+) -> int:
+    """Check GitHub notifications and create missions from @mentions.
+
+    Respects throttling (max once per 60s) and feature toggle.
+
+    Args:
+        koan_root: Path to koan root directory.
+        instance_dir: Path to instance directory.
+
+    Returns:
+        Number of missions created.
+    """
+    global _last_github_check
+
+    now = time.time()
+    if now - _last_github_check < _GITHUB_CHECK_INTERVAL:
+        return 0
+
+    _last_github_check = now
+
+    try:
+        from app.utils import load_config
+        from app.projects_config import load_projects_config
+        
+        config = load_config()
+        github_config = _load_github_config(config, koan_root, instance_dir)
+        if not github_config:
+            return 0
+
+        # Load components
+        registry = _build_skill_registry(instance_dir)
+        known_repos = _get_known_repos_from_projects(koan_root)
+        projects_config = load_projects_config(koan_root)
+
+        # Fetch and process notifications
+        from app.github_notifications import fetch_unread_notifications
+        from app.github_command_handler import (
+            process_single_notification,
+            post_error_reply,
+            resolve_project_from_notification,
+            extract_issue_number_from_notification,
+        )
+        
+        notifications = fetch_unread_notifications(known_repos)
+
+        missions_created = 0
+        for notif in notifications:
+            success, error = process_single_notification(
+                notif, registry, config, projects_config,
+                github_config["bot_username"], github_config["max_age"],
+            )
+
+            if success:
+                missions_created += 1
+            elif error:
+                # Post error reply
+                _post_error_for_notification(notif, error)
+
+        if missions_created > 0:
+            log.info("GitHub: created %d mission(s) from @mentions", missions_created)
+
+        return missions_created
+
+    except Exception as e:
+        log.warning("GitHub notification check failed: %s", e)
+        return 0
+
+
+def _post_error_for_notification(notif: dict, error: str) -> None:
+    """Post error reply to a notification if possible."""
+    from app.github_command_handler import (
+        post_error_reply,
+        resolve_project_from_notification,
+        extract_issue_number_from_notification,
+    )
+    from app.github_notifications import get_comment_from_notification
+    
+    project_info = resolve_project_from_notification(notif)
+    issue_num = extract_issue_number_from_notification(notif)
+    
+    if not project_info or not issue_num:
+        return
+    
+    _, owner, repo = project_info
+    
+    try:
+        comment = get_comment_from_notification(notif)
+        if comment:
+            comment_id = str(comment.get("id", ""))
+            if comment_id:
+                post_error_reply(owner, repo, issue_num, comment_id, error)
+    except Exception:
+        pass  # Silently fail error posting
+
+
 # --- Interruptible sleep ---
 
 
@@ -183,8 +357,8 @@ def interruptible_sleep(
 ) -> str:
     """Sleep for a given interval, waking early on events.
 
-    Checks for stop, pause, restart, shutdown files and pending missions
-    every check_interval seconds.
+    Checks for stop, pause, restart, shutdown files, pending missions,
+    and GitHub notifications every check_interval seconds.
 
     Args:
         interval: Total sleep duration in seconds.
@@ -210,6 +384,10 @@ def interruptible_sleep(
             return "restart"
         if _check_signal_file(koan_root, ".koan-shutdown"):
             return "shutdown"
+
+        # Check GitHub notifications (throttled to once per 60s)
+        if process_github_notifications(koan_root, instance_dir) > 0:
+            return "mission"
 
     return "timeout"
 

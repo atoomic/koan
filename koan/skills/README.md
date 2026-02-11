@@ -57,6 +57,8 @@ handler: handler.py
 | `handler` | no | Path to Python handler (relative to skill dir) |
 | `worker` | no | Set to `true` for skills that block (call Claude, APIs, etc.) |
 | `audience` | no | Who consumes this skill: `bridge`, `agent`, `command`, or `hybrid` (default: `bridge`) |
+| `github_enabled` | no | Set to `true` to allow triggering via GitHub @mentions (default: `false`) |
+| `github_context_aware` | no | Set to `true` if the skill accepts additional context after the command (default: `false`) |
 
 ### Audience
 
@@ -80,6 +82,28 @@ description: Refactor and simplify code
 ```
 
 Skills default to `bridge` when `audience` is omitted (backward compatible).
+
+### GitHub @mention integration
+
+Skills with `github_enabled: true` can be triggered via GitHub @mentions in PR/issue comments. When a user posts `@bot-nickname rebase` in a PR comment, Kōan creates a mission automatically.
+
+```yaml
+---
+name: implement
+github_enabled: true
+github_context_aware: true  # Accepts extra context: "@bot implement phase 1"
+---
+```
+
+Currently github-enabled skills: `rebase`, `recreate`, `implement`, `review`, `refactor`.
+
+Configuration in `config.yaml`:
+```yaml
+github:
+  nickname: "koan-bot"          # Required if enabled
+  commands_enabled: true        # Master switch
+  authorized_users: ["*"]       # "*" = all, or ["alice", "bob"]
+```
 
 ### Commands
 

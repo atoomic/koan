@@ -72,3 +72,9 @@ projects:
   # copilot-project:
   #   path: "/Users/yourname/workspace/copilot-project"
   #   cli_provider: "copilot"
+
+  # Example: a project with restricted GitHub @mention access
+  # restricted-repo:
+  #   path: "/Users/yourname/workspace/restricted-repo"
+  #   github:
+  #     authorized_users: ["alice", "bob"]  # Override global list for this project

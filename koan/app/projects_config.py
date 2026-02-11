@@ -8,6 +8,7 @@ Provides:
 - get_project_cli_provider(config, name) -> str: Get CLI provider for a project
 - get_project_models(config, name) -> dict: Get model overrides for a project
 - get_project_tools(config, name) -> dict: Get tool restrictions for a project
+- get_project_github_authorized_users(config, name) -> list: Get GitHub authorized users
 
 File location: projects.yaml at KOAN_ROOT (next to .env).
 """
@@ -198,6 +199,19 @@ def get_project_tools(config: dict, project_name: str) -> dict:
     if not isinstance(tools, dict):
         return {}
     return tools
+
+
+def get_project_github_authorized_users(config: dict, project_name: str) -> list:
+    """Get GitHub authorized users for a project from projects.yaml.
+
+    Per-project github.authorized_users completely replaces global list.
+    Returns the list of authorized GitHub usernames, or ["*"] for wildcard.
+    Returns empty list if not configured.
+    """
+    project_cfg = get_project_config(config, project_name)
+    github = project_cfg.get("github", {}) or {}
+    users = github.get("authorized_users", [])
+    return users if isinstance(users, list) else []
 
 
 def save_projects_config(koan_root: str, config: dict) -> None:

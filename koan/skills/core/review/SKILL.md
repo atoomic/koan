@@ -1,0 +1,14 @@
+---
+name: review
+scope: core
+description: "Queue a code review mission (ex: /review https://github.com/owner/repo/pull/42)"
+version: 1.0.0
+audience: hybrid
+github_enabled: true
+commands:
+  - name: review
+    description: "Queue a code review for a PR or issue"
+    usage: "/review <github-pr-or-issue-url>"
+    aliases: [rv]
+handler: handler.py
+---
