@@ -35,10 +35,9 @@ class TestStatusDispatch:
         instance.mkdir()
         from skills.core.status.handler import handle
         ctx = _make_ctx("ping", instance, tmp_path)
-        with patch("skills.core.status.handler.subprocess") as mock_sub:
-            mock_sub.run.return_value = MagicMock(returncode=1)
+        with patch("app.pid_manager.check_pidfile", return_value=None):
             result = handle(ctx)
-        assert "Run loop" in result or "OK" in result
+        assert "Runner" in result
 
     def test_dispatch_to_usage(self, tmp_path):
         instance = tmp_path / "instance"
@@ -207,66 +206,114 @@ class TestHandleStatus:
 # ---------------------------------------------------------------------------
 
 class TestHandlePing:
-    """Test /ping run loop liveness check."""
+    """Test /ping process liveness check via PID files."""
 
-    def test_run_loop_alive(self, tmp_path):
-        """pgrep succeeds = run loop alive."""
+    def test_both_alive(self, tmp_path):
+        """Both runner and bridge alive = green status with PIDs."""
         from skills.core.status.handler import _handle_ping
         ctx = _make_ctx("ping", tmp_path, tmp_path)
-        with patch("skills.core.status.handler.subprocess") as mock_sub:
-            mock_sub.run.return_value = MagicMock(returncode=0)
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else 5678
             result = _handle_ping(ctx)
-        assert "OK" in result
+        assert "Runner: alive (PID 1234)" in result
+        assert "Bridge: alive (PID 5678)" in result
+        assert "not running" not in result
 
-    def test_run_loop_dead(self, tmp_path):
-        """pgrep fails = run loop not running."""
+    def test_runner_dead_bridge_alive(self, tmp_path):
+        """Runner dead, bridge alive."""
         from skills.core.status.handler import _handle_ping
         ctx = _make_ctx("ping", tmp_path, tmp_path)
-        with patch("skills.core.status.handler.subprocess") as mock_sub:
-            mock_sub.run.return_value = MagicMock(returncode=1)
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 5678 if name == "awake" else None
             result = _handle_ping(ctx)
-        assert "not running" in result
+        assert "Runner: not running" in result
         assert "make run" in result
+        assert "Bridge: alive (PID 5678)" in result
 
-    def test_run_loop_alive_but_paused(self, tmp_path):
-        """Run loop alive + pause file = paused status."""
+    def test_runner_alive_bridge_dead(self, tmp_path):
+        """Runner alive, bridge dead."""
+        from skills.core.status.handler import _handle_ping
+        ctx = _make_ctx("ping", tmp_path, tmp_path)
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else None
+            result = _handle_ping(ctx)
+        assert "Runner: alive (PID 1234)" in result
+        assert "Bridge: not running" in result
+        assert "make awake" in result
+
+    def test_both_dead(self, tmp_path):
+        """Both processes dead = full down status."""
+        from skills.core.status.handler import _handle_ping
+        ctx = _make_ctx("ping", tmp_path, tmp_path)
+        with patch("app.pid_manager.check_pidfile", return_value=None):
+            result = _handle_ping(ctx)
+        assert "Runner: not running" in result
+        assert "Bridge: not running" in result
+        assert "make run" in result
+        assert "make awake" in result
+
+    def test_runner_paused(self, tmp_path):
+        """Runner alive + pause file = paused status with PID."""
         (tmp_path / ".koan-pause").touch()
         from skills.core.status.handler import _handle_ping
         ctx = _make_ctx("ping", tmp_path, tmp_path)
-        with patch("skills.core.status.handler.subprocess") as mock_sub:
-            mock_sub.run.return_value = MagicMock(returncode=0)
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else 5678
             result = _handle_ping(ctx)
         assert "paused" in result.lower()
+        assert "PID 1234" in result
         assert "/resume" in result
 
-    def test_run_loop_alive_but_stopping(self, tmp_path):
-        """Run loop alive + stop file = stopping status."""
+    def test_runner_stopping(self, tmp_path):
+        """Runner alive + stop file = stopping status with PID."""
         (tmp_path / ".koan-stop").touch()
         from skills.core.status.handler import _handle_ping
         ctx = _make_ctx("ping", tmp_path, tmp_path)
-        with patch("skills.core.status.handler.subprocess") as mock_sub:
-            mock_sub.run.return_value = MagicMock(returncode=0)
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else 5678
             result = _handle_ping(ctx)
         assert "stopping" in result.lower()
+        assert "PID 1234" in result
 
-    def test_pgrep_exception(self, tmp_path):
-        """pgrep throws exception = treated as dead."""
+    def test_runner_with_loop_status(self, tmp_path):
+        """Runner alive + .koan-status = shows loop state."""
+        (tmp_path / ".koan-status").write_text("executing mission 3/25")
         from skills.core.status.handler import _handle_ping
         ctx = _make_ctx("ping", tmp_path, tmp_path)
-        with patch("skills.core.status.handler.subprocess") as mock_sub:
-            mock_sub.run.side_effect = OSError("pgrep not found")
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else 5678
             result = _handle_ping(ctx)
-        assert "not running" in result
+        assert "executing mission 3/25" in result
+        assert "PID 1234" in result
 
-    def test_pgrep_timeout(self, tmp_path):
-        """pgrep times out = treated as dead."""
-        import subprocess as real_sub
+    def test_runner_alive_no_status_file(self, tmp_path):
+        """Runner alive without .koan-status = generic 'alive' message."""
         from skills.core.status.handler import _handle_ping
         ctx = _make_ctx("ping", tmp_path, tmp_path)
-        with patch("skills.core.status.handler.subprocess") as mock_sub:
-            mock_sub.run.side_effect = real_sub.TimeoutExpired("pgrep", 5)
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else None
             result = _handle_ping(ctx)
-        assert "not running" in result
+        assert "Runner: alive (PID 1234)" in result
+
+    def test_runner_alive_empty_status_file(self, tmp_path):
+        """Runner alive with empty .koan-status = generic 'alive' message."""
+        (tmp_path / ".koan-status").write_text("")
+        from skills.core.status.handler import _handle_ping
+        ctx = _make_ctx("ping", tmp_path, tmp_path)
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else None
+            result = _handle_ping(ctx)
+        assert "Runner: alive (PID 1234)" in result
+
+    def test_dispatch_routes_to_ping(self, tmp_path):
+        """handle() dispatches 'ping' command to _handle_ping."""
+        instance = tmp_path / "instance"
+        instance.mkdir()
+        from skills.core.status.handler import handle
+        ctx = _make_ctx("ping", instance, tmp_path)
+        with patch("app.pid_manager.check_pidfile", return_value=None):
+            result = handle(ctx)
+        assert "Runner" in result
 
 
 # ---------------------------------------------------------------------------

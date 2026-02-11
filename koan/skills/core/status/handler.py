@@ -1,7 +1,6 @@
 """Kōan status skill — consolidates /status, /ping, /usage."""
 
 import re
-import subprocess
 
 
 def handle(ctx):
@@ -87,34 +86,46 @@ def _handle_status(ctx) -> str:
 
 
 def _handle_ping(ctx) -> str:
-    """Check if the run loop is alive."""
-    koan_root = ctx.koan_root
+    """Check if run and awake processes are alive using PID files."""
+    from app.pid_manager import check_pidfile
 
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", "run\\.sh"],
-            capture_output=True, text=True, timeout=5,
-        )
-        run_loop_alive = result.returncode == 0
-    except Exception:
-        run_loop_alive = False
+    koan_root = ctx.koan_root
+    run_pid = check_pidfile(koan_root, "run")
+    awake_pid = check_pidfile(koan_root, "awake")
 
     pause_file = koan_root / ".koan-pause"
     stop_file = koan_root / ".koan-stop"
 
-    if run_loop_alive and stop_file.exists():
-        return "⏹️ Run loop is stopping after current mission."
-    elif run_loop_alive and pause_file.exists():
-        return "⏸️ Run loop is paused. /resume to unpause."
-    elif run_loop_alive:
-        status_file = koan_root / ".koan-status"
-        if status_file.exists():
-            loop_status = status_file.read_text().strip()
+    lines = []
+
+    # --- Runner status ---
+    if run_pid:
+        if stop_file.exists():
+            lines.append(f"⏹️ Runner: stopping (PID {run_pid})")
+        elif pause_file.exists():
+            lines.append(f"⏸️ Runner: paused (PID {run_pid})")
+            lines.append("  /resume to unpause")
+        else:
+            status_file = koan_root / ".koan-status"
+            loop_status = ""
+            if status_file.exists():
+                loop_status = status_file.read_text().strip()
             if loop_status:
-                return f"✅ OK — {loop_status}"
-        return "✅ OK"
+                lines.append(f"✅ Runner: {loop_status} (PID {run_pid})")
+            else:
+                lines.append(f"✅ Runner: alive (PID {run_pid})")
     else:
-        return "❌ Run loop is not running.\n\nTo restart:\n  make run &"
+        lines.append("❌ Runner: not running")
+        lines.append("  make run &")
+
+    # --- Bridge status ---
+    if awake_pid:
+        lines.append(f"✅ Bridge: alive (PID {awake_pid})")
+    else:
+        lines.append("❌ Bridge: not running")
+        lines.append("  make awake &")
+
+    return "\n".join(lines)
 
 
 def _handle_usage(ctx) -> str:

@@ -7,11 +7,8 @@ Covers:
 """
 
 import importlib.util
-import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -138,57 +135,56 @@ class TestStatusFileLifecycle:
 # ---------------------------------------------------------------------------
 
 class TestPingWithLoopStatus:
-    """Tests for /ping showing loop status."""
+    """Tests for /ping showing loop status via PID files."""
 
-    @patch("subprocess.run")
-    def test_ping_shows_status_when_running(self, mock_run, tmp_path):
-        """When run loop is alive and has status, /ping shows it."""
-        mock_run.return_value = MagicMock(returncode=0)
+    def test_ping_shows_status_when_running(self, tmp_path):
+        """When runner is alive and has status, /ping shows it."""
         (tmp_path / "instance").mkdir()
         (tmp_path / ".koan-status").write_text("Run 3/20 — executing mission on koan")
-        result = _call_ping_handler(tmp_path)
-        assert "✅ OK" in result
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else 5678
+            result = _call_ping_handler(tmp_path)
+        assert "Runner:" in result
         assert "Run 3/20" in result
         assert "executing mission" in result
 
-    @patch("subprocess.run")
-    def test_ping_shows_idle_status(self, mock_run, tmp_path):
-        """When run loop is idle, /ping shows it."""
-        mock_run.return_value = MagicMock(returncode=0)
+    def test_ping_shows_idle_status(self, tmp_path):
+        """When runner is idle, /ping shows it."""
         (tmp_path / "instance").mkdir()
         (tmp_path / ".koan-status").write_text("Idle — sleeping 300s (14:35)")
-        result = _call_ping_handler(tmp_path)
-        assert "✅ OK" in result
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else 5678
+            result = _call_ping_handler(tmp_path)
+        assert "Runner:" in result
         assert "Idle" in result
 
-    @patch("subprocess.run")
-    def test_ping_without_status_file(self, mock_run, tmp_path):
-        """When no status file, /ping just shows OK."""
-        mock_run.return_value = MagicMock(returncode=0)
+    def test_ping_without_status_file(self, tmp_path):
+        """When no status file, /ping shows generic 'alive'."""
         (tmp_path / "instance").mkdir()
-        result = _call_ping_handler(tmp_path)
-        assert result == "✅ OK"
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else 5678
+            result = _call_ping_handler(tmp_path)
+        assert "Runner: alive" in result
 
-    @patch("subprocess.run")
-    def test_ping_empty_status_file(self, mock_run, tmp_path):
+    def test_ping_empty_status_file(self, tmp_path):
         """Empty status file treated as no status."""
-        mock_run.return_value = MagicMock(returncode=0)
         (tmp_path / "instance").mkdir()
         (tmp_path / ".koan-status").write_text("")
-        result = _call_ping_handler(tmp_path)
-        assert result == "✅ OK"
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else 5678
+            result = _call_ping_handler(tmp_path)
+        assert "Runner: alive" in result
 
-    @patch("subprocess.run")
-    def test_ping_paused_ignores_status(self, mock_run, tmp_path):
+    def test_ping_paused_ignores_status(self, tmp_path):
         """When paused, /ping shows paused — doesn't show loop status."""
-        mock_run.return_value = MagicMock(returncode=0)
         (tmp_path / "instance").mkdir()
         (tmp_path / ".koan-pause").write_text("PAUSE")
         (tmp_path / ".koan-status").write_text("Paused (14:35)")
-        result = _call_ping_handler(tmp_path)
+        with patch("app.pid_manager.check_pidfile") as mock_check:
+            mock_check.side_effect = lambda root, name: 1234 if name == "run" else 5678
+            result = _call_ping_handler(tmp_path)
         assert "⏸️" in result
-        # Status shouldn't bleed into the paused message
-        assert result.startswith("⏸️")
+        assert "Runner:" in result
 
 
 # ---------------------------------------------------------------------------
