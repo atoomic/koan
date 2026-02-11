@@ -20,7 +20,22 @@ This launches a web-based wizard that guides you through Telegram setup, project
 
 ## Recommended
 
-- GitHub cli `gh` setup and has one or more identidies to access to your repositories
+- GitHub cli `gh` setup and has one or more identities to access to your repositories
+
+## LLM Providers
+
+Koan supports multiple LLM providers. Claude Code CLI is the default and
+most capable option. You can also use GitHub Copilot or a local LLM
+server.
+
+| Provider | Setup Guide | Best For |
+|----------|------------|----------|
+| **Claude Code** (default) | [docs/provider-claude.md](docs/provider-claude.md) | Full-featured agent with best reasoning |
+| **GitHub Copilot** | [docs/provider-copilot.md](docs/provider-copilot.md) | Teams with existing Copilot subscriptions |
+| **Local LLM** | [docs/provider-local.md](docs/provider-local.md) | Offline use, privacy, zero API cost |
+
+You can mix providers per project — see the individual guides for
+per-project configuration via `projects.yaml`.
 
 ## Manual Setup
 
