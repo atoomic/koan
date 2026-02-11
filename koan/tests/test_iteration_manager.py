@@ -653,6 +653,225 @@ class TestPlanIteration:
         mock_focus.assert_called_once()
 
 
+# === Tests: Deep hours mode capping ===
+
+
+class TestDeepHoursModeCap:
+    """Tests for deep_hours schedule capping the autonomous mode."""
+
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule")
+    @patch("app.schedule_manager.get_schedule_config", return_value=("0-8", ""))
+    @patch("random.randint", return_value=99)  # No contemplation
+    def test_deep_capped_outside_deep_hours(
+        self, mock_rand, mock_sched_config, mock_schedule, mock_focus,
+        mock_refresh, mock_pick, instance_dir, koan_root, usage_state,
+    ):
+        """Budget 'deep' is capped to 'implement' when outside configured deep_hours."""
+        from app.schedule_manager import ScheduleState
+        # 11 AM: outside deep_hours 0-8
+        mock_schedule.return_value = ScheduleState(in_deep_hours=False, in_work_hours=False)
+
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text("Session (5hr) : 20% (reset in 3h)\nWeekly (7 day) : 10% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["action"] == "autonomous"
+        assert result["autonomous_mode"] == "implement"
+        assert "capped from deep" in result["decision_reason"]
+
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule")
+    @patch("app.schedule_manager.get_schedule_config", return_value=("0-8", ""))
+    @patch("random.randint", return_value=99)
+    def test_deep_allowed_during_deep_hours(
+        self, mock_rand, mock_sched_config, mock_schedule, mock_focus,
+        mock_refresh, mock_pick, instance_dir, koan_root, usage_state,
+    ):
+        """Budget 'deep' stays 'deep' when inside configured deep_hours."""
+        from app.schedule_manager import ScheduleState
+        # 3 AM: inside deep_hours 0-8
+        mock_schedule.return_value = ScheduleState(in_deep_hours=True, in_work_hours=False)
+
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text("Session (5hr) : 20% (reset in 3h)\nWeekly (7 day) : 10% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["action"] == "autonomous"
+        assert result["autonomous_mode"] == "deep"
+        assert "capped" not in result["decision_reason"]
+
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule")
+    @patch("app.schedule_manager.get_schedule_config", return_value=("", ""))
+    @patch("random.randint", return_value=99)
+    def test_deep_allowed_when_no_deep_hours_configured(
+        self, mock_rand, mock_sched_config, mock_schedule, mock_focus,
+        mock_refresh, mock_pick, instance_dir, koan_root, usage_state,
+    ):
+        """Without deep_hours config, 'deep' budget mode is uncapped (backward compat)."""
+        from app.schedule_manager import ScheduleState
+        mock_schedule.return_value = ScheduleState(in_deep_hours=False, in_work_hours=False)
+
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text("Session (5hr) : 20% (reset in 3h)\nWeekly (7 day) : 10% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["autonomous_mode"] == "deep"
+        assert "capped" not in result["decision_reason"]
+
+    @patch("app.pick_mission.pick_mission", return_value="koan:Fix auth bug")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_schedule")
+    @patch("app.schedule_manager.get_schedule_config", return_value=("0-8", ""))
+    def test_cap_applies_to_mission_mode_too(
+        self, mock_sched_config, mock_schedule,
+        mock_refresh, mock_pick, instance_dir, koan_root, usage_state,
+    ):
+        """Mode cap applies even when a mission is assigned (affects prompt)."""
+        from app.schedule_manager import ScheduleState
+        mock_schedule.return_value = ScheduleState(in_deep_hours=False, in_work_hours=False)
+
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text("Session (5hr) : 20% (reset in 3h)\nWeekly (7 day) : 10% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["action"] == "mission"
+        assert result["autonomous_mode"] == "implement"
+        assert "capped from deep" in result["decision_reason"]
+
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule")
+    @patch("app.schedule_manager.get_schedule_config", return_value=("0-8", ""))
+    @patch("random.randint", return_value=99)
+    def test_cap_reason_includes_schedule_context(
+        self, mock_rand, mock_sched_config, mock_schedule, mock_focus,
+        mock_refresh, mock_pick, instance_dir, koan_root, usage_state,
+    ):
+        """Capped decision_reason explains the schedule constraint."""
+        from app.schedule_manager import ScheduleState
+        mock_schedule.return_value = ScheduleState(in_deep_hours=False, in_work_hours=False)
+
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text("Session (5hr) : 20% (reset in 3h)\nWeekly (7 day) : 10% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert "outside deep_hours schedule" in result["decision_reason"]
+
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule")
+    @patch("app.schedule_manager.get_schedule_config", return_value=("0-8", ""))
+    @patch("random.randint", return_value=99)
+    def test_implement_mode_not_capped(
+        self, mock_rand, mock_sched_config, mock_schedule, mock_focus,
+        mock_refresh, mock_pick, instance_dir, koan_root, usage_state,
+    ):
+        """Implement mode (from budget) is not affected by schedule cap."""
+        from app.schedule_manager import ScheduleState
+        mock_schedule.return_value = ScheduleState(in_deep_hours=False, in_work_hours=False)
+
+        usage_md = instance_dir / "usage.md"
+        # 35% session + 10% margin = 55% used → 45% remaining → but let's set higher
+        usage_md.write_text("Session (5hr) : 55% (reset in 3h)\nWeekly (7 day) : 10% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["autonomous_mode"] == "implement"
+        assert "capped" not in result["decision_reason"]
+
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule")
+    @patch("app.schedule_manager.get_schedule_config", return_value=("0-8", ""))
+    @patch("random.randint", return_value=99)
+    def test_schedule_mode_reflects_cap(
+        self, mock_rand, mock_sched_config, mock_schedule, mock_focus,
+        mock_refresh, mock_pick, instance_dir, koan_root, usage_state,
+    ):
+        """The schedule_mode in result reflects the actual schedule state."""
+        from app.schedule_manager import ScheduleState
+        mock_schedule.return_value = ScheduleState(in_deep_hours=False, in_work_hours=False)
+
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text("Session (5hr) : 20% (reset in 3h)\nWeekly (7 day) : 10% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["schedule_mode"] == "normal"
+
+
 # === Tests: CLI interface ===
 
 

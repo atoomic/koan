@@ -233,3 +233,36 @@ def should_suppress_exploration(schedule: ScheduleState) -> bool:
         True if exploration should be suppressed.
     """
     return schedule.in_work_hours
+
+
+def cap_mode_for_schedule(
+    budget_mode: str,
+    schedule: ScheduleState,
+    deep_hours_configured: bool,
+) -> str:
+    """Cap the budget-derived mode based on schedule constraints.
+
+    When deep_hours are configured and the current time is NOT within
+    deep_hours, the mode is capped at "implement" — preventing the agent
+    from entering "deep" mode outside the designated schedule.
+
+    This ensures the human's deep_hours setting is honored: the agent
+    only takes deep initiatives (autonomous exploration, deep research
+    suggestions, 60+ min work sessions) during the configured window.
+
+    Args:
+        budget_mode: Mode decided by usage_tracker ("wait"/"review"/"implement"/"deep").
+        schedule: Current schedule state.
+        deep_hours_configured: Whether deep_hours is set in config (non-empty).
+
+    Returns:
+        Potentially capped mode string.
+    """
+    if budget_mode != "deep":
+        return budget_mode
+
+    # If deep_hours are configured and we're NOT in them, cap to implement
+    if deep_hours_configured and not schedule.in_deep_hours:
+        return "implement"
+
+    return budget_mode
