@@ -126,4 +126,15 @@ usage:
 #   - cli_provider: override AI provider ("claude", "copilot", "local")
 #   - models: override model selection (mission, chat, lightweight, etc.)
 #   - tools: restrict available tools (mission, chat tool lists)
+#   - github: override authorized_users for GitHub @mention commands
 # See projects.example.yaml for documentation and examples.
+
+# GitHub notification-driven commands
+# Enable Kōan to respond to @mentions in GitHub PR/issue comments.
+# When a user posts "@nickname rebase" in a PR comment, Kōan reacts with 👍,
+# creates a mission, and processes it in the next iteration.
+# github:
+#   nickname: "koan-bot"            # Bot's GitHub @mention name (required if enabled)
+#   commands_enabled: false          # Master switch (default: false)
+#   authorized_users: ["*"]          # "*" = all users, or list of GitHub usernames
+#   max_age_hours: 24                # Ignore notifications older than this (default: 24)
