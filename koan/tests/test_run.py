@@ -814,3 +814,444 @@ class TestCLI:
         import app.run
         assert hasattr(app.run, "main")
         assert hasattr(app.run, "main_loop")
+
+
+# ---------------------------------------------------------------------------
+# Fixture: mock_error_handling
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_error_handling():
+    """Common mock setup for error handling tests."""
+    with patch("app.run._notify") as notify, \
+         patch("app.run.time.sleep") as sleep, \
+         patch("app.run.log") as log_fn:
+        yield {"notify": notify, "sleep": sleep, "log": log_fn}
+
+
+# ---------------------------------------------------------------------------
+# Test: _handle_iteration_error
+# ---------------------------------------------------------------------------
+
+class TestHandleIterationError:
+    """Tests for the error recovery handler."""
+
+    def test_logs_error_and_backs_off(self, koan_root, capsys):
+        from app.run import _handle_iteration_error, _init_colors
+        _init_colors()
+        instance = str(koan_root / "instance")
+
+        with patch("app.run._notify"), \
+             patch("app.run.time.sleep") as mock_sleep:
+            _handle_iteration_error(
+                ValueError("test error"), 1, str(koan_root), instance,
+            )
+
+        out = capsys.readouterr().out
+        assert "test error" in out
+        assert "1/" in out
+        # First error: 10s backoff
+        mock_sleep.assert_called_once_with(10)
+
+    def test_backoff_increases(self, koan_root, mock_error_handling):
+        from app.run import _handle_iteration_error
+        instance = str(koan_root / "instance")
+
+        _handle_iteration_error(
+            ValueError("err"), 3, str(koan_root), instance,
+        )
+
+        # 3rd error: 30s backoff
+        mock_error_handling["sleep"].assert_called_once_with(30)
+
+    def test_backoff_capped_at_max(self, koan_root, mock_error_handling):
+        from app.run import _handle_iteration_error
+        instance = str(koan_root / "instance")
+
+        _handle_iteration_error(
+            ValueError("err"), 8, str(koan_root), instance,
+        )
+
+        # 8th error: 80s backoff
+        mock_error_handling["sleep"].assert_called_once_with(80)
+
+    def test_backoff_capped_at_max_iteration_constant(self, koan_root, mock_error_handling):
+        from app.run import _handle_iteration_error, MAX_CONSECUTIVE_ERRORS
+        instance = str(koan_root / "instance")
+
+        # Use error count below MAX_CONSECUTIVE_ERRORS to avoid entering pause mode
+        with patch("app.pause_manager.create_pause"):
+            _handle_iteration_error(
+                ValueError("err"), 9, str(koan_root), instance,
+            )
+
+        # 9th error: 90s backoff (below cap)
+        mock_error_handling["sleep"].assert_called_once_with(90)
+
+    def test_notifies_on_first_error(self, koan_root, mock_error_handling):
+        from app.run import _handle_iteration_error
+        instance = str(koan_root / "instance")
+
+        _handle_iteration_error(
+            ValueError("boom"), 1, str(koan_root), instance,
+        )
+
+        mock_error_handling["notify"].assert_called_once()
+        assert "boom" in mock_error_handling["notify"].call_args[0][1]
+
+    def test_throttles_notifications(self, koan_root):
+        """Only notifies on 1st and every 5th error."""
+        from app.run import _handle_iteration_error, ERROR_NOTIFICATION_INTERVAL
+        instance = str(koan_root / "instance")
+
+        # Errors 2, 3, 4 should not notify
+        for i in range(2, ERROR_NOTIFICATION_INTERVAL):
+            with patch("app.run._notify") as mock_notify, \
+                 patch("app.run.time.sleep"), \
+                 patch("app.run.log"):
+                _handle_iteration_error(
+                    ValueError("err"), i, str(koan_root), instance,
+                )
+            mock_notify.assert_not_called()
+
+        # ERROR_NOTIFICATION_INTERVAL-th error: should notify
+        with patch("app.run._notify") as mock_notify, \
+             patch("app.run.time.sleep"), \
+             patch("app.run.log"):
+            _handle_iteration_error(
+                ValueError("err"), ERROR_NOTIFICATION_INTERVAL, str(koan_root), instance,
+            )
+        mock_notify.assert_called_once()
+
+    def test_enters_pause_at_max_errors(self, koan_root, mock_error_handling):
+        from app.run import _handle_iteration_error, MAX_CONSECUTIVE_ERRORS
+        instance = str(koan_root / "instance")
+
+        with patch("app.pause_manager.create_pause") as mock_pause:
+            _handle_iteration_error(
+                RuntimeError("fatal"), MAX_CONSECUTIVE_ERRORS,
+                str(koan_root), instance,
+            )
+
+        mock_pause.assert_called_once_with(str(koan_root), "errors")
+
+    def test_no_pause_below_max_errors(self, koan_root, mock_error_handling):
+        from app.run import _handle_iteration_error, MAX_CONSECUTIVE_ERRORS
+        instance = str(koan_root / "instance")
+
+        with patch("app.pause_manager.create_pause") as mock_pause:
+            _handle_iteration_error(
+                RuntimeError("err"), MAX_CONSECUTIVE_ERRORS - 1,
+                str(koan_root), instance,
+            )
+
+        mock_pause.assert_not_called()
+
+    def test_no_sleep_at_max_errors(self, koan_root, mock_error_handling):
+        """At max errors, enters pause — no backoff sleep."""
+        from app.run import _handle_iteration_error, MAX_CONSECUTIVE_ERRORS
+        instance = str(koan_root / "instance")
+
+        with patch("app.pause_manager.create_pause"):
+            _handle_iteration_error(
+                RuntimeError("fatal"), MAX_CONSECUTIVE_ERRORS,
+                str(koan_root), instance,
+            )
+
+        mock_error_handling["sleep"].assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test: main_loop iteration error recovery
+# ---------------------------------------------------------------------------
+
+class TestMainLoopResilience:
+    """Tests that main_loop survives iteration failures."""
+
+    @patch("app.run.subprocess.run")
+    @patch("app.run.run_startup", return_value=(5, 10, "koan/"))
+    @patch("app.run.acquire_pid")
+    @patch("app.run.release_pid")
+    @patch("app.run._run_iteration")
+    @patch("app.run._handle_iteration_error")
+    def test_recovers_from_iteration_error(
+        self, mock_handle_err, mock_iteration, mock_release,
+        mock_acquire, mock_startup, mock_subproc, koan_root,
+    ):
+        """An exception in _run_iteration doesn't kill main_loop."""
+        from app.run import main_loop
+
+        os.environ["KOAN_ROOT"] = str(koan_root)
+        os.environ["KOAN_PROJECTS"] = f"test:{koan_root}"
+        (koan_root / ".koan-project").write_text("test")
+
+        call_count = [0]
+        def iteration_side_effect(**kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("network error")
+            # Second call: create stop file to end loop
+            (koan_root / ".koan-stop").touch()
+            (koan_root / ".koan-project").write_text("test")
+
+        mock_iteration.side_effect = iteration_side_effect
+
+        with patch("app.run._notify"):
+            main_loop()
+
+        # Error handler was called for the first failure
+        mock_handle_err.assert_called_once()
+        args = mock_handle_err.call_args[0]
+        assert isinstance(args[0], RuntimeError)
+        assert args[1] == 1  # consecutive_errors
+
+    @patch("app.run.subprocess.run")
+    @patch("app.run.run_startup", return_value=(5, 10, "koan/"))
+    @patch("app.run.acquire_pid")
+    @patch("app.run.release_pid")
+    @patch("app.run._run_iteration")
+    @patch("app.run._handle_iteration_error")
+    def test_consecutive_error_counter_resets_on_success(
+        self, mock_handle_err, mock_iteration, mock_release,
+        mock_acquire, mock_startup, mock_subproc, koan_root,
+    ):
+        """Successful iteration resets the consecutive error counter."""
+        from app.run import main_loop
+
+        os.environ["KOAN_ROOT"] = str(koan_root)
+        os.environ["KOAN_PROJECTS"] = f"test:{koan_root}"
+        (koan_root / ".koan-project").write_text("test")
+
+        call_count = [0]
+        def iteration_side_effect(**kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("first error")
+            if call_count[0] == 2:
+                raise RuntimeError("second error")
+            if call_count[0] == 3:
+                # Success — this resets consecutive_errors to 0
+                return
+            if call_count[0] == 4:
+                raise RuntimeError("third error after reset")
+            # 5th call: stop
+            (koan_root / ".koan-stop").touch()
+            (koan_root / ".koan-project").write_text("test")
+
+        mock_iteration.side_effect = iteration_side_effect
+
+        with patch("app.run._notify"):
+            main_loop()
+
+        # Error handler called 3 times:
+        # calls 1,2 had consecutive_errors=1,2
+        # call 3 succeeded → reset to 0
+        # call 4 had consecutive_errors=1 (reset)
+        assert mock_handle_err.call_count == 3
+        assert mock_handle_err.call_args_list[0][0][1] == 1  # first error
+        assert mock_handle_err.call_args_list[1][0][1] == 2  # second error
+        assert mock_handle_err.call_args_list[2][0][1] == 1  # reset after success
+
+    @patch("app.run.subprocess.run")
+    @patch("app.run.run_startup", return_value=(5, 10, "koan/"))
+    @patch("app.run.acquire_pid")
+    @patch("app.run.release_pid")
+    @patch("app.run._run_iteration")
+    def test_keyboard_interrupt_propagates(
+        self, mock_iteration, mock_release,
+        mock_acquire, mock_startup, mock_subproc, koan_root,
+    ):
+        """KeyboardInterrupt is NOT caught by the iteration handler."""
+        from app.run import main_loop
+
+        os.environ["KOAN_ROOT"] = str(koan_root)
+        os.environ["KOAN_PROJECTS"] = f"test:{koan_root}"
+        (koan_root / ".koan-project").write_text("test")
+
+        mock_iteration.side_effect = KeyboardInterrupt
+
+        with patch("app.run._notify"):
+            # main_loop catches KeyboardInterrupt at the top level
+            main_loop()
+
+        # Release should still be called (in finally block)
+        mock_release.assert_called()
+
+    @patch("app.run.subprocess.run")
+    @patch("app.run.run_startup", return_value=(5, 10, "koan/"))
+    @patch("app.run.acquire_pid")
+    @patch("app.run.release_pid")
+    @patch("app.run._run_iteration")
+    def test_system_exit_42_propagates(
+        self, mock_iteration, mock_release,
+        mock_acquire, mock_startup, mock_subproc, koan_root,
+    ):
+        """SystemExit(42) propagates for restart handling."""
+        from app.run import main_loop
+
+        os.environ["KOAN_ROOT"] = str(koan_root)
+        os.environ["KOAN_PROJECTS"] = f"test:{koan_root}"
+        (koan_root / ".koan-project").write_text("test")
+
+        mock_iteration.side_effect = SystemExit(42)
+
+        with pytest.raises(SystemExit) as exc:
+            with patch("app.run._notify"):
+                main_loop()
+        assert exc.value.code == 42
+
+
+# ---------------------------------------------------------------------------
+# Test: main() crash recovery
+# ---------------------------------------------------------------------------
+
+class TestMainCrashRecovery:
+    """Tests for the outer crash recovery wrapper in main()."""
+
+    @patch("app.run.main_loop")
+    @patch("app.run.time.sleep")
+    def test_recovers_from_unexpected_crash(self, mock_sleep, mock_loop):
+        """main() restarts main_loop after an unexpected exception."""
+        from app.run import main, BACKOFF_MULTIPLIER
+
+        call_count = [0]
+        def side_effect():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("unexpected crash")
+            # Second call: normal exit
+
+        mock_loop.side_effect = side_effect
+        main()
+        assert call_count[0] == 2
+        # First crash: BACKOFF_MULTIPLIER * 1 = 10s
+        mock_sleep.assert_called_once_with(BACKOFF_MULTIPLIER)
+
+    @patch("app.run.main_loop")
+    @patch("app.run.time.sleep")
+    def test_gives_up_after_max_crashes(self, mock_sleep, mock_loop):
+        """main() stops retrying after MAX_MAIN_CRASHES consecutive crashes."""
+        from app.run import main, MAX_MAIN_CRASHES
+
+        mock_loop.side_effect = RuntimeError("always crashing")
+        main()
+        assert mock_loop.call_count == MAX_MAIN_CRASHES
+
+    @patch("app.run.main_loop")
+    @patch("app.run.time.sleep")
+    def test_crash_count_resets_on_restart(self, mock_sleep, mock_loop):
+        """SystemExit(42) resets the crash counter."""
+        from app.run import main
+
+        call_count = [0]
+        def side_effect():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise SystemExit(42)  # restart signal
+            # Second call: normal exit
+
+        mock_loop.side_effect = side_effect
+        main()
+        assert call_count[0] == 2
+
+    @patch("app.run.main_loop")
+    @patch("app.run.time.sleep")
+    def test_increasing_backoff_on_crashes(self, mock_sleep, mock_loop):
+        """Backoff increases: 10s, 20s, 30s, 40s."""
+        from app.run import main, BACKOFF_MULTIPLIER
+
+        call_count = [0]
+        def side_effect():
+            call_count[0] += 1
+            if call_count[0] <= 4:
+                raise RuntimeError("crash")
+            # 5th call: normal exit
+
+        mock_loop.side_effect = side_effect
+        main()
+        sleeps = [c[0][0] for c in mock_sleep.call_args_list]
+        expected = [BACKOFF_MULTIPLIER * i for i in range(1, 5)]
+        assert sleeps == expected
+
+
+# ---------------------------------------------------------------------------
+# Test: _run_iteration action=error raises RuntimeError
+# ---------------------------------------------------------------------------
+
+class TestRunIterationErrorAction:
+    """The action=error path raises RuntimeError instead of sys.exit(1)."""
+
+    @patch("app.run.plan_iteration")
+    @patch("app.run._notify")
+    def test_error_action_raises(self, mock_notify, mock_plan, koan_root):
+        from app.run import _run_iteration
+
+        mock_plan.return_value = {
+            "action": "error",
+            "error": "Unknown project: foo",
+            "project_name": "foo",
+            "project_path": "",
+            "mission_title": "do stuff",
+            "autonomous_mode": "implement",
+            "focus_area": "",
+            "available_pct": 50,
+            "decision_reason": "Default",
+            "display_lines": [],
+            "recurring_injected": [],
+        }
+
+        instance = str(koan_root / "instance")
+
+        with pytest.raises(RuntimeError, match="Unknown project: foo"):
+            _run_iteration(
+                koan_root=str(koan_root),
+                instance=instance,
+                projects=[("test", str(koan_root))],
+                count=0,
+                max_runs=5,
+                interval=10,
+                git_sync_interval=5,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Test: MAX_CONSECUTIVE_ERRORS constant
+# ---------------------------------------------------------------------------
+
+class TestConstants:
+    def test_max_consecutive_errors_is_10(self):
+        from app.run import MAX_CONSECUTIVE_ERRORS
+        assert MAX_CONSECUTIVE_ERRORS == 10
+
+
+# ---------------------------------------------------------------------------
+# Test: Recovery helpers
+# ---------------------------------------------------------------------------
+
+class TestRecoveryHelpers:
+    """Tests for _calculate_backoff and _should_notify_error."""
+
+    def test_calculate_backoff_linear_growth(self):
+        from app.run import _calculate_backoff, BACKOFF_MULTIPLIER
+        assert _calculate_backoff(1, 300) == BACKOFF_MULTIPLIER
+        assert _calculate_backoff(2, 300) == BACKOFF_MULTIPLIER * 2
+        assert _calculate_backoff(3, 300) == BACKOFF_MULTIPLIER * 3
+
+    def test_calculate_backoff_capped(self):
+        from app.run import _calculate_backoff
+        # 100 * 10 = 1000, but capped at 60
+        assert _calculate_backoff(100, 60) == 60
+
+    def test_should_notify_on_first_error(self):
+        from app.run import _should_notify_error
+        assert _should_notify_error(1) is True
+
+    def test_should_notify_at_interval(self):
+        from app.run import _should_notify_error, ERROR_NOTIFICATION_INTERVAL
+        assert _should_notify_error(ERROR_NOTIFICATION_INTERVAL) is True
+        assert _should_notify_error(ERROR_NOTIFICATION_INTERVAL * 2) is True
+
+    def test_should_not_notify_between_intervals(self):
+        from app.run import _should_notify_error, ERROR_NOTIFICATION_INTERVAL
+        for i in range(2, ERROR_NOTIFICATION_INTERVAL):
+            assert _should_notify_error(i) is False
