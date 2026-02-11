@@ -1,6 +1,7 @@
 """Tests for awake.py — message classification, mission handling, project parsing, handlers."""
 
 import importlib.util
+import os
 import re
 import subprocess
 import time
@@ -31,6 +32,7 @@ from app.command_handlers import (
     handle_command,
     handle_mission,
     handle_resume,
+    _handle_start,
     _dispatch_skill,
     _handle_help,
     _handle_help_command,
@@ -432,10 +434,10 @@ class TestHandleCommand:
         handle_command("/restart")
         mock_dispatch.assert_called_once()
 
-    @patch("app.command_handlers.handle_resume")
-    def test_start_delegates_to_resume(self, mock_resume):
+    @patch("app.command_handlers._handle_start")
+    def test_start_routes_to_handle_start(self, mock_start):
         handle_command("/start")
-        mock_resume.assert_called_once()
+        mock_start.assert_called_once()
 
     @patch("app.command_handlers.send_telegram")
     def test_verbose_via_skill(self, mock_send, tmp_path):
@@ -542,6 +544,99 @@ class TestResetSessionCounters:
             _reset_session_counters()
         # Should log an error
         mock_log.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# _handle_start
+# ---------------------------------------------------------------------------
+
+
+class TestHandleStart:
+    """Tests for /start — start agent loop or resume if paused."""
+
+    @patch("app.command_handlers.send_telegram")
+    @patch("app.command_handlers.handle_resume")
+    def test_runner_running_and_paused_delegates_to_resume(self, mock_resume, mock_send, tmp_path):
+        """If runner is running but paused, /start behaves like /resume."""
+        (tmp_path / ".koan-pause").write_text("PAUSE")
+        # check_pidfile is imported lazily inside _handle_start, patch at source
+        with patch("app.command_handlers.KOAN_ROOT", tmp_path), \
+             patch("app.pid_manager.check_pidfile", return_value=os.getpid()), \
+             patch("app.command_handlers.log"):
+            _handle_start()
+        mock_resume.assert_called_once()
+        mock_send.assert_not_called()  # resume handles messaging
+
+    @patch("app.command_handlers.send_telegram")
+    def test_runner_running_not_paused(self, mock_send, tmp_path):
+        """If runner is running and not paused, tell user."""
+        with patch("app.command_handlers.KOAN_ROOT", tmp_path), \
+             patch("app.pid_manager.check_pidfile", return_value=12345):
+            _handle_start()
+        assert "already running" in mock_send.call_args[0][0]
+        assert "12345" in mock_send.call_args[0][0]
+
+    @patch("app.command_handlers.send_telegram")
+    def test_runner_stopped_launches_successfully(self, mock_send, tmp_path):
+        """If runner is stopped, /start launches it."""
+        with patch("app.command_handlers.KOAN_ROOT", tmp_path), \
+             patch("app.pid_manager.check_pidfile", return_value=None), \
+             patch("app.pid_manager.start_runner", return_value=(True, "Agent loop started (PID 99)")):
+            _handle_start()
+        # Two messages: "Starting..." and the success result
+        assert mock_send.call_count == 2
+        assert "Starting" in mock_send.call_args_list[0][0][0]
+        assert "Agent loop started" in mock_send.call_args_list[1][0][0]
+
+    @patch("app.command_handlers.send_telegram")
+    def test_runner_stopped_launch_fails(self, mock_send, tmp_path):
+        """If launch fails, report the error."""
+        with patch("app.command_handlers.KOAN_ROOT", tmp_path), \
+             patch("app.pid_manager.check_pidfile", return_value=None), \
+             patch("app.pid_manager.start_runner", return_value=(False, "Failed to launch: No such file")):
+            _handle_start()
+        assert mock_send.call_count == 2
+        assert "Starting" in mock_send.call_args_list[0][0][0]
+        assert "Failed to launch" in mock_send.call_args_list[1][0][0]
+
+    @patch("app.command_handlers.send_telegram")
+    def test_stop_file_cleared_before_launch(self, mock_send, tmp_path):
+        """Verify start_runner is called (which internally clears .koan-stop)."""
+        (tmp_path / ".koan-stop").write_text("STOP")
+        with patch("app.command_handlers.KOAN_ROOT", tmp_path), \
+             patch("app.pid_manager.check_pidfile", return_value=None), \
+             patch("app.pid_manager.start_runner", return_value=(True, "Started")) as mock_start:
+            _handle_start()
+        mock_start.assert_called_once_with(tmp_path)
+
+    @patch("app.command_handlers.send_telegram")
+    def test_start_routed_from_handle_command(self, mock_send, tmp_path):
+        """The /start command routes to _handle_start, not handle_resume."""
+        with patch("app.command_handlers.KOAN_ROOT", tmp_path), \
+             patch("app.pid_manager.check_pidfile", return_value=42):
+            handle_command("/start")
+        assert "already running" in mock_send.call_args[0][0]
+
+    @patch("app.command_handlers.send_telegram")
+    def test_resume_still_works_separately(self, mock_send, tmp_path):
+        """/resume should NOT call _handle_start — verify separation."""
+        with patch("app.command_handlers.KOAN_ROOT", tmp_path):
+            handle_command("/resume")
+        # /resume with no pause file → "No pause or quota hold"
+        assert "No pause" in mock_send.call_args[0][0]
+
+    @patch("app.command_handlers.send_telegram")
+    def test_help_shows_start_separately(self, mock_send, tmp_path):
+        """/help should list /start with its own description."""
+        registry_mock = MagicMock()
+        registry_mock.list_by_scope.return_value = []
+        registry_mock.list_all.return_value = []
+        with patch("app.command_handlers.KOAN_ROOT", tmp_path), \
+             patch("app.command_handlers._get_registry", return_value=registry_mock):
+            _handle_help()
+        help_text = mock_send.call_args[0][0]
+        assert "/start" in help_text
+        assert "start agent loop" in help_text
 
 
 # ---------------------------------------------------------------------------

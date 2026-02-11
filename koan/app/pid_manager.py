@@ -16,6 +16,7 @@ Usage from Python:
 import fcntl
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -172,6 +173,52 @@ def check_pidfile(koan_root: Path, process_name: str) -> Optional[int]:
 PROCESS_NAMES = ("run", "awake")
 
 
+def start_runner(koan_root: Path, verify_timeout: float = 3.0) -> tuple:
+    """Start the agent loop (run.py) as a detached subprocess.
+
+    Clears .koan-stop signal, launches run.py, and verifies startup
+    via PID file.
+
+    Returns (success: bool, message: str).
+    """
+    # Already running?
+    pid = check_pidfile(koan_root, "run")
+    if pid:
+        return False, f"Agent loop already running (PID {pid})"
+
+    # Clear stop signal so run.py doesn't exit immediately
+    stop_file = koan_root / ".koan-stop"
+    stop_file.unlink(missing_ok=True)
+
+    # Build launch command — mirrors `make run`
+    python = sys.executable
+    koan_dir = koan_root / "koan"
+
+    env = {**os.environ, "KOAN_ROOT": str(koan_root), "PYTHONPATH": "."}
+
+    try:
+        subprocess.Popen(
+            [python, "app/run.py"],
+            cwd=str(koan_dir),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        return False, f"Failed to launch: {e}"
+
+    # Wait briefly for run.py to acquire its PID file
+    deadline = time.monotonic() + verify_timeout
+    while time.monotonic() < deadline:
+        new_pid = check_pidfile(koan_root, "run")
+        if new_pid:
+            return True, f"Agent loop started (PID {new_pid})"
+        time.sleep(0.3)
+
+    return False, "Launched but PID not detected — check logs"
+
+
 def _wait_for_exit(pid: int, timeout: float) -> bool:
     """Wait for a process to exit, with timeout.
 
@@ -270,6 +317,12 @@ if __name__ == "__main__":
         if not any_stopped:
             print("No processes were running.")
         sys.exit(0)
+
+    if action == "start-runner":
+        root = Path(sys.argv[2])
+        ok, msg = start_runner(root)
+        print(f"  {msg}")
+        sys.exit(0 if ok else 1)
 
     if action == "status-all":
         root = Path(sys.argv[2])

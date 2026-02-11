@@ -208,9 +208,12 @@ class TestRestartAsUpdateAlias:
 
     @patch("app.command_handlers.handle_resume")
     def test_resume_aliases_still_work(self, mock_resume):
-        """Verify /work, /awake, /start still call resume, not restart."""
+        """Verify /work, /awake still call resume, not restart.
+
+        Note: /start has its own handler since session 257 (can start stopped runner).
+        """
         from app.command_handlers import handle_command
-        for cmd in ["/resume", "/work", "/awake", "/start"]:
+        for cmd in ["/resume", "/work", "/awake"]:
             mock_resume.reset_mock()
             handle_command(cmd)
             assert mock_resume.call_count == 1, f"{cmd} should call handle_resume"

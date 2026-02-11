@@ -20,6 +20,7 @@ from app.pid_manager import (
     release_pid,
     check_pidfile,
     stop_processes,
+    start_runner,
     PROCESS_NAMES,
 )
 
@@ -610,3 +611,94 @@ class TestCLIStopAll:
         assert result.returncode == 0
         assert f"run: running (PID {os.getpid()})" in result.stdout
         assert "awake: not running" in result.stdout
+
+    def test_start_runner_cli_already_running(self, tmp_path):
+        """CLI start-runner exits 1 when runner is already running."""
+        pidfile = tmp_path / ".koan-pid-run"
+        pidfile.write_text(str(os.getpid()))
+
+        result = self._run_cli("start-runner", str(tmp_path))
+        assert result.returncode == 1
+        assert "already running" in result.stdout
+
+    def test_start_runner_cli_no_koan_dir(self, tmp_path):
+        """CLI start-runner fails gracefully when koan/ dir is missing."""
+        result = self._run_cli("start-runner", str(tmp_path))
+        assert result.returncode == 1
+        assert "Failed to launch" in result.stdout or "PID not detected" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# start_runner
+# ---------------------------------------------------------------------------
+
+
+class TestStartRunner:
+    def test_returns_already_running_if_pid_exists(self, tmp_path):
+        """If runner is already alive, don't launch a second one."""
+        pidfile = tmp_path / ".koan-pid-run"
+        pidfile.write_text(str(os.getpid()))
+
+        ok, msg = start_runner(tmp_path)
+        assert ok is False
+        assert "already running" in msg
+        assert str(os.getpid()) in msg
+
+    def test_clears_stop_file_before_launch(self, tmp_path):
+        """The .koan-stop signal must be cleared, or run.py exits immediately."""
+        stop_file = tmp_path / ".koan-stop"
+        stop_file.write_text("STOP")
+
+        # Mock Popen to avoid actually starting run.py
+        with patch("app.pid_manager.subprocess.Popen"):
+            with patch("app.pid_manager.check_pidfile", side_effect=[None, None, None, None, None, None, None, None, None, None]):
+                start_runner(tmp_path, verify_timeout=0.5)
+
+        assert not stop_file.exists()
+
+    def test_launches_subprocess_with_correct_args(self, tmp_path):
+        """Verify subprocess.Popen is called with the right command and env."""
+        with patch("app.pid_manager.subprocess.Popen") as mock_popen:
+            with patch("app.pid_manager.check_pidfile", side_effect=[None, None, None, None, None, None, None, None, None, None]):
+                start_runner(tmp_path, verify_timeout=0.5)
+
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args
+        # Command should be [python, "app/run.py"]
+        assert call_args[0][0][1] == "app/run.py"
+        # Should be detached
+        assert call_args[1]["start_new_session"] is True
+        # cwd should be the koan subdirectory
+        assert call_args[1]["cwd"] == str(tmp_path / "koan")
+        # Env should include KOAN_ROOT and PYTHONPATH
+        assert call_args[1]["env"]["KOAN_ROOT"] == str(tmp_path)
+        assert call_args[1]["env"]["PYTHONPATH"] == "."
+
+    def test_returns_success_when_pid_appears(self, tmp_path):
+        """After launch, verify PID appears within timeout."""
+        with patch("app.pid_manager.subprocess.Popen"):
+            # First check_pidfile in the function body (already running?) returns None
+            # Then verify loop: None, None, then a PID appears
+            with patch("app.pid_manager.check_pidfile", side_effect=[None, None, None, 42]):
+                ok, msg = start_runner(tmp_path, verify_timeout=2.0)
+
+        assert ok is True
+        assert "PID 42" in msg
+
+    def test_returns_warning_when_pid_not_detected(self, tmp_path):
+        """If PID never appears within timeout, return a warning."""
+        with patch("app.pid_manager.subprocess.Popen"):
+            with patch("app.pid_manager.check_pidfile", return_value=None):
+                ok, msg = start_runner(tmp_path, verify_timeout=0.5)
+
+        assert ok is False
+        assert "PID not detected" in msg
+
+    def test_returns_failure_on_popen_exception(self, tmp_path):
+        """If Popen raises, return the error message."""
+        with patch("app.pid_manager.subprocess.Popen", side_effect=OSError("No such file")):
+            ok, msg = start_runner(tmp_path)
+
+        assert ok is False
+        assert "Failed to launch" in msg
+        assert "No such file" in msg

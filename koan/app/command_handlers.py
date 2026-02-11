@@ -68,8 +68,12 @@ def handle_command(text: str):
             send_telegram("⏸️ Paused. No missions will run. /resume to unpause.")
         return
 
-    if cmd in ("/resume", "/work", "/awake", "/start"):
+    if cmd in ("/resume", "/work", "/awake"):
         handle_resume()
+        return
+
+    if cmd == "/start":
+        _handle_start()
         return
 
     if cmd == "/help" or cmd.startswith("/help "):
@@ -350,7 +354,8 @@ def _handle_help():
         "Kōan -- Commands\n",
         "CORE",
         "⏸️ /pause -- pause (alias: /sleep)",
-        "▶️ /resume -- resume after pause (alias: /work, /awake, /start)",
+        "▶️ /resume -- resume after pause (alias: /work, /awake)",
+        "🚀 /start -- start agent loop (or resume if paused)",
         "⏹️ /stop -- stop Kōan after current mission",
         "/help -- this help (use /help <command> for details)",
         "/skill -- list skills (install|update|remove|sources)",
@@ -485,6 +490,34 @@ def handle_resume():
     except Exception as e:
         log("error", f"Error checking quota reset: {e}")
         send_telegram("⚠️ Error checking quota. /status or check manually.")
+
+
+def _handle_start():
+    """Start the agent loop — smart command that handles both cases.
+
+    If the runner is stopped: clears .koan-stop, launches run.py.
+    If the runner is paused: behaves like /resume.
+    If the runner is running: tells the user.
+    """
+    from app.pid_manager import check_pidfile, start_runner
+
+    pid = check_pidfile(KOAN_ROOT, "run")
+    if pid:
+        # Runner is alive — check if paused
+        pause_file = KOAN_ROOT / ".koan-pause"
+        if pause_file.exists():
+            handle_resume()
+        else:
+            send_telegram(f"ℹ️ Agent loop already running (PID {pid}). Nothing to do.")
+        return
+
+    # Runner is stopped — launch it
+    send_telegram("🚀 Starting agent loop...")
+    ok, msg = start_runner(KOAN_ROOT)
+    if ok:
+        send_telegram(f"✅ {msg}")
+    else:
+        send_telegram(f"❌ {msg}")
 
 
 def handle_mission(text: str):
