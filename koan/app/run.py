@@ -476,6 +476,40 @@ def _notify(instance: str, message: str):
         pass
 
 
+def _notify_mission_end(
+    instance: str,
+    project_name: str,
+    run_num: int,
+    max_runs: int,
+    exit_code: int,
+    mission_title: str = "",
+):
+    """Send a notification when a mission or autonomous run completes.
+
+    Always sends — both on success and failure — so the human always
+    gets a status update. Uses unicode prefix: ✅ for success, ❌ for failure.
+    On success, appends a brief journal summary when available.
+    """
+    if exit_code == 0:
+        prefix = "✅"
+        label = mission_title if mission_title else f"Autonomous run on {project_name}"
+        msg = f"{prefix} Run {run_num}/{max_runs} — [{project_name}] {label}"
+        # Try to attach a brief summary from the journal
+        try:
+            from app.mission_summary import get_mission_summary
+            summary = get_mission_summary(instance, project_name, max_chars=300)
+            if summary:
+                msg += f"\n\n{summary}"
+        except Exception:
+            pass
+    else:
+        prefix = "❌"
+        label = mission_title if mission_title else "Run"
+        msg = f"{prefix} Run {run_num}/{max_runs} — [{project_name}] Failed: {label}"
+
+    _notify(instance, msg)
+
+
 # ---------------------------------------------------------------------------
 # Instance commit helper
 # ---------------------------------------------------------------------------
@@ -933,8 +967,10 @@ def _run_iteration(
 
             if exit_code == 0:
                 log("mission", f"Run {run_num}/{max_runs} — [{project_name}] skill completed")
-            else:
-                _notify(instance, f"❌ Run {run_num}/{max_runs} — [{project_name}] Skill failed: {mission_title}")
+            _notify_mission_end(
+                instance, project_name, run_num, max_runs,
+                exit_code, mission_title,
+            )
 
             _finalize_mission(instance, mission_title, project_name, exit_code)
             _commit_instance(instance)
@@ -1090,14 +1126,13 @@ def _run_iteration(
 
     _cleanup_temp(stdout_file, stderr_file)
 
-    # Report result
+    # Report result — always notify on completion (success or failure)
     if claude_exit == 0:
         log("mission", f"Run {run_num}/{max_runs} — [{project_name}] completed successfully")
-    else:
-        if mission_title:
-            _notify(instance, f"❌ Run {run_num}/{max_runs} — [{project_name}] Mission failed: {mission_title}")
-        else:
-            _notify(instance, f"❌ Run {run_num}/{max_runs} — [{project_name}] Run failed")
+    _notify_mission_end(
+        instance, project_name, run_num, max_runs,
+        claude_exit, mission_title,
+    )
 
     # Commit instance
     _commit_instance(instance)

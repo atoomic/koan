@@ -1255,3 +1255,106 @@ class TestRecoveryHelpers:
         from app.run import _should_notify_error, ERROR_NOTIFICATION_INTERVAL
         for i in range(2, ERROR_NOTIFICATION_INTERVAL):
             assert _should_notify_error(i) is False
+
+
+# ---------------------------------------------------------------------------
+# Test: _notify_mission_end
+# ---------------------------------------------------------------------------
+
+class TestNotifyMissionEnd:
+    """Tests for _notify_mission_end() — end-of-mission notifications."""
+
+    @patch("app.run._notify")
+    def test_success_with_mission_title(self, mock_notify):
+        from app.run import _notify_mission_end
+        _notify_mission_end("/tmp/inst", "myproject", 3, 10, 0, "Fix the auth bug")
+        mock_notify.assert_called_once()
+        msg = mock_notify.call_args[0][1]
+        assert msg.startswith("✅")
+        assert "[myproject]" in msg
+        assert "Fix the auth bug" in msg
+        assert "Run 3/10" in msg
+
+    @patch("app.run._notify")
+    def test_failure_with_mission_title(self, mock_notify):
+        from app.run import _notify_mission_end
+        _notify_mission_end("/tmp/inst", "myproject", 3, 10, 1, "Fix the auth bug")
+        mock_notify.assert_called_once()
+        msg = mock_notify.call_args[0][1]
+        assert msg.startswith("❌")
+        assert "[myproject]" in msg
+        assert "Failed:" in msg
+        assert "Fix the auth bug" in msg
+
+    @patch("app.run._notify")
+    def test_success_autonomous_no_title(self, mock_notify):
+        from app.run import _notify_mission_end
+        _notify_mission_end("/tmp/inst", "koan", 1, 5, 0, "")
+        mock_notify.assert_called_once()
+        msg = mock_notify.call_args[0][1]
+        assert msg.startswith("✅")
+        assert "Autonomous run on koan" in msg
+
+    @patch("app.run._notify")
+    def test_failure_autonomous_no_title(self, mock_notify):
+        from app.run import _notify_mission_end
+        _notify_mission_end("/tmp/inst", "koan", 1, 5, 1, "")
+        mock_notify.assert_called_once()
+        msg = mock_notify.call_args[0][1]
+        assert msg.startswith("❌")
+        assert "Failed: Run" in msg
+
+    @patch("app.mission_summary.get_mission_summary", return_value="Session 42\n\nFixed auth.")
+    @patch("app.run._notify")
+    def test_success_includes_journal_summary(self, mock_notify, mock_summary):
+        from app.run import _notify_mission_end
+        _notify_mission_end("/tmp/inst", "proj", 2, 10, 0, "Fix auth")
+        msg = mock_notify.call_args[0][1]
+        assert "✅" in msg
+        assert "Fixed auth." in msg
+        mock_summary.assert_called_once_with("/tmp/inst", "proj", max_chars=300)
+
+    @patch("app.mission_summary.get_mission_summary", return_value="")
+    @patch("app.run._notify")
+    def test_success_no_summary_when_empty(self, mock_notify, mock_summary):
+        from app.run import _notify_mission_end
+        _notify_mission_end("/tmp/inst", "proj", 2, 10, 0, "Fix auth")
+        msg = mock_notify.call_args[0][1]
+        assert "✅" in msg
+        # No double newline when summary is empty
+        assert "\n\n" not in msg
+
+    @patch("app.mission_summary.get_mission_summary", side_effect=Exception("broken"))
+    @patch("app.run._notify")
+    def test_success_survives_summary_error(self, mock_notify, mock_summary):
+        from app.run import _notify_mission_end
+        _notify_mission_end("/tmp/inst", "proj", 2, 10, 0, "Fix auth")
+        # Should still send notification even if summary extraction fails
+        mock_notify.assert_called_once()
+        msg = mock_notify.call_args[0][1]
+        assert msg.startswith("✅")
+
+    @patch("app.run._notify")
+    def test_failure_does_not_call_summary(self, mock_notify):
+        from app.run import _notify_mission_end
+        with patch("app.mission_summary.get_mission_summary") as mock_summary:
+            _notify_mission_end("/tmp/inst", "proj", 2, 10, 1, "Fix auth")
+            mock_summary.assert_not_called()
+
+    @patch("app.run._notify")
+    def test_nonzero_exit_codes_are_failure(self, mock_notify):
+        from app.run import _notify_mission_end
+        for code in [1, 2, 127, 255]:
+            mock_notify.reset_mock()
+            _notify_mission_end("/tmp/inst", "proj", 1, 5, code, "task")
+            msg = mock_notify.call_args[0][1]
+            assert msg.startswith("❌"), f"exit code {code} should be failure"
+
+    @patch("app.run._notify")
+    def test_always_calls_notify(self, mock_notify):
+        """Both success and failure must call _notify — no silent completions."""
+        from app.run import _notify_mission_end
+        _notify_mission_end("/tmp/inst", "proj", 1, 5, 0, "task")
+        assert mock_notify.call_count == 1
+        _notify_mission_end("/tmp/inst", "proj", 1, 5, 1, "task")
+        assert mock_notify.call_count == 2
