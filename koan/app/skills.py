@@ -65,6 +65,8 @@ class Skill:
     skill_dir: Optional[Path] = None
     worker: bool = False
     audience: str = DEFAULT_AUDIENCE
+    github_enabled: bool = False
+    github_context_aware: bool = False
 
     @property
     def qualified_name(self) -> str:
@@ -162,6 +164,15 @@ def _parse_inline_list(s: str) -> List[str]:
     return [item.strip().strip("'\"") for item in s.split(",") if item.strip()]
 
 
+def _parse_bool_flag(meta: Dict[str, Any], key: str) -> bool:
+    """Parse a boolean flag from SKILL.md frontmatter metadata.
+    
+    Accepts: "true", "yes", "1" (case-insensitive) as truthy values.
+    Returns False for any other value or if key is missing.
+    """
+    return meta.get(key, "").lower() in ("true", "yes", "1")
+
+
 def parse_skill_md(path: Path) -> Optional[Skill]:
     """Parse a SKILL.md file into a Skill object.
 
@@ -205,8 +216,10 @@ def parse_skill_md(path: Path) -> Optional[Skill]:
 
     skill_dir = path.parent
 
-    # Parse worker flag
-    worker = meta.get("worker", "").lower() in ("true", "yes", "1")
+    # Parse boolean flags
+    worker = _parse_bool_flag(meta, "worker")
+    github_enabled = _parse_bool_flag(meta, "github_enabled")
+    github_context_aware = _parse_bool_flag(meta, "github_context_aware")
 
     # Parse audience (default: "bridge" for backward compatibility)
     audience = meta.get("audience", DEFAULT_AUDIENCE).lower()
@@ -224,6 +237,8 @@ def parse_skill_md(path: Path) -> Optional[Skill]:
         skill_dir=skill_dir,
         worker=worker,
         audience=audience,
+        github_enabled=github_enabled,
+        github_context_aware=github_context_aware,
     )
 
 

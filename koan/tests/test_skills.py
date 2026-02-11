@@ -13,6 +13,7 @@ from app.skills import (
     SkillContext,
     SkillRegistry,
     VALID_AUDIENCES,
+    _parse_bool_flag,
     _parse_inline_list,
     _parse_yaml_lite,
     build_registry,
@@ -93,6 +94,48 @@ class TestParseYamlLite:
     def test_comments_ignored(self):
         result = _parse_yaml_lite("# comment\nname: test")
         assert result["name"] == "test"
+
+
+# ---------------------------------------------------------------------------
+# _parse_bool_flag
+# ---------------------------------------------------------------------------
+
+class TestParseBoolFlag:
+    def test_true_lowercase(self):
+        assert _parse_bool_flag({"flag": "true"}, "flag") is True
+
+    def test_true_uppercase(self):
+        assert _parse_bool_flag({"flag": "True"}, "flag") is True
+
+    def test_true_mixed_case(self):
+        assert _parse_bool_flag({"flag": "TRUE"}, "flag") is True
+
+    def test_yes_lowercase(self):
+        assert _parse_bool_flag({"flag": "yes"}, "flag") is True
+
+    def test_yes_uppercase(self):
+        assert _parse_bool_flag({"flag": "YES"}, "flag") is True
+
+    def test_one_string(self):
+        assert _parse_bool_flag({"flag": "1"}, "flag") is True
+
+    def test_false_string(self):
+        assert _parse_bool_flag({"flag": "false"}, "flag") is False
+
+    def test_no_string(self):
+        assert _parse_bool_flag({"flag": "no"}, "flag") is False
+
+    def test_zero_string(self):
+        assert _parse_bool_flag({"flag": "0"}, "flag") is False
+
+    def test_empty_string(self):
+        assert _parse_bool_flag({"flag": ""}, "flag") is False
+
+    def test_missing_key(self):
+        assert _parse_bool_flag({}, "flag") is False
+
+    def test_arbitrary_string(self):
+        assert _parse_bool_flag({"flag": "maybe"}, "flag") is False
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +660,104 @@ class TestWorkerField:
         skill = registry.get("core", "status")
         assert skill is not None
         assert skill.worker is False
+
+
+# ---------------------------------------------------------------------------
+# GitHub integration fields
+# ---------------------------------------------------------------------------
+
+class TestGitHubFields:
+    """Tests for GitHub integration fields in SKILL.md."""
+
+    def test_github_enabled_true(self, tmp_path):
+        skill_dir = tmp_path / "core" / "rebase"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(textwrap.dedent("""\
+            ---
+            name: rebase
+            scope: core
+            description: Rebase a PR
+            github_enabled: true
+            commands:
+              - name: rebase
+                description: Rebase a PR
+            ---
+        """))
+        skill = parse_skill_md(skill_dir / "SKILL.md")
+        assert skill is not None
+        assert skill.github_enabled is True
+        assert skill.github_context_aware is False
+
+    def test_github_context_aware_true(self, tmp_path):
+        skill_dir = tmp_path / "core" / "review"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(textwrap.dedent("""\
+            ---
+            name: review
+            scope: core
+            description: Review code
+            github_context_aware: true
+            commands:
+              - name: review
+                description: Review code
+            ---
+        """))
+        skill = parse_skill_md(skill_dir / "SKILL.md")
+        assert skill is not None
+        assert skill.github_enabled is False
+        assert skill.github_context_aware is True
+
+    def test_both_github_flags_true(self, tmp_path):
+        skill_dir = tmp_path / "core" / "implement"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(textwrap.dedent("""\
+            ---
+            name: implement
+            scope: core
+            description: Implement a feature
+            github_enabled: true
+            github_context_aware: true
+            commands:
+              - name: implement
+                description: Implement a feature
+            ---
+        """))
+        skill = parse_skill_md(skill_dir / "SKILL.md")
+        assert skill is not None
+        assert skill.github_enabled is True
+        assert skill.github_context_aware is True
+
+    def test_github_flags_absent_default_false(self, tmp_path):
+        skill_dir = tmp_path / "core" / "status"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(textwrap.dedent("""\
+            ---
+            name: status
+            scope: core
+            description: Show status
+            commands:
+              - name: status
+                description: Show status
+            ---
+        """))
+        skill = parse_skill_md(skill_dir / "SKILL.md")
+        assert skill is not None
+        assert skill.github_enabled is False
+        assert skill.github_context_aware is False
+
+    def test_rebase_skill_github_enabled(self):
+        """Rebase core skill should have github_enabled=true."""
+        registry = build_registry()
+        skill = registry.get("core", "rebase")
+        assert skill is not None
+        assert skill.github_enabled is True
+
+    def test_recreate_skill_github_enabled(self):
+        """Recreate core skill should have github_enabled=true."""
+        registry = build_registry()
+        skill = registry.get("core", "recreate")
+        assert skill is not None
+        assert skill.github_enabled is True
 
 
 # ---------------------------------------------------------------------------
