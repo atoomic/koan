@@ -36,10 +36,11 @@ class TestRestartCommandRouting:
         handle_command("/work")
         mock_resume.assert_called_once()
 
-    @patch("app.command_handlers.handle_resume")
-    def test_start_alias_still_resumes(self, mock_resume):
+    @patch("app.command_handlers._handle_start")
+    def test_start_routes_to_handle_start(self, mock_start):
+        """Since session 257, /start has its own handler (not just resume)."""
         handle_command("/start")
-        mock_resume.assert_called_once()
+        mock_start.assert_called_once()
 
 
 class TestUpdateCommandRouting:
