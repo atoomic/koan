@@ -1,0 +1,6 @@
+# Ignore all project directories — users place symlinks or projects here
+*
+
+# Keep this file and the README
+!.gitignore
+!README.md

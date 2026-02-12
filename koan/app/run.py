@@ -389,6 +389,34 @@ def run_startup(koan_root: str, instance: str, projects: list):
         except Exception as e:
             log("error", f"GitHub URL population failed: {e}")
 
+        # Initialize workspace + yaml merged project registry
+        try:
+            from app.projects_merged import (
+                refresh_projects, 
+                get_warnings, 
+                populate_workspace_github_urls,
+                get_yaml_project_names
+            )
+            
+            projects = refresh_projects(koan_root)
+            
+            # Count workspace projects (not in projects.yaml)
+            yaml_project_names = get_yaml_project_names(koan_root)
+            ws_count = sum(1 for name, _ in projects if name not in yaml_project_names)
+            if ws_count:
+                log("init", f"[workspace] Discovered {ws_count} project(s) from workspace/")
+            
+            # Populate github_url cache for workspace projects
+            gh_count = populate_workspace_github_urls(koan_root)
+            if gh_count:
+                log("init", f"[workspace] Cached {gh_count} github_url(s) from git remotes")
+            
+            # Log any warnings from merge
+            for warning in get_warnings():
+                log("warn", f"[workspace] {warning}")
+        except Exception as e:
+            log("error", f"Workspace discovery failed: {e}")
+
         # Sanity checks (all modules in koan/sanity/, alphabetical order)
         log("health", "Running sanity checks...")
         try:

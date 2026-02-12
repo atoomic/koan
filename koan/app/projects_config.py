@@ -69,21 +69,31 @@ def _validate_config(config: dict) -> None:
     if len(projects) > 50:
         raise ValueError(f"Max 50 projects allowed. You have {len(projects)}.")
 
+    # Check for case-insensitive duplicates
+    seen_lower = {}
+    for name in projects.keys():
+        lower = name.lower()
+        if lower in seen_lower:
+            raise ValueError(
+                f"Duplicate project name (case-insensitive): "
+                f"'{seen_lower[lower]}' and '{name}'"
+            )
+        seen_lower[lower] = name
+
     for name, project in projects.items():
         if not isinstance(name, str):
             raise ValueError(f"Project name must be a string, got: {type(name).__name__}")
 
         if project is None:
-            raise ValueError(f"Project '{name}' has no configuration (must have at least 'path')")
+            # Allow empty project entries (workspace override with no settings)
+            continue
 
         if not isinstance(project, dict):
             raise ValueError(f"Project '{name}' must be a mapping, got: {type(project).__name__}")
 
-        if "path" not in project:
-            raise ValueError(f"Project '{name}' is missing required 'path' field")
-
-        path = project["path"]
-        if not isinstance(path, str) or not path.strip():
+        # path is optional — workspace projects don't need it in yaml
+        path = project.get("path")
+        if path is not None and (not isinstance(path, str) or not path.strip()):
             raise ValueError(f"Project '{name}' has invalid path: {path!r}")
 
 
@@ -91,11 +101,16 @@ def validate_project_paths(config: dict) -> Optional[str]:
     """Check that all project paths exist on disk.
 
     Returns an error message if any path is missing, or None if all valid.
+    Projects without a path (workspace-only overrides) are skipped.
     Separated from _validate_config() so tests can skip filesystem checks.
     """
     projects = config.get("projects", {})
     for name, project in projects.items():
+        if project is None:
+            continue
         path = project.get("path", "")
+        if not path:
+            continue  # Workspace project — no path to validate
         if not Path(path).is_dir():
             return f"Project '{name}' path does not exist: {path}"
     return None
@@ -105,12 +120,17 @@ def get_projects_from_config(config: dict) -> List[Tuple[str, str]]:
     """Extract sorted (name, path) tuples from config.
 
     Same format as get_known_projects() returns — enables drop-in replacement.
+    Projects without a path (workspace-only overrides) are skipped.
     """
     projects = config.get("projects", {})
-    return sorted(
-        [(name, proj.get("path", "").strip()) for name, proj in projects.items()],
-        key=lambda x: x[0].lower(),
-    )
+    result = []
+    for name, proj in projects.items():
+        if proj is None:
+            continue
+        path = proj.get("path", "").strip()
+        if path:
+            result.append((name, path))
+    return sorted(result, key=lambda x: x[0].lower())
 
 
 def get_project_config(config: dict, project_name: str) -> dict:
