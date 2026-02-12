@@ -15,7 +15,15 @@ def _shorten_path(path):
 
 def handle(ctx):
     """Handle /projects command."""
-    from app.utils import get_known_projects
+    from app.utils import get_known_projects, KOAN_ROOT
+
+    # Refresh workspace + yaml cache before displaying
+    try:
+        from app.projects_merged import refresh_projects, get_warnings
+        refresh_projects(str(KOAN_ROOT))
+        warnings = get_warnings()
+    except Exception:
+        warnings = []
 
     projects = get_known_projects()
 
@@ -25,4 +33,10 @@ def handle(ctx):
     lines = ["Configured projects:"]
     for name, path in projects:
         lines.append(f"  - {name}: {_shorten_path(path)}")
+
+    if warnings:
+        lines.append("")
+        for w in warnings:
+            lines.append(w)
+
     return "\n".join(lines)

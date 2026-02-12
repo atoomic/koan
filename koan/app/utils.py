@@ -259,22 +259,31 @@ def get_known_projects() -> list:
     """Return sorted list of (name, path) tuples.
 
     Resolution order:
-    1. projects.yaml (if file exists at KOAN_ROOT)
+    1. Merged registry: projects.yaml + workspace/ (if either exists)
     2. KOAN_PROJECTS env var (fallback)
 
     Returns empty list if none is configured.
     """
-    # 1. Try projects.yaml
+    # 1. Try merged registry (projects.yaml + workspace/)
+    try:
+        from app.projects_merged import get_all_projects
+        result = get_all_projects(str(KOAN_ROOT))
+        if result:
+            return result
+    except Exception:
+        # Import error or scan failure — fall through
+        pass
+
+    # 2. Try projects.yaml alone (fallback if merged module fails)
     try:
         from app.projects_config import load_projects_config, get_projects_from_config
         config = load_projects_config(str(KOAN_ROOT))
         if config is not None:
             return get_projects_from_config(config)
     except Exception:
-        # Invalid YAML or import error — fall through to env var
         pass
 
-    # 2. KOAN_PROJECTS env var
+    # 3. KOAN_PROJECTS env var
     projects_str = os.environ.get("KOAN_PROJECTS", "")
     if projects_str:
         result = []

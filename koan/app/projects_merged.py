@@ -19,6 +19,7 @@ _MAX_PROJECTS = 50
 _lock = threading.Lock()
 _cached_projects: Optional[List[Tuple[str, str]]] = None
 _cached_warnings: List[str] = []
+_cached_root: Optional[str] = None
 _github_url_cache: Dict[str, str] = {}
 
 
@@ -33,7 +34,7 @@ def get_all_projects(koan_root: str) -> List[Tuple[str, str]]:
     Limit: 50 projects total across both sources.
     """
     with _lock:
-        if _cached_projects is not None:
+        if _cached_projects is not None and _cached_root == koan_root:
             return list(_cached_projects)
 
     return refresh_projects(koan_root)
@@ -96,9 +97,10 @@ def refresh_projects(koan_root: str) -> List[Tuple[str, str]]:
 
     # Update cache
     with _lock:
-        global _cached_projects, _cached_warnings
+        global _cached_projects, _cached_warnings, _cached_root
         _cached_projects = list(result)
         _cached_warnings = warnings
+        _cached_root = koan_root
 
     return result
 
@@ -112,9 +114,10 @@ def get_warnings() -> List[str]:
 def invalidate_cache() -> None:
     """Clear the project cache. Next get_all_projects() call will re-scan."""
     with _lock:
-        global _cached_projects, _cached_warnings
+        global _cached_projects, _cached_warnings, _cached_root
         _cached_projects = None
         _cached_warnings = []
+        _cached_root = None
 
 
 def get_github_url_cache() -> Dict[str, str]:
