@@ -88,7 +88,7 @@ class TestFormatAndSend:
     @patch("app.notify.send_telegram", return_value=True)
     def test_with_instance_dir(self, mock_send, instance_dir):
         """format_and_send with explicit instance_dir loads soul/prefs and formats."""
-        with patch("app.format_outbox.format_for_telegram", return_value="formatted msg") as mock_fmt, \
+        with patch("app.format_outbox.format_message", return_value="formatted msg") as mock_fmt, \
              patch("app.format_outbox.load_soul", return_value="soul"), \
              patch("app.format_outbox.load_human_prefs", return_value="prefs"), \
              patch("app.format_outbox.load_memory_context", return_value="memory"):
@@ -130,7 +130,7 @@ class TestFormatAndSend:
         with patch("app.format_outbox.load_soul", return_value="s"), \
              patch("app.format_outbox.load_human_prefs", return_value="p"), \
              patch("app.format_outbox.load_memory_context", return_value="m"), \
-             patch("app.format_outbox.format_for_telegram", return_value="fmt"):
+             patch("app.format_outbox.format_message", return_value="fmt"):
             result = format_and_send("raw")
 
         assert result is True
@@ -142,7 +142,7 @@ class TestFormatAndSend:
         with patch("app.format_outbox.load_soul", return_value="s"), \
              patch("app.format_outbox.load_human_prefs", return_value="p"), \
              patch("app.format_outbox.load_memory_context", return_value="m") as mock_mem, \
-             patch("app.format_outbox.format_for_telegram", return_value="fmt"):
+             patch("app.format_outbox.format_message", return_value="fmt"):
             format_and_send("raw", instance_dir=str(instance_dir),
                            project_name="myproject")
 

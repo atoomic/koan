@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Format outbox messages via Claude for Telegram delivery.
+Format outbox messages via Claude for messaging delivery.
 
 ALL outbox messages must be Claude-formatted to ensure they are:
 - Conversational and human (not technical dumps)
-- In French (Alexis's preference)
+- In the human's preferred language
 - Plain text only (NO markdown, NO code blocks)
 - Concise (2-4 sentences unless context requires more)
 - Natural tone matching Kōan's personality from soul.md
@@ -122,9 +122,9 @@ def _get_time_hint() -> str:
         return "It's late night."
 
 
-def format_for_telegram(raw_content: str, soul: str, prefs: str,
-                        memory_context: str = "") -> str:
-    """Format raw content via Claude for Telegram.
+def format_message(raw_content: str, soul: str, prefs: str,
+                   memory_context: str = "") -> str:
+    """Format raw content via Claude for messaging delivery.
 
     Args:
         raw_content: Raw message text (journal dump, retrospective, etc.)
@@ -141,7 +141,7 @@ def format_for_telegram(raw_content: str, soul: str, prefs: str,
     memory_block = f"Recent memory context:\n{memory_context}" if memory_context else ""
     time_hint = _get_time_hint()
     prompt = load_prompt(
-        "format-telegram",
+        "format-message",
         SOUL=soul,
         PREFS=prefs_block,
         MEMORY=memory_block,
@@ -156,10 +156,9 @@ def format_for_telegram(raw_content: str, soul: str, prefs: str,
 
     # Get KOAN_ROOT for proper working directory
     import os
-    koan_root = os.environ.get("KOAN_ROOT", "")
-    if not koan_root:
+    koan_root = os.environ.get("KOAN_ROOT") or None
+    if koan_root is None:
         print("[format_outbox] KOAN_ROOT not set, using current directory", file=sys.stderr)
-        koan_root = None
 
     try:
         # Call CLI to format the message (lightweight model)
@@ -245,7 +244,7 @@ def main():
     memory = load_memory_context(instance_dir, project_name)
 
     # Format via Claude
-    formatted = format_for_telegram(raw_message, soul, prefs, memory)
+    formatted = format_message(raw_message, soul, prefs, memory)
 
     # Output to stdout (will be captured by run.py and appended to outbox)
     print(formatted)

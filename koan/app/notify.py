@@ -122,7 +122,7 @@ def format_and_send(raw_message: str, instance_dir: str = None,
         True if message was sent successfully
     """
     from app.format_outbox import (
-        format_for_telegram, load_soul, load_human_prefs,
+        format_message, load_soul, load_human_prefs,
         load_memory_context, fallback_format
     )
 
@@ -140,7 +140,7 @@ def format_and_send(raw_message: str, instance_dir: str = None,
         soul = load_soul(instance_path)
         prefs = load_human_prefs(instance_path)
         memory = load_memory_context(instance_path, project_name)
-        formatted = format_for_telegram(raw_message, soul, prefs, memory)
+        formatted = format_message(raw_message, soul, prefs, memory)
         return send_telegram(formatted)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         print(f"[notify] Format error, sending fallback: {e}", file=sys.stderr)

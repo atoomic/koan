@@ -787,7 +787,7 @@ class TestFlushOutbox:
 # ---------------------------------------------------------------------------
 
 class TestFormatOutboxMessage:
-    @patch("app.awake.format_for_telegram", return_value="Formatted")
+    @patch("app.awake.format_message", return_value="Formatted")
     @patch("app.awake.load_memory_context", return_value="mem")
     @patch("app.awake.load_human_prefs", return_value="prefs")
     @patch("app.awake.load_soul", return_value="soul")
@@ -801,6 +801,7 @@ class TestFormatOutboxMessage:
     def test_fallback_on_error(self, mock_soul, tmp_path):
         with patch("app.awake.INSTANCE_DIR", tmp_path):
             result = _format_outbox_message("raw content")
+        # fallback_format() strips and cleans the raw content
         assert result == "raw content"
 
 

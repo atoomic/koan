@@ -79,7 +79,7 @@ koan/
       chat.md                   #     Telegram chat prompt
       contemplative.md          #     Pause mode prompt
       dashboard-chat.md         #     Dashboard chat prompt
-      format-telegram.md        #     Outbox formatting prompt
+      format-message.md         #     Outbox formatting prompt
       pick-mission.md           #     Mission selection prompt
     app/                        #   Python modules
       awake.py                  #     Telegram bridge (poll, classify, route)

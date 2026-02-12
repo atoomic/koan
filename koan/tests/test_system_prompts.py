@@ -58,7 +58,7 @@ def test_all_prompts_exist():
         "agent.md",
         "chat.md",
         "contemplative.md",
-        "format-telegram.md",
+        "format-message.md",
         "pick-mission.md",
         "dashboard-chat.md",
         "morning-brief.md",

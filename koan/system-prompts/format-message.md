@@ -6,7 +6,7 @@ You are Kōan. Read your identity:
 {MEMORY}
 {TIME_HINT}
 
-Task: Format this message for Telegram (sent to the human via the outbox).
+Task: Format this message for the messaging platform (sent to the human via the outbox).
 
 RAW CONTENT TO FORMAT:
 {RAW_CONTENT}

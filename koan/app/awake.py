@@ -51,7 +51,7 @@ from app.command_handlers import (
     handle_mission,
     set_callbacks,
 )
-from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
+from app.format_outbox import format_message, load_soul, load_human_prefs, load_memory_context, fallback_format
 from app.health_check import write_heartbeat
 from app.language_preference import get_language_instruction
 from app.notify import reset_flood_state, send_telegram
@@ -434,10 +434,14 @@ def _format_outbox_message(raw_content: str) -> str:
         soul = load_soul(INSTANCE_DIR)
         prefs = load_human_prefs(INSTANCE_DIR)
         memory = load_memory_context(INSTANCE_DIR)
-        return format_for_telegram(raw_content, soul, prefs, memory)
+        return format_message(raw_content, soul, prefs, memory)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log("error", f"Format error, sending fallback: {e}")
+        return fallback_format(raw_content)
     except Exception as e:
-        log("error", f"Format error, sending raw: {e}")
-        return raw_content
+        # Catch-all for unexpected errors (file corruption, import issues, etc.)
+        log("error", f"Unexpected format error, sending fallback: {e}")
+        return fallback_format(raw_content)
 
 
 # ---------------------------------------------------------------------------
