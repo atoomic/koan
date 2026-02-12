@@ -51,64 +51,92 @@ def refresh_projects(koan_root: str) -> List[Tuple[str, str]]:
 
     warnings = []
 
-    # 1. Load yaml projects (with paths only)
-    yaml_projects = []
-    yaml_all_names = set()  # Includes pathless override entries
-    try:
-        config = load_projects_config(koan_root)
-        if config is not None:
-            yaml_projects = get_projects_from_config(config)
-            # Track all yaml project names, including those without paths
-            yaml_all_names = {
-                name.lower()
-                for name in (config.get("projects") or {}).keys()
-            }
-    except Exception as e:
-        warnings.append(f"⚠️ Cannot load projects.yaml: {e}")
-
+    # 1. Load yaml projects
+    yaml_projects = _load_yaml_projects(koan_root, warnings)
+    
     # 2. Discover workspace projects
     workspace_projects = discover_workspace_projects(koan_root)
 
-    # 3. Merge with deduplication
-    yaml_names_with_path = {name.lower() for name, _ in yaml_projects}
-    merged = dict(yaml_projects)  # name -> path (yaml projects with paths)
+    # 3. Merge and deduplicate
+    merged_projects = _merge_projects(yaml_projects, workspace_projects, warnings)
+    
+    # 4. Sort and enforce limit
+    result = _apply_project_limit(merged_projects, warnings)
 
-    for name, path in workspace_projects:
-        if name.lower() in yaml_names_with_path:
-            # yaml has path for this project — yaml wins, warn about duplicate
-            yaml_path = merged.get(name, "")
-            if not yaml_path:
-                for yn, yp in yaml_projects:
-                    if yn.lower() == name.lower():
-                        yaml_path = yp
-                        break
+    # 5. Update cache
+    _update_cache(koan_root, result, warnings)
+
+    return result
+
+
+def _load_yaml_projects(koan_root: str, warnings: List[str]) -> List[Tuple[str, str]]:
+    """Load projects from projects.yaml. Returns list of (name, path) tuples."""
+    try:
+        from app.projects_config import load_projects_config, get_projects_from_config
+        config = load_projects_config(koan_root)
+        if config is not None:
+            return get_projects_from_config(config)
+    except Exception as e:
+        warnings.append(f"⚠️ Cannot load projects.yaml: {e}")
+    return []
+
+
+def _merge_projects(
+    yaml_projects: List[Tuple[str, str]],
+    workspace_projects: List[Tuple[str, str]],
+    warnings: List[str]
+) -> Dict[str, str]:
+    """Merge yaml and workspace projects, with yaml taking precedence.
+    
+    Returns a dict mapping project name to path.
+    """
+    # Build lookup for yaml projects (case-insensitive)
+    yaml_by_name = {name.lower(): (name, path) for name, path in yaml_projects}
+    
+    # Start with yaml projects
+    merged = {name: path for name, path in yaml_projects}
+    
+    # Add workspace projects if not already in yaml
+    for ws_name, ws_path in workspace_projects:
+        yaml_entry = yaml_by_name.get(ws_name.lower())
+        if yaml_entry:
+            # Duplicate: yaml wins, emit warning
+            yaml_name, yaml_path = yaml_entry
             warnings.append(
-                f"⚠️ Duplicate project '{name}': "
-                f"using {yaml_path} (yaml) instead of {path} (workspace)"
+                f"⚠️ Duplicate project '{ws_name}': "
+                f"using {yaml_path} (yaml) instead of {ws_path} (workspace)"
             )
-            continue
-        # Workspace provides the path (yaml may have overrides without path)
-        merged[name] = path
+        else:
+            # New workspace project
+            merged[ws_name] = ws_path
+    
+    return merged
 
-    # 4. Enforce limit
-    sorted_projects = sorted(merged.items(), key=lambda x: x[0].lower())
+
+def _apply_project_limit(
+    projects: Dict[str, str],
+    warnings: List[str]
+) -> List[Tuple[str, str]]:
+    """Sort projects and enforce the limit. Returns list of (name, path) tuples."""
+    sorted_projects = sorted(projects.items(), key=lambda x: x[0].lower())
+    
     if len(sorted_projects) > _MAX_PROJECTS:
         warnings.append(
             f"⚠️ {len(sorted_projects)} projects found, "
             f"limit is {_MAX_PROJECTS}. Keeping first {_MAX_PROJECTS} alphabetically."
         )
         sorted_projects = sorted_projects[:_MAX_PROJECTS]
+    
+    return sorted_projects
 
-    result = [(name, path) for name, path in sorted_projects]
 
-    # Update cache
+def _update_cache(koan_root: str, projects: List[Tuple[str, str]], warnings: List[str]) -> None:
+    """Update the thread-safe cache with new project list and warnings."""
     with _lock:
         global _cached_projects, _cached_warnings, _cached_root
-        _cached_projects = list(result)
-        _cached_warnings = warnings
+        _cached_projects = list(projects)
+        _cached_warnings = list(warnings)
         _cached_root = koan_root
-
-    return result
 
 
 def get_warnings() -> List[str]:
@@ -148,3 +176,57 @@ def clear_github_url_cache() -> None:
     """Clear the github_url memory cache."""
     with _lock:
         _github_url_cache.clear()
+
+
+def get_yaml_project_names(koan_root: str) -> set:
+    """Get set of project names that have paths in projects.yaml.
+    
+    Used to distinguish yaml projects from workspace-only projects.
+    Returns empty set if projects.yaml doesn't exist or fails to load.
+    """
+    from app.projects_config import load_projects_config
+    
+    try:
+        config = load_projects_config(koan_root)
+        if not config:
+            return set()
+        
+        return {
+            name for name, proj in config.get("projects", {}).items()
+            if isinstance(proj, dict) and proj.get("path")
+        }
+    except Exception:
+        return set()
+
+
+def populate_workspace_github_urls(koan_root: str) -> int:
+    """Populate github_url cache for workspace projects by scanning git remotes.
+    
+    Only processes projects that are not in projects.yaml (workspace-only projects).
+    Returns the number of URLs discovered.
+    """
+    from app.utils import get_github_remote
+    
+    # Get yaml project names
+    yaml_project_names = get_yaml_project_names(koan_root)
+    
+    # Scan workspace projects for github URLs
+    projects = get_all_projects(koan_root)
+    discovered = 0
+    
+    for name, path in projects:
+        # Only process workspace projects (not in yaml)
+        if name in yaml_project_names:
+            continue
+            
+        # Skip if already cached
+        if get_github_url(name):
+            continue
+            
+        # Discover and cache
+        gh_url = get_github_remote(path)
+        if gh_url:
+            set_github_url(name, gh_url)
+            discovered += 1
+    
+    return discovered

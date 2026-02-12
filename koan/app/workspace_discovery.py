@@ -8,7 +8,7 @@ Projects are discovered by their directory name — no configuration needed.
 
 import logging
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -24,36 +24,47 @@ def discover_workspace_projects(koan_root: str) -> List[Tuple[str, str]]:
     if not workspace_dir.is_dir():
         return []
 
-    projects = []
     try:
         entries = sorted(workspace_dir.iterdir(), key=lambda p: p.name.lower())
     except OSError as e:
         logger.warning("Cannot read workspace directory: %s", e)
         return []
 
+    projects = []
     for entry in entries:
-        name = entry.name
-
-        # Skip hidden directories and special files
-        if name.startswith("."):
-            continue
-
-        # Skip non-directory files (README.md, etc.)
-        if entry.is_file():
-            continue
-
-        # Resolve symlinks
-        try:
-            resolved = entry.resolve()
-        except OSError as e:
-            logger.warning("Workspace: cannot resolve '%s': %s", name, e)
-            continue
-
-        # Validate target is a directory
-        if not resolved.is_dir():
-            logger.warning("Workspace: '%s' points to non-directory: %s", name, resolved)
-            continue
-
-        projects.append((name, str(resolved)))
+        resolved_path = _validate_entry(entry)
+        if resolved_path:
+            projects.append((entry.name, resolved_path))
 
     return projects
+
+
+def _validate_entry(entry: Path) -> Optional[str]:
+    """Validate a workspace entry and return its resolved path.
+    
+    Returns None if the entry should be skipped (hidden, file, broken symlink).
+    Returns the resolved absolute path string if valid.
+    """
+    name = entry.name
+    
+    # Skip hidden directories and special files
+    if name.startswith("."):
+        return None
+    
+    # Skip non-directory files (README.md, etc.)
+    if entry.is_file():
+        return None
+    
+    # Resolve symlinks
+    try:
+        resolved = entry.resolve()
+    except OSError as e:
+        logger.warning("Workspace: cannot resolve '%s': %s", name, e)
+        return None
+    
+    # Validate target is a directory
+    if not resolved.is_dir():
+        logger.warning("Workspace: '%s' points to non-directory: %s", name, resolved)
+        return None
+    
+    return str(resolved)
