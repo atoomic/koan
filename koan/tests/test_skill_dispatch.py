@@ -241,7 +241,7 @@ class TestBuildSkillCommand:
         url = "https://github.com/sukria/koan/issues/42"
         cmd = self._build("implement", url)
         assert cmd is not None
-        assert "app.implement_runner" in cmd
+        assert "skills.core.implement.implement_runner" in cmd
         assert "--issue-url" in cmd
         assert url in cmd
         assert "--project-path" in cmd
@@ -321,13 +321,13 @@ class TestDispatchSkillMission:
     def test_implement_dispatch(self):
         cmd = self._dispatch("/implement https://github.com/sukria/koan/issues/42")
         assert cmd is not None
-        assert "app.implement_runner" in cmd
+        assert "skills.core.implement.implement_runner" in cmd
         assert "--issue-url" in cmd
 
     def test_implement_dispatch_with_context(self):
         cmd = self._dispatch("/implement https://github.com/sukria/koan/issues/42 Phase 1 to 3")
         assert cmd is not None
-        assert "app.implement_runner" in cmd
+        assert "skills.core.implement.implement_runner" in cmd
         assert "--context" in cmd
         assert "Phase 1 to 3" in cmd
 
