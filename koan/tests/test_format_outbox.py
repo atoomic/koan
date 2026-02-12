@@ -10,7 +10,7 @@ from app.format_outbox import (
     load_soul,
     load_human_prefs,
     load_memory_context,
-    format_for_telegram,
+    format_message,
     fallback_format,
 )
 
@@ -76,7 +76,7 @@ class TestFormatForTelegram:
         mock_run.return_value = MagicMock(
             returncode=0, stdout="Voici le résumé formaté.\n", stderr=""
         )
-        result = format_for_telegram("raw content", "soul", "prefs")
+        result = format_message("raw content", "soul", "prefs")
         assert result == "Voici le résumé formaté."
         mock_run.assert_called_once()
 
@@ -85,7 +85,7 @@ class TestFormatForTelegram:
         mock_run.return_value = MagicMock(
             returncode=0, stdout="**bold** and ```code``` and __under__ and ~~strike~~", stderr=""
         )
-        result = format_for_telegram("raw", "soul", "")
+        result = format_message("raw", "soul", "")
         assert "**" not in result
         assert "```" not in result
         assert "__" not in result
@@ -96,7 +96,7 @@ class TestFormatForTelegram:
         mock_run.return_value = MagicMock(
             returncode=1, stdout="", stderr="error"
         )
-        result = format_for_telegram("## Raw content", "soul", "")
+        result = format_message("## Raw content", "soul", "")
         # Should use fallback (removes #)
         assert "#" not in result
         assert "Raw content" in result
@@ -106,25 +106,25 @@ class TestFormatForTelegram:
         mock_run.return_value = MagicMock(
             returncode=0, stdout="  \n  ", stderr=""
         )
-        result = format_for_telegram("Some raw content", "soul", "")
+        result = format_message("Some raw content", "soul", "")
         assert "Some raw content" in result
 
     @patch("app.format_outbox.subprocess.run")
     def test_fallback_on_timeout(self, mock_run):
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=30)
-        result = format_for_telegram("Raw", "soul", "")
+        result = format_message("Raw", "soul", "")
         assert result == "Raw"
 
     @patch("app.format_outbox.subprocess.run")
     def test_fallback_on_exception(self, mock_run):
         mock_run.side_effect = FileNotFoundError("claude not found")
-        result = format_for_telegram("Raw", "soul", "")
+        result = format_message("Raw", "soul", "")
         assert result == "Raw"
 
     @patch("app.format_outbox.subprocess.run")
     def test_prompt_includes_soul_and_prefs(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        format_for_telegram("content", "my-soul", "my-prefs")
+        format_message("content", "my-soul", "my-prefs")
         call_args = mock_run.call_args[0][0]
         prompt = call_args[2]  # ["claude", "-p", prompt]
         assert "my-soul" in prompt
@@ -133,7 +133,7 @@ class TestFormatForTelegram:
     @patch("app.format_outbox.subprocess.run")
     def test_prompt_omits_prefs_when_empty(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        format_for_telegram("content", "soul", "")
+        format_message("content", "soul", "")
         call_args = mock_run.call_args[0][0]
         prompt = call_args[2]
         assert "Human preferences:" not in prompt
@@ -141,7 +141,7 @@ class TestFormatForTelegram:
     @patch("app.format_outbox.subprocess.run")
     def test_prompt_includes_memory_context(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        format_for_telegram("content", "soul", "prefs", memory_context="Session 61: tests")
+        format_message("content", "soul", "prefs", memory_context="Session 61: tests")
         call_args = mock_run.call_args[0][0]
         prompt = call_args[2]
         assert "Session 61: tests" in prompt
@@ -150,7 +150,7 @@ class TestFormatForTelegram:
     @patch("app.format_outbox.subprocess.run")
     def test_prompt_omits_memory_when_empty(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        format_for_telegram("content", "soul", "prefs", memory_context="")
+        format_message("content", "soul", "prefs", memory_context="")
         call_args = mock_run.call_args[0][0]
         prompt = call_args[2]
         assert "Recent memory context" not in prompt

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Kōan Telegram Bridge — v2
+Kōan Messaging Bridge — v2
 
 Fast-response architecture:
-- Polls Telegram every 3s (configurable)
+- Polls messaging provider every 3s (configurable)
 - Chat messages → lightweight Claude call → instant reply
 - Mission-like messages → written to missions.md → ack sent immediately
 - Outbox flushed every cycle (no more waiting for next poll)
@@ -25,8 +25,6 @@ import time
 from datetime import date, datetime
 from typing import Optional, Tuple
 
-import requests
-
 from app.bridge_log import log
 from app.bridge_state import (
     BOT_TOKEN,
@@ -40,8 +38,7 @@ from app.bridge_state import (
     PROJECT_PATH,
     SOUL,
     SUMMARY,
-    TELEGRAM_API,
-    TELEGRAM_HISTORY_FILE,
+    CONVERSATION_HISTORY_FILE,
     TOPICS_FILE,
     _get_registry,
 )
@@ -51,7 +48,7 @@ from app.command_handlers import (
     handle_mission,
     set_callbacks,
 )
-from app.format_outbox import format_for_telegram, load_soul, load_human_prefs, load_memory_context
+from app.format_outbox import format_message, load_soul, load_human_prefs, load_memory_context, fallback_format
 from app.health_check import write_heartbeat
 from app.language_preference import get_language_instruction
 from app.notify import reset_flood_state, send_telegram
@@ -60,11 +57,11 @@ from app.config import (
     get_tools_description,
     get_model_config,
 )
-from app.telegram_history import (
-    save_telegram_message,
-    load_recent_telegram_history,
+from app.conversation_history import (
+    save_conversation_message,
+    load_recent_history,
     format_conversation_history,
-    compact_telegram_history,
+    compact_history,
 )
 from app.utils import (
     parse_project as _parse_project,
@@ -81,16 +78,16 @@ def check_config():
 
 
 def get_updates(offset=None):
-    params = {"timeout": 30}
-    if offset:
-        params["offset"] = offset
-    try:
-        resp = requests.get(f"{TELEGRAM_API}/getUpdates", params=params, timeout=35)
-        data = resp.json()
-        return data.get("result", [])
-    except (requests.RequestException, ValueError) as e:
-        log("error", f"Telegram error: {e}")
-        return []
+    """Fetch new updates from the messaging provider.
+
+    Returns a list of raw-dict-compatible updates for backward compatibility
+    with the existing message processing pipeline.
+    """
+    from app.messaging import get_messaging_provider
+    provider = get_messaging_provider()
+    updates = provider.poll_updates(offset)
+    # Convert Update objects to raw dicts for backward compat with main loop
+    return [u.raw_data for u in updates]
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +137,7 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
         lite: If True, strip heavy context (journal, summary) to stay under budget.
     """
     # Load recent conversation history
-    history = load_recent_telegram_history(TELEGRAM_HISTORY_FILE, max_messages=10)
+    history = load_recent_history(CONVERSATION_HISTORY_FILE, max_messages=10)
     history_context = format_conversation_history(history)
 
     journal_context = ""
@@ -309,7 +306,7 @@ def handle_chat(text: str):
     injection attacks via Telegram messages. No Bash, Edit, or Write access.
     """
     # Save user message to history
-    save_telegram_message(TELEGRAM_HISTORY_FILE, "user", text)
+    save_conversation_message(CONVERSATION_HISTORY_FILE, "user", text)
 
     prompt = _build_chat_prompt(text)
     chat_tools_list = get_chat_tools().split(",")
@@ -333,13 +330,13 @@ def handle_chat(text: str):
         if response:
             send_telegram(response)
             # Save assistant response to history
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", response)
             log("chat", f"Chat reply: {response[:80]}...")
         elif result.returncode != 0:
             log("error", f"Claude error: {result.stderr[:200]}")
             error_msg = "⚠️ Hmm, I couldn't formulate a response. Try again?"
             send_telegram(error_msg)
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", error_msg)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", error_msg)
         else:
             log("chat", "Empty response from Claude.")
     except subprocess.TimeoutExpired:
@@ -362,23 +359,23 @@ def handle_chat(text: str):
             response = _clean_chat_response(result.stdout.strip())
             if response:
                 send_telegram(response)
-                save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
+                save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", response)
                 log("chat", f"Chat reply (lite retry): {response[:80]}...")
             else:
                 if result.stderr:
                     log("error", f"Lite retry stderr: {result.stderr[:500]}")
                 timeout_msg = f"⏱ Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
                 send_telegram(timeout_msg)
-                save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
+                save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", timeout_msg)
         except subprocess.TimeoutExpired:
             timeout_msg = f"Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
             send_telegram(timeout_msg)
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", timeout_msg)
         except Exception as e:
             log("error", f"Lite retry error: {e}")
             error_msg = "⚠️ Something went wrong — try again?"
             send_telegram(error_msg)
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", error_msg)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", error_msg)
     except Exception as e:
         log("error", f"Claude error: {e}")
 
@@ -434,10 +431,14 @@ def _format_outbox_message(raw_content: str) -> str:
         soul = load_soul(INSTANCE_DIR)
         prefs = load_human_prefs(INSTANCE_DIR)
         memory = load_memory_context(INSTANCE_DIR)
-        return format_for_telegram(raw_content, soul, prefs, memory)
+        return format_message(raw_content, soul, prefs, memory)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log("error", f"Format error, sending fallback: {e}")
+        return fallback_format(raw_content)
     except Exception as e:
-        log("error", f"Format error, sending raw: {e}")
-        return raw_content
+        # Catch-all for unexpected errors (file corruption, import issues, etc.)
+        log("error", f"Unexpected format error, sending fallback: {e}")
+        return fallback_format(raw_content)
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +522,7 @@ def main():
     startup_time = time.time()
 
     # Compact old conversation history to avoid context bleed across sessions
-    compacted = compact_telegram_history(TELEGRAM_HISTORY_FILE, TOPICS_FILE)
+    compacted = compact_history(CONVERSATION_HISTORY_FILE, TOPICS_FILE)
     if compacted:
         log("health", f"Compacted {compacted} old messages at startup")
 
@@ -540,6 +541,18 @@ def main():
     if extra_count:
         skills_info += f" + {extra_count} extra"
     log("init", f"Skills: {skills_info}")
+
+    # Initialize messaging provider and log startup banner
+    from app.messaging import get_messaging_provider
+    try:
+        provider = get_messaging_provider()
+        provider_name = provider.get_provider_name().upper()
+        channel_id = provider.get_channel_id()
+        log("init", f"Messaging provider: {provider_name}, Channel: {channel_id}")
+    except SystemExit:
+        log("error", "Failed to initialize messaging provider")
+        sys.exit(1)
+
     log("init", f"Polling every {POLL_INTERVAL}s (chat mode: fast reply)")
     offset = None
     first_poll = True

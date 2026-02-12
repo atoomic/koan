@@ -644,8 +644,8 @@ class TestHandleStart:
 # ---------------------------------------------------------------------------
 
 class TestHandleChat:
-    @patch("app.awake.save_telegram_message")
-    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="")
@@ -659,7 +659,7 @@ class TestHandleChat:
         with patch("app.awake.INSTANCE_DIR", tmp_path), \
              patch("app.awake.KOAN_ROOT", tmp_path), \
              patch("app.awake.PROJECT_PATH", ""), \
-             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.CONVERSATION_HISTORY_FILE", tmp_path / "history.jsonl"), \
              patch("app.awake.SOUL", "test soul"), \
              patch("app.awake.SUMMARY", "test summary"):
             handle_chat("hello")
@@ -667,8 +667,8 @@ class TestHandleChat:
         # Saved both user and assistant messages
         assert mock_save.call_count == 2
 
-    @patch("app.awake.save_telegram_message")
-    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="")
@@ -680,7 +680,7 @@ class TestHandleChat:
         with patch("app.awake.INSTANCE_DIR", tmp_path), \
              patch("app.awake.KOAN_ROOT", tmp_path), \
              patch("app.awake.PROJECT_PATH", ""), \
-             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.CONVERSATION_HISTORY_FILE", tmp_path / "history.jsonl"), \
              patch("app.awake.SOUL", ""), \
              patch("app.awake.SUMMARY", ""), \
              patch("app.awake.CHAT_TIMEOUT", 180):
@@ -688,8 +688,8 @@ class TestHandleChat:
         mock_send.assert_called_once()
         assert "Timeout" in mock_send.call_args[0][0]
 
-    @patch("app.awake.save_telegram_message")
-    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="")
@@ -701,15 +701,15 @@ class TestHandleChat:
         with patch("app.awake.INSTANCE_DIR", tmp_path), \
              patch("app.awake.KOAN_ROOT", tmp_path), \
              patch("app.awake.PROJECT_PATH", ""), \
-             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.CONVERSATION_HISTORY_FILE", tmp_path / "history.jsonl"), \
              patch("app.awake.SOUL", ""), \
              patch("app.awake.SUMMARY", ""):
             handle_chat("hello")
         mock_send.assert_called_once()
         assert "couldn't formulate" in mock_send.call_args[0][0]
 
-    @patch("app.awake.save_telegram_message")
-    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="")
@@ -725,7 +725,7 @@ class TestHandleChat:
         with patch("app.awake.INSTANCE_DIR", tmp_path), \
              patch("app.awake.KOAN_ROOT", tmp_path), \
              patch("app.awake.PROJECT_PATH", ""), \
-             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.CONVERSATION_HISTORY_FILE", tmp_path / "history.jsonl"), \
              patch("app.awake.SOUL", ""), \
              patch("app.awake.SUMMARY", ""):
             handle_chat("hi")
@@ -787,7 +787,7 @@ class TestFlushOutbox:
 # ---------------------------------------------------------------------------
 
 class TestFormatOutboxMessage:
-    @patch("app.awake.format_for_telegram", return_value="Formatted")
+    @patch("app.awake.format_message", return_value="Formatted")
     @patch("app.awake.load_memory_context", return_value="mem")
     @patch("app.awake.load_human_prefs", return_value="prefs")
     @patch("app.awake.load_soul", return_value="soul")
@@ -801,6 +801,7 @@ class TestFormatOutboxMessage:
     def test_fallback_on_error(self, mock_soul, tmp_path):
         with patch("app.awake.INSTANCE_DIR", tmp_path):
             result = _format_outbox_message("raw content")
+        # fallback_format() strips and cleans the raw content
         assert result == "raw content"
 
 
@@ -870,33 +871,39 @@ class TestHandleMessage:
 # ---------------------------------------------------------------------------
 
 class TestGetUpdates:
-    @patch("app.awake.requests.get")
-    def test_returns_results(self, mock_get):
-        mock_get.return_value = MagicMock()
-        mock_get.return_value.json.return_value = {"ok": True, "result": [{"update_id": 1}]}
+    @patch("app.messaging.get_messaging_provider")
+    def test_returns_results(self, mock_get_provider):
+        from app.messaging.base import Update
+        mock_provider = MagicMock()
+        mock_provider.poll_updates.return_value = [
+            Update(update_id=1, raw_data={"update_id": 1})
+        ]
+        mock_get_provider.return_value = mock_provider
         result = get_updates()
         assert len(result) == 1
         assert result[0]["update_id"] == 1
 
-    @patch("app.awake.requests.get")
-    def test_passes_offset(self, mock_get):
-        mock_get.return_value = MagicMock()
-        mock_get.return_value.json.return_value = {"ok": True, "result": []}
+    @patch("app.messaging.get_messaging_provider")
+    def test_passes_offset(self, mock_get_provider):
+        mock_provider = MagicMock()
+        mock_provider.poll_updates.return_value = []
+        mock_get_provider.return_value = mock_provider
         get_updates(offset=42)
-        _, kwargs = mock_get.call_args
-        assert kwargs["params"]["offset"] == 42
+        mock_provider.poll_updates.assert_called_once_with(42)
 
-    @patch("app.awake.requests.get")
-    def test_handles_network_error(self, mock_get):
-        import requests as req
-        mock_get.side_effect = req.RequestException("timeout")
+    @patch("app.messaging.get_messaging_provider")
+    def test_handles_provider_error(self, mock_get_provider):
+        mock_provider = MagicMock()
+        mock_provider.poll_updates.return_value = []
+        mock_get_provider.return_value = mock_provider
         result = get_updates()
         assert result == []
 
-    @patch("app.awake.requests.get")
-    def test_handles_json_error(self, mock_get):
-        mock_get.return_value = MagicMock()
-        mock_get.return_value.json.side_effect = ValueError("bad json")
+    @patch("app.messaging.get_messaging_provider")
+    def test_handles_empty_results(self, mock_get_provider):
+        mock_provider = MagicMock()
+        mock_provider.poll_updates.return_value = []
+        mock_get_provider.return_value = mock_provider
         result = get_updates()
         assert result == []
 
@@ -1351,8 +1358,8 @@ class TestPauseCommand:
 # ---------------------------------------------------------------------------
 
 class TestChatLiteRetryErrors:
-    @patch("app.awake.save_telegram_message")
-    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="")
@@ -1368,15 +1375,15 @@ class TestChatLiteRetryErrors:
         with patch("app.awake.INSTANCE_DIR", tmp_path), \
              patch("app.awake.KOAN_ROOT", tmp_path), \
              patch("app.awake.PROJECT_PATH", ""), \
-             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.CONVERSATION_HISTORY_FILE", tmp_path / "history.jsonl"), \
              patch("app.awake.SOUL", ""), \
              patch("app.awake.SUMMARY", ""), \
              patch("app.awake.CHAT_TIMEOUT", 180):
             handle_chat("complex question")
         assert "went wrong" in mock_send.call_args[0][0].lower()
 
-    @patch("app.awake.save_telegram_message")
-    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="")
@@ -1392,7 +1399,7 @@ class TestChatLiteRetryErrors:
         with patch("app.awake.INSTANCE_DIR", tmp_path), \
              patch("app.awake.KOAN_ROOT", tmp_path), \
              patch("app.awake.PROJECT_PATH", ""), \
-             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.CONVERSATION_HISTORY_FILE", tmp_path / "history.jsonl"), \
              patch("app.awake.SOUL", ""), \
              patch("app.awake.SUMMARY", ""), \
              patch("app.awake.CHAT_TIMEOUT", 180):
@@ -1520,8 +1527,8 @@ class TestPauseAwareness:
         status = _call_status_handler(tmp_path)
         assert "Working" in status
 
-    @patch("app.awake.save_telegram_message")
-    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="")
@@ -1548,8 +1555,8 @@ class TestPauseAwareness:
         # Prompt should mention pause status
         assert "PAUSED" in prompt or "⏸️" in prompt
 
-    @patch("app.awake.save_telegram_message")
-    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="")
@@ -1596,8 +1603,8 @@ class TestChatToolsSecurity:
             tools = get_mission_tools()
         assert "Bash" in tools
 
-    @patch("app.awake.save_telegram_message")
-    @patch("app.awake.load_recent_telegram_history", return_value=[])
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
     @patch("app.awake.format_conversation_history", return_value="")
     @patch("app.awake.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="Read,Glob,Grep")  # Restricted!
@@ -1613,7 +1620,7 @@ class TestChatToolsSecurity:
         with patch("app.awake.INSTANCE_DIR", tmp_path), \
              patch("app.awake.KOAN_ROOT", tmp_path), \
              patch("app.awake.PROJECT_PATH", ""), \
-             patch("app.awake.TELEGRAM_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.CONVERSATION_HISTORY_FILE", tmp_path / "history.jsonl"), \
              patch("app.awake.SOUL", ""), \
              patch("app.awake.SUMMARY", ""):
             handle_chat("test message")

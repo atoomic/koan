@@ -58,7 +58,7 @@ class TestLoadPrompt:
         assert isinstance(result, str)
 
     def test_load_format_telegram(self):
-        result = load_prompt("format-telegram")
+        result = load_prompt("format-message")
         assert len(result) > 0
 
     def test_load_agent(self):
@@ -106,8 +106,8 @@ class TestGetPromptPath:
         assert isinstance(result, Path)
 
     def test_path_includes_md_extension(self):
-        result = get_prompt_path("format-telegram")
-        assert result.name == "format-telegram.md"
+        result = get_prompt_path("format-message")
+        assert result.name == "format-message.md"
 
     def test_path_is_in_prompt_dir(self):
         result = get_prompt_path("agent")

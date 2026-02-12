@@ -389,7 +389,7 @@ class TestAwakeIntegration:
     """Test that awake.py's main() acquires the PID lock."""
 
     @patch("app.awake.check_config")
-    @patch("app.awake.compact_telegram_history", return_value=0)
+    @patch("app.awake.compact_history", return_value=0)
     @patch("app.awake.write_heartbeat")
     @patch("app.awake._get_registry")
     @patch("app.awake.get_updates", side_effect=KeyboardInterrupt)

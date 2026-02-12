@@ -12,7 +12,7 @@
 
 An autonomous background agent that uses idle Claude Max quota to work on your projects.
 
-Kōan runs as a continuous loop on your local machine: it pulls missions from a shared file, executes them via Claude Code CLI, writes reports, and communicates with you via Telegram.
+Kōan runs as a continuous loop on your local machine: it pulls missions from a shared file, executes them via Claude Code CLI, writes reports, and communicates with you via Telegram or Slack.
 
 **The agent proposes. The human decides.** No unsupervised code modifications.
 
@@ -20,8 +20,8 @@ Kōan runs as a continuous loop on your local machine: it pulls missions from a 
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌──────────────────┐
-│  Telegram    │◄───►│  awake.py    │◄───►│ instance/        │
-│  (Human)     │     │  (bridge)    │     │   missions.md    │
+│  Telegram/   │◄───►│  awake.py    │◄───►│ instance/        │
+│  Slack       │     │  (bridge)    │     │   missions.md    │
 └─────────────┘     └──────────────┘     │   outbox.md      │
                                          │   config.yaml    │
                                          └────────┬─────────┘
@@ -39,7 +39,7 @@ Kōan runs as a continuous loop on your local machine: it pulls missions from a 
 ```
 
 Two parallel processes:
-- **`make awake`** — Telegram bridge. Polls every 3s, classifies messages (chat → instant Claude reply, mission → queued to `missions.md`), formats all outbox messages through Claude with personality context, flushes to Telegram.
+- **`make awake`** — Messaging bridge. Polls for messages, classifies them (chat → instant Claude reply, mission → queued to `missions.md`), formats all outbox messages through Claude with personality context, sends to your messaging platform.
 - **`make run`** — Agent loop. Picks missions (smart picker with rotation awareness), executes via Claude Code CLI, writes journal & reports. Supports multi-project rotation and configurable model selection.
 
 Optional:
@@ -54,10 +54,11 @@ Optional:
 - **Git sync awareness** — Branch tracking, merge detection, sync status reported to agent between runs
 - **Budget-aware modes** — DEEP (>40%), IMPLEMENT (15-40%), REVIEW (<15%), WAIT (<5%) based on API quota
 - **Model configuration** — Per-role model selection (haiku for lightweight, sonnet for missions) with fallback
-- **Outbox formatting** — All messages to Telegram pass through Claude with soul + personality + memory context
+- **Multi-platform messaging** — Telegram (default) or Slack communication, with pluggable provider architecture
+- **Outbox formatting** — All messages pass through Claude with soul + personality + memory context
 - **Memory management** — Scoped summaries, automatic compaction, journal archival (3-tier lifecycle), learnings cap
-- **Health monitoring** — Heartbeat tracking for the Telegram bridge, alerts on stale state
-- **Daily reports** — Telegram digest at session boundaries
+- **Health monitoring** — Heartbeat tracking for the messaging bridge, alerts on stale state
+- **Daily reports** — Digest messages at session boundaries
 - **Personality evolution** — Acquired traits tracked across sessions
 - **Clean shutdown** — Signal traps for graceful exit with notification
 - **615 tests** — `make test` runs the full suite (~95% coverage)
@@ -79,7 +80,7 @@ koan/
       chat.md                   #     Telegram chat prompt
       contemplative.md          #     Pause mode prompt
       dashboard-chat.md         #     Dashboard chat prompt
-      format-telegram.md        #     Outbox formatting prompt
+      format-message.md         #     Outbox formatting prompt
       pick-mission.md           #     Mission selection prompt
     app/                        #   Python modules
       awake.py                  #     Telegram bridge (poll, classify, route)

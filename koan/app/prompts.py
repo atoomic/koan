@@ -74,7 +74,7 @@ def load_prompt(name: str, **kwargs: str) -> str:
     """Load a system prompt template and substitute placeholders.
 
     Args:
-        name: Prompt file name without .md extension (e.g. "chat", "format-telegram")
+        name: Prompt file name without .md extension (e.g. "chat", "format-message")
         **kwargs: Placeholder values to substitute. Keys map to {KEY} in the template.
 
     Returns:

@@ -1,4 +1,4 @@
-"""Shared module-level state for the Telegram bridge.
+"""Shared module-level state for the messaging bridge.
 
 This module holds configuration and runtime constants that are shared between
 awake.py (main loop, chat, outbox) and command_handlers.py (slash commands).
@@ -6,6 +6,7 @@ Extracted to avoid circular imports between those two modules.
 """
 
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -23,7 +24,34 @@ KOAN_ROOT = Path(os.environ["KOAN_ROOT"])
 INSTANCE_DIR = KOAN_ROOT / "instance"
 MISSIONS_FILE = INSTANCE_DIR / "missions.md"
 OUTBOX_FILE = INSTANCE_DIR / "outbox.md"
-TELEGRAM_HISTORY_FILE = INSTANCE_DIR / "telegram-history.jsonl"
+
+
+def _migrate_history_file() -> Path:
+    """Migrate telegram-history.jsonl to conversation-history.jsonl.
+
+    One-time migration on first import. Idempotent — skips if new file
+    already exists. Uses os.rename() which is atomic on POSIX.
+
+    Returns:
+        Path to the conversation history file.
+    """
+    new_path = INSTANCE_DIR / "conversation-history.jsonl"
+    old_path = INSTANCE_DIR / "telegram-history.jsonl"
+
+    if old_path.exists() and not new_path.exists():
+        try:
+            old_path.rename(new_path)
+            print(f"[bridge_state] Migrated {old_path.name} → {new_path.name}",
+                  file=sys.stderr)
+        except OSError as e:
+            print(f"[bridge_state] Migration failed ({old_path} → {new_path}): {e}",
+                  file=sys.stderr)
+            return old_path
+
+    return new_path
+
+
+CONVERSATION_HISTORY_FILE = _migrate_history_file()
 TOPICS_FILE = INSTANCE_DIR / "previous-discussions-topics.json"
 
 def _resolve_default_project_path() -> str:
