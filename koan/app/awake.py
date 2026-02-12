@@ -541,6 +541,18 @@ def main():
     if extra_count:
         skills_info += f" + {extra_count} extra"
     log("init", f"Skills: {skills_info}")
+
+    # Initialize messaging provider and log startup banner
+    from app.messaging import get_messaging_provider
+    try:
+        provider = get_messaging_provider()
+        provider_name = provider.get_provider_name().upper()
+        channel_id = provider.get_channel_id()
+        log("init", f"Messaging provider: {provider_name}, Channel: {channel_id}")
+    except SystemExit:
+        log("error", "Failed to initialize messaging provider")
+        sys.exit(1)
+
     log("init", f"Polling every {POLL_INTERVAL}s (chat mode: fast reply)")
     offset = None
     first_poll = True

@@ -45,6 +45,13 @@ telegram:
   bot_token: ""   # Set via KOAN_TELEGRAM_TOKEN in .env (recommended)
   chat_id: ""     # Set via KOAN_TELEGRAM_CHAT_ID in .env (recommended)
 
+# Messaging provider configuration (optional)
+# Controls which messaging platform Kōan uses for communication.
+# If not specified, defaults to "telegram" (backward compatible).
+# Can also be set via KOAN_MESSAGING_PROVIDER env var (overrides this).
+# messaging:
+#   provider: "telegram"  # "telegram" (default) or "slack"
+
 # Usage thresholds
 budget:
   warn_at_percent: 70   # Send warning via Telegram
