@@ -41,7 +41,7 @@ class TestMissionHandlerNowFlag:
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
         assert lines[0] == "- existing task"
-        assert lines[1] == "- fix the bug"
+        assert lines[1].startswith("- fix the bug")
 
     @patch("app.utils.get_known_projects", return_value=[("koan", "/path")])
     @patch("app.utils.detect_project_from_text", return_value=(None, "fix the bug"))
@@ -59,7 +59,7 @@ class TestMissionHandlerNowFlag:
         assert "priority" in result
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- fix the bug"
+        assert lines[0].startswith("- fix the bug")
         assert lines[1] == "- existing task"
 
     @patch("app.utils.get_known_projects", return_value=[("koan", "/path")])
@@ -78,7 +78,7 @@ class TestMissionHandlerNowFlag:
         assert "priority" in result
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- fix the bug"
+        assert lines[0].startswith("- fix the bug")
 
     @patch("app.utils.get_known_projects", return_value=[("koan", "/path")])
     @patch("app.utils.detect_project_from_text", return_value=(None, "do something"))
@@ -118,7 +118,7 @@ class TestMissionHandlerNowFlag:
         assert "project: koan" in result
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- [project:koan] fix auth"
+        assert lines[0].startswith("- [project:koan] fix auth")
         assert lines[1] == "- old task"
 
     @patch("app.utils.get_known_projects", return_value=[("koan", "/path")])
@@ -140,8 +140,7 @@ class TestMissionHandlerNowFlag:
         assert "priority" in result
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- [project:koan] fix auth"
-
+        assert lines[0].startswith("- [project:koan] fix auth")
 
 # ---------------------------------------------------------------------------
 # awake.py — handle_mission with --now
@@ -166,7 +165,7 @@ class TestAwakeHandleMissionNowFlag:
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
         assert lines[0] == "- existing"
-        assert lines[1] == "- fix something"
+        assert lines[1].startswith("- fix something")
 
     @patch("app.command_handlers.send_telegram")
     def test_now_flag_top(self, mock_send, tmp_path):
@@ -180,7 +179,7 @@ class TestAwakeHandleMissionNowFlag:
 
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- fix something"
+        assert lines[0].startswith("- fix something")
         assert lines[1] == "- existing"
 
     @patch("app.command_handlers.send_telegram")
@@ -236,7 +235,7 @@ class TestMissionHandlerNowMultiProject:
         assert "priority" in result
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- fix the bug"
+        assert lines[0].startswith("- fix the bug")
         assert lines[1] == "- old task"
 
     @patch("app.utils.get_known_projects", return_value=MULTI_PROJECTS)
@@ -276,7 +275,7 @@ class TestMissionHandlerNowMultiProject:
         assert "project: koan" in result
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- [project:koan] fix auth crash"
+        assert lines[0].startswith("- [project:koan] fix auth crash")
 
     @patch("app.utils.get_known_projects", return_value=MULTI_PROJECTS)
     def test_now_with_explicit_project_tag(self, _proj, tmp_path):
@@ -293,7 +292,7 @@ class TestMissionHandlerNowMultiProject:
         assert "project: backend" in result
         content = missions.read_text()
         lines = [l for l in content.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- [project:backend] deploy hotfix"
+        assert lines[0].startswith("- [project:backend] deploy hotfix")
 
     @patch("app.utils.get_known_projects", return_value=MULTI_PROJECTS)
     @patch("app.utils.detect_project_from_text", return_value=(None, "fix it"))

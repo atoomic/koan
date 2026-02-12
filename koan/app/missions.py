@@ -10,6 +10,7 @@ instead of reimplementing section detection and parsing.
 import re
 import time
 from collections import defaultdict
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 
@@ -28,6 +29,128 @@ _SECTION_MAP = {
 }
 
 DEFAULT_SKELETON = "# Missions\n\n## Pending\n\n## In Progress\n\n## Done\n\n## Failed\n"
+
+# Timestamp markers for mission lifecycle tracking
+_QUEUED_MARKER = "⏳"
+_STARTED_MARKER = "▶"
+_QUEUED_PATTERN = re.compile(
+    r"\s*⏳\((\d{4}-\d{2}-\d{2}T\d{2}:\d{2})\)"
+)
+_STARTED_PATTERN = re.compile(
+    r"\s*▶\((\d{4}-\d{2}-\d{2}T\d{2}:\d{2})\)"
+)
+_COMPLETED_PATTERN = re.compile(
+    r"\s*[✅❌]\s*\((\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\)"
+)
+_TS_FORMAT = "%Y-%m-%dT%H:%M"
+
+
+def _now_iso() -> str:
+    """Return current time as YYYY-MM-DDTHH:MM."""
+    return time.strftime(_TS_FORMAT)
+
+
+def stamp_queued(entry: str) -> str:
+    """Append a queued timestamp to a mission entry."""
+    return f"{entry} {_QUEUED_MARKER}({_now_iso()})"
+
+
+def stamp_started(entry: str) -> str:
+    """Append a started timestamp to a mission entry line."""
+    return f"{entry} {_STARTED_MARKER}({_now_iso()})"
+
+
+def _parse_ts(pattern: re.Pattern, text: str, fmt: str = _TS_FORMAT) -> Optional[datetime]:
+    """Parse a single timestamp from *text* using *pattern*, or return None."""
+    match = pattern.search(text)
+    if not match:
+        return None
+    raw = "T".join(match.groups()) if len(match.groups()) > 1 else match.group(1)
+    try:
+        return datetime.strptime(raw, fmt)
+    except ValueError:
+        return None
+
+
+def extract_timestamps(text: str) -> Dict[str, Optional[datetime]]:
+    """Extract lifecycle timestamps from a mission line.
+
+    Returns {"queued": datetime|None, "started": datetime|None, "completed": datetime|None}.
+    """
+    return {
+        "queued": _parse_ts(_QUEUED_PATTERN, text),
+        "started": _parse_ts(_STARTED_PATTERN, text),
+        "completed": _parse_ts(_COMPLETED_PATTERN, text),
+    }
+
+
+def format_duration(seconds: float) -> str:
+    """Format a duration in seconds as a human-friendly string.
+
+    Examples: "2m", "1h 30m", "3h", "< 1m".
+    Returns "< 1m" for zero or negative values.
+    """
+    if seconds < 60:
+        return "< 1m"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    remaining = minutes % 60
+    if remaining == 0:
+        return f"{hours}h"
+    return f"{hours}h {remaining}m"
+
+
+def mission_timing_display(text: str) -> str:
+    """Return a short timing summary for a mission line.
+
+    Examples: "waiting 5m", "running 12m", "took 1h 30m, waited 5m".
+    Returns empty string if no timestamps found.
+    All timestamps are timezone-naive (system local time).
+    """
+    ts = extract_timestamps(text)
+
+    # Completed mission: show execution time and optional wait time
+    if ts["completed"] and ts["started"]:
+        duration = (ts["completed"] - ts["started"]).total_seconds()
+        if duration < 0:
+            return ""
+        parts = [f"took {format_duration(duration)}"]
+
+        if ts["queued"]:
+            wait = (ts["started"] - ts["queued"]).total_seconds()
+            if wait >= 60:
+                parts.append(f"waited {format_duration(wait)}")
+
+        return ", ".join(parts)
+
+    # In-progress mission: show running time
+    if ts["started"]:
+        elapsed = (datetime.now() - ts["started"]).total_seconds()
+        if elapsed < 0:
+            return ""
+        return f"running {format_duration(elapsed)}"
+
+    # Queued mission: show waiting time
+    if ts["queued"]:
+        elapsed = (datetime.now() - ts["queued"]).total_seconds()
+        if elapsed < 0:
+            return ""
+        return f"waiting {format_duration(elapsed)}"
+
+    return ""
+
+
+def strip_timestamps(text: str) -> str:
+    """Remove queued/started timestamp markers from mission text.
+
+    Preserves completion markers (✅/❌) — those are part of the Done/Failed format.
+    Useful for clean display when timestamps are shown separately.
+    """
+    text = _QUEUED_PATTERN.sub("", text)
+    text = _STARTED_PATTERN.sub("", text)
+    return text.rstrip()
 
 
 def extract_now_flag(text: str) -> Tuple[bool, str]:
@@ -130,10 +253,16 @@ def insert_mission(content: str, entry: str, *, urgent: bool = False) -> str:
     By default, inserts at the bottom of the pending section (FIFO queue).
     When urgent=True, inserts at the top (next to be picked up).
 
+    Automatically stamps the entry with a queued timestamp.
+
     Returns the updated content string.
     """
     if not content:
         content = DEFAULT_SKELETON
+
+    # Add queued timestamp if not already present
+    if _QUEUED_MARKER not in entry:
+        entry = stamp_queued(entry)
 
     if urgent:
         # Insert at top of pending section (right after the header)
@@ -747,7 +876,7 @@ def _move_in_progress_to_done(content: str, needle: str) -> str:
 
 
 def start_mission(content: str, mission_text: str) -> str:
-    """Move a mission from Pending to In Progress (no timestamp).
+    """Move a mission from Pending to In Progress with a started timestamp.
 
     Used at the beginning of mission execution to mark it as active.
     As a sanity enforcement, any existing In Progress missions are moved
@@ -762,8 +891,11 @@ def start_mission(content: str, mission_text: str) -> str:
 
     updated = result[0]
     removed = result[1].strip()
-    # Keep the original line text (with project tag etc), no timestamp/marker
+    # Keep the original line text (with project tag, queued timestamp etc)
     entry = removed if removed.startswith("- ") else f"- {removed}"
+
+    # Add started timestamp
+    entry = stamp_started(entry)
 
     # Sanity enforcement: move any existing In Progress missions to Done
     updated = _flush_in_progress_to_done(updated)

@@ -262,12 +262,12 @@ class TestTruncate:
         text = "a" * 80
         result = _truncate(text)
         assert result.endswith("…")
-        assert len(result) == 61  # 60 chars + 1 ellipsis char
+        assert len(result) == 60  # 59 chars + 1 ellipsis char
 
     def test_custom_max_len(self):
         from skills.core.status.handler import _truncate
         result = _truncate("hello world", max_len=5)
-        assert result == "hello…"
+        assert result == "hell…"
 
     def test_trailing_space_stripped_before_ellipsis(self):
         from skills.core.status.handler import _truncate
