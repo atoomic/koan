@@ -41,7 +41,7 @@ from app.bridge_state import (
     SOUL,
     SUMMARY,
     TELEGRAM_API,
-    TELEGRAM_HISTORY_FILE,
+    CONVERSATION_HISTORY_FILE,
     TOPICS_FILE,
     _get_registry,
 )
@@ -60,11 +60,11 @@ from app.config import (
     get_tools_description,
     get_model_config,
 )
-from app.telegram_history import (
-    save_telegram_message,
-    load_recent_telegram_history,
+from app.conversation_history import (
+    save_conversation_message,
+    load_recent_history,
     format_conversation_history,
-    compact_telegram_history,
+    compact_history,
 )
 from app.utils import (
     parse_project as _parse_project,
@@ -140,7 +140,7 @@ def _build_chat_prompt(text: str, *, lite: bool = False) -> str:
         lite: If True, strip heavy context (journal, summary) to stay under budget.
     """
     # Load recent conversation history
-    history = load_recent_telegram_history(TELEGRAM_HISTORY_FILE, max_messages=10)
+    history = load_recent_history(CONVERSATION_HISTORY_FILE, max_messages=10)
     history_context = format_conversation_history(history)
 
     journal_context = ""
@@ -309,7 +309,7 @@ def handle_chat(text: str):
     injection attacks via Telegram messages. No Bash, Edit, or Write access.
     """
     # Save user message to history
-    save_telegram_message(TELEGRAM_HISTORY_FILE, "user", text)
+    save_conversation_message(CONVERSATION_HISTORY_FILE, "user", text)
 
     prompt = _build_chat_prompt(text)
     chat_tools_list = get_chat_tools().split(",")
@@ -333,13 +333,13 @@ def handle_chat(text: str):
         if response:
             send_telegram(response)
             # Save assistant response to history
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", response)
             log("chat", f"Chat reply: {response[:80]}...")
         elif result.returncode != 0:
             log("error", f"Claude error: {result.stderr[:200]}")
             error_msg = "⚠️ Hmm, I couldn't formulate a response. Try again?"
             send_telegram(error_msg)
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", error_msg)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", error_msg)
         else:
             log("chat", "Empty response from Claude.")
     except subprocess.TimeoutExpired:
@@ -362,23 +362,23 @@ def handle_chat(text: str):
             response = _clean_chat_response(result.stdout.strip())
             if response:
                 send_telegram(response)
-                save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
+                save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", response)
                 log("chat", f"Chat reply (lite retry): {response[:80]}...")
             else:
                 if result.stderr:
                     log("error", f"Lite retry stderr: {result.stderr[:500]}")
                 timeout_msg = f"⏱ Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
                 send_telegram(timeout_msg)
-                save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
+                save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", timeout_msg)
         except subprocess.TimeoutExpired:
             timeout_msg = f"Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
             send_telegram(timeout_msg)
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", timeout_msg)
         except Exception as e:
             log("error", f"Lite retry error: {e}")
             error_msg = "⚠️ Something went wrong — try again?"
             send_telegram(error_msg)
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", error_msg)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", error_msg)
     except Exception as e:
         log("error", f"Claude error: {e}")
 
@@ -525,7 +525,7 @@ def main():
     startup_time = time.time()
 
     # Compact old conversation history to avoid context bleed across sessions
-    compacted = compact_telegram_history(TELEGRAM_HISTORY_FILE, TOPICS_FILE)
+    compacted = compact_history(CONVERSATION_HISTORY_FILE, TOPICS_FILE)
     if compacted:
         log("health", f"Compacted {compacted} old messages at startup")
 

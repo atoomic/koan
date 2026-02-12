@@ -1,7 +1,8 @@
-"""Telegram conversation history management — extracted from utils.py.
+"""Conversation history management.
 
 Handles saving, loading, formatting, and compacting conversation
-history stored as JSONL files.
+history stored as JSONL files. Platform-agnostic — works with
+any messaging provider.
 """
 
 import fcntl
@@ -13,11 +14,11 @@ from pathlib import Path
 from typing import Dict, List
 
 
-def save_telegram_message(history_file: Path, role: str, text: str):
+def save_conversation_message(history_file: Path, role: str, text: str):
     """Save a message to the conversation history file (JSONL format).
 
     Args:
-        history_file: Path to the history file (e.g., instance/telegram-history.jsonl)
+        history_file: Path to the history file (e.g., instance/conversation-history.jsonl)
         role: "user" or "assistant"
         text: Message content
     """
@@ -32,10 +33,10 @@ def save_telegram_message(history_file: Path, role: str, text: str):
             f.write(json.dumps(message, ensure_ascii=False) + "\n")
             fcntl.flock(f, fcntl.LOCK_UN)
     except OSError as e:
-        print(f"[telegram_history] Error saving message to history: {e}")
+        print(f"[conversation_history] Error saving message to history: {e}")
 
 
-def load_recent_telegram_history(history_file: Path, max_messages: int = 10) -> List[Dict[str, str]]:
+def load_recent_history(history_file: Path, max_messages: int = 10) -> List[Dict[str, str]]:
     """Load the most recent messages from conversation history.
 
     Args:
@@ -67,7 +68,7 @@ def load_recent_telegram_history(history_file: Path, max_messages: int = 10) -> 
         # Return last N messages
         return messages[-max_messages:] if len(messages) > max_messages else messages
     except OSError as e:
-        print(f"[telegram_history] Error loading history: {e}")
+        print(f"[conversation_history] Error loading history: {e}")
         return []
 
 
@@ -78,7 +79,7 @@ def format_conversation_history(
     """Format conversation history for inclusion in the prompt.
 
     Args:
-        messages: List of message dicts from load_recent_telegram_history
+        messages: List of message dicts from load_recent_history
         max_chars: Maximum total characters for the formatted history
 
     Returns:
@@ -103,14 +104,14 @@ def format_conversation_history(
     return "\n".join(lines)
 
 
-def compact_telegram_history(history_file: Path, topics_file: Path, min_messages: int = 20) -> int:
-    """Compact telegram history at startup to avoid context bleed.
+def compact_history(history_file: Path, topics_file: Path, min_messages: int = 20) -> int:
+    """Compact conversation history at startup to avoid context bleed.
 
     Reads all messages from history_file, extracts discussion topics grouped
     by date, appends them to topics_file (JSON array), then truncates history.
 
     Args:
-        history_file: Path to telegram-history.jsonl
+        history_file: Path to conversation-history.jsonl
         topics_file: Path to previous-discussions-topics.json
         min_messages: Minimum messages before compaction triggers (avoid compacting tiny histories)
 
@@ -203,5 +204,6 @@ def compact_telegram_history(history_file: Path, topics_file: Path, min_messages
     history_file.write_text("")
 
     count = len(messages)
-    print(f"[telegram_history] Compacted {count} messages \u2192 {topics_file.name}")
+    print(f"[conversation_history] Compacted {count} messages \u2192 {topics_file.name}")
     return count
+

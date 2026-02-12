@@ -31,9 +31,9 @@ from app.config import (
     get_tools_description,
     get_model_config,
 )
-from app.telegram_history import (
-    save_telegram_message,
-    load_recent_telegram_history,
+from app.conversation_history import (
+    save_conversation_message,
+    load_recent_history,
     format_conversation_history,
 )
 from app.utils import (
@@ -53,7 +53,7 @@ SOUL_FILE = INSTANCE_DIR / "soul.md"
 SUMMARY_FILE = INSTANCE_DIR / "memory" / "summary.md"
 JOURNAL_DIR = INSTANCE_DIR / "journal"
 PENDING_FILE = JOURNAL_DIR / "pending.md"
-TELEGRAM_HISTORY_FILE = INSTANCE_DIR / "telegram-history.jsonl"
+CONVERSATION_HISTORY_FILE = INSTANCE_DIR / "conversation-history.jsonl"
 CHAT_TIMEOUT = int(os.environ.get("KOAN_CHAT_TIMEOUT", "180"))
 
 app = Flask(__name__, template_folder=str(KOAN_ROOT / "koan" / "templates"))
@@ -165,7 +165,7 @@ def _build_dashboard_prompt(text: str, *, lite: bool = False) -> str:
     """
     from app.journal import read_all_journals
 
-    history = load_recent_telegram_history(TELEGRAM_HISTORY_FILE, max_messages=10)
+    history = load_recent_history(CONVERSATION_HISTORY_FILE, max_messages=10)
     history_context = format_conversation_history(history)
 
     soul = read_file(SOUL_FILE)
@@ -286,7 +286,7 @@ def chat_send():
     else:
         # Direct chat — call claude CLI like awake.py does
         # Save user message to history
-        save_telegram_message(TELEGRAM_HISTORY_FILE, "user", text)
+        save_conversation_message(CONVERSATION_HISTORY_FILE, "user", text)
 
         prompt = _build_dashboard_prompt(text)
         project_path = os.environ.get("KOAN_CURRENT_PROJECT_PATH", str(KOAN_ROOT))
@@ -315,7 +315,7 @@ def chat_send():
                     print(f"[dashboard] Claude stderr: {result.stderr[:500]}")
                 response = "I couldn't formulate a response. Try again?"
             # Save assistant response to history
-            save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", response)
             return jsonify({"ok": True, "type": "chat", "response": response})
         except subprocess.TimeoutExpired:
             # Retry with lite context (no journal, no summary) like awake.py
@@ -340,15 +340,15 @@ def chat_send():
                 if result.returncode != 0:
                     print(f"[dashboard] Claude error on retry (exit {result.returncode}): {result.stderr[:200]}", file=sys.stderr)
                 if response:
-                    save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", response)
+                    save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", response)
                     return jsonify({"ok": True, "type": "chat", "response": response})
                 else:
                     timeout_msg = f"Timeout after {CHAT_TIMEOUT}s — try a shorter question."
-                    save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
+                    save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", timeout_msg)
                     return jsonify({"ok": True, "type": "chat", "response": timeout_msg})
             except subprocess.TimeoutExpired:
                 timeout_msg = f"Timeout after {CHAT_TIMEOUT}s — try a shorter question."
-                save_telegram_message(TELEGRAM_HISTORY_FILE, "assistant", timeout_msg)
+                save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", timeout_msg)
                 return jsonify({"ok": True, "type": "chat", "response": timeout_msg})
             except (OSError, ValueError) as e:
                 return jsonify({"ok": False, "error": str(e)})

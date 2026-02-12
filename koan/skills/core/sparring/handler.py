@@ -86,9 +86,9 @@ def handle(ctx):
             response = result.stdout.strip()
             response = response.replace("**", "").replace("```", "")
             # Save sparring response to conversation history
-            from app.telegram_history import save_telegram_message
-            history_file = instance_dir / "telegram-history.jsonl"
-            save_telegram_message(history_file, "assistant", response)
+            from app.conversation_history import save_conversation_message
+            history_file = instance_dir / "conversation-history.jsonl"
+            save_conversation_message(history_file, "assistant", response)
             return response
         else:
             if result.returncode != 0:

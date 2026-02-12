@@ -13,7 +13,7 @@ Core shared utilities used across modules:
 - append_to_outbox: outbox file appending
 
 Configuration, journal, and telegram history functions have been
-extracted to dedicated modules (config.py, journal.py, telegram_history.py).
+extracted to dedicated modules (config.py, journal.py, conversation_history.py).
 Backward-compatible re-exports are provided below.
 """
 
@@ -407,9 +407,9 @@ from app.journal import (  # noqa: E402, F401
     append_to_journal,
 )
 
-from app.telegram_history import (  # noqa: E402, F401
-    save_telegram_message,
-    load_recent_telegram_history,
+from app.conversation_history import (  # noqa: E402, F401
+    save_conversation_message as save_telegram_message,
+    load_recent_history as load_recent_telegram_history,
     format_conversation_history,
-    compact_telegram_history,
+    compact_history as compact_telegram_history,
 )
