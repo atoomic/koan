@@ -102,15 +102,17 @@ projects:
         with pytest.raises(ValueError, match="must be a mapping"):
             load_projects_config(koan_root)
 
-    def test_raises_when_project_has_no_config(self, koan_root):
+    def test_allows_project_with_no_config(self, koan_root):
+        """Project with no config (None value) is valid — workspace override."""
         _write_yaml(koan_root, "projects:\n  myapp:")
-        with pytest.raises(ValueError, match="has no configuration"):
-            load_projects_config(koan_root)
+        config = load_projects_config(koan_root)
+        assert "myapp" in config["projects"]
 
-    def test_raises_when_project_missing_path(self, koan_root):
+    def test_allows_project_missing_path(self, koan_root):
+        """Project without path is valid — workspace provides the path."""
         _write_yaml(koan_root, "projects:\n  myapp:\n    other: value")
-        with pytest.raises(ValueError, match="missing required 'path'"):
-            load_projects_config(koan_root)
+        config = load_projects_config(koan_root)
+        assert config["projects"]["myapp"]["other"] == "value"
 
     def test_raises_when_path_is_empty(self, koan_root):
         _write_yaml(koan_root, 'projects:\n  myapp:\n    path: ""')

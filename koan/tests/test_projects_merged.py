@@ -118,6 +118,22 @@ projects:
         assert "Duplicate" in warnings[0]
         assert "myproj" in warnings[0]
 
+    def test_workspace_with_yaml_override_no_path(self, koan_root):
+        """Yaml entry without path uses workspace path for the project."""
+        ws = koan_root / "workspace"
+        (ws / "myproj").mkdir()
+        _write_projects_yaml(koan_root, """
+projects:
+  myproj:
+    models:
+      mission: "opus"
+""")
+        result = get_all_projects(str(koan_root))
+        assert len(result) == 1
+        assert result[0][0] == "myproj"
+        # Path comes from workspace
+        assert "workspace" in result[0][1]
+
 
 class TestProjectLimit:
     def test_limit_enforced(self, koan_root):

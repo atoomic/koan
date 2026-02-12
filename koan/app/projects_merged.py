@@ -51,28 +51,33 @@ def refresh_projects(koan_root: str) -> List[Tuple[str, str]]:
 
     warnings = []
 
-    # 1. Load yaml projects
+    # 1. Load yaml projects (with paths only)
     yaml_projects = []
+    yaml_all_names = set()  # Includes pathless override entries
     try:
         config = load_projects_config(koan_root)
         if config is not None:
             yaml_projects = get_projects_from_config(config)
+            # Track all yaml project names, including those without paths
+            yaml_all_names = {
+                name.lower()
+                for name in (config.get("projects") or {}).keys()
+            }
     except Exception as e:
         warnings.append(f"⚠️ Cannot load projects.yaml: {e}")
 
     # 2. Discover workspace projects
     workspace_projects = discover_workspace_projects(koan_root)
 
-    # 3. Merge with deduplication (yaml wins)
-    yaml_names = {name.lower() for name, _ in yaml_projects}
-    merged = dict(yaml_projects)  # name -> path
+    # 3. Merge with deduplication
+    yaml_names_with_path = {name.lower() for name, _ in yaml_projects}
+    merged = dict(yaml_projects)  # name -> path (yaml projects with paths)
 
     for name, path in workspace_projects:
-        if name.lower() in yaml_names:
-            # Check if yaml project has same name but we need to find it
+        if name.lower() in yaml_names_with_path:
+            # yaml has path for this project — yaml wins, warn about duplicate
             yaml_path = merged.get(name, "")
             if not yaml_path:
-                # Case-insensitive match — find the actual yaml name
                 for yn, yp in yaml_projects:
                     if yn.lower() == name.lower():
                         yaml_path = yp
@@ -82,6 +87,7 @@ def refresh_projects(koan_root: str) -> List[Tuple[str, str]]:
                 f"using {yaml_path} (yaml) instead of {path} (workspace)"
             )
             continue
+        # Workspace provides the path (yaml may have overrides without path)
         merged[name] = path
 
     # 4. Enforce limit
