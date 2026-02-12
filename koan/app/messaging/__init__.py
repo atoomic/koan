@@ -25,7 +25,7 @@ _instance_lock = threading.Lock()
 
 # List of known provider modules for auto-loading
 _PROVIDER_MODULES = [
-    "app.messaging.telegram_provider",
+    "app.messaging.telegram",
     "app.messaging.slack_provider",
 ]
 

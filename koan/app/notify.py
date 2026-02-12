@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Kōan — Telegram notification helper
+Kōan — Messaging notification helper
 
-Standalone module to send messages to Telegram from any process
-(awake.py, run.py, workers).
+Standalone module to send messages from any process (awake.py, run.py, workers).
+Delegates to the active MessagingProvider (Telegram by default).
 
 Usage from shell:
     python3 notify.py "Mission completed: security audit"
@@ -16,55 +16,76 @@ Usage from Python:
 import os
 import subprocess
 import sys
-import threading
-import time
 from pathlib import Path
-
-import requests
 
 from app.utils import load_dotenv
 
-# Flood protection state (guarded by _flood_lock)
-_flood_lock = threading.Lock()
-_flood_last_message = ""
-_flood_last_sent_at = 0.0
-_flood_warning_sent = False
-
-FLOOD_WINDOW_SECONDS = 300  # 5 minutes
-
 
 def reset_flood_state():
-    """Reset flood protection state. Call in test setup for isolation."""
-    global _flood_last_message, _flood_last_sent_at, _flood_warning_sent
-    with _flood_lock:
-        _flood_last_message = ""
-        _flood_last_sent_at = 0.0
-        _flood_warning_sent = False
+    """Reset flood protection state on the active provider (for tests)."""
+    try:
+        from app.messaging import get_messaging_provider
+        provider = get_messaging_provider()
+        if hasattr(provider, "reset_flood_state"):
+            provider.reset_flood_state()
+    except SystemExit:
+        pass
 
 
-def _send_raw(text: str) -> bool:
-    """Send a message to Telegram (no flood check). Returns True on success."""
+def _send_raw_bypass_flood(text: str) -> bool:
+    """Send a message bypassing flood protection for testing. Returns True on success.
+
+    Only used by reset_flood_state() and tests. In production, always use send_telegram().
+    Falls back to direct API call when provider unavailable (CLI standalone mode).
+    """
+    try:
+        from app.messaging import get_messaging_provider
+        # Temporarily reset flood state, send, then restore would be complex.
+        # For now, access provider's reset method if available.
+        # This is a test-only function, so some coupling is acceptable.
+        provider = get_messaging_provider()
+        if hasattr(provider, "_send_raw"):
+            # TelegramProvider has _send_raw that bypasses flood protection
+            return provider._send_raw(text)
+        # For other providers without flood protection, regular send is fine
+        return provider.send_message(text)
+    except SystemExit:
+        # Provider not configured — fall back to direct send for CLI usage
+        return _direct_send(text)
+
+
+def _direct_send(text: str) -> bool:
+    """Direct Telegram API send (standalone fallback when provider unavailable)."""
+    import requests
+
     load_dotenv()
+    bot_token = os.environ.get("KOAN_TELEGRAM_TOKEN", "")
+    chat_id = os.environ.get("KOAN_TELEGRAM_CHAT_ID", "")
 
-    BOT_TOKEN = os.environ.get("KOAN_TELEGRAM_TOKEN", "")
-    CHAT_ID = os.environ.get("KOAN_TELEGRAM_CHAT_ID", "")
-
-    if not BOT_TOKEN or not CHAT_ID:
-        print("[notify] KOAN_TELEGRAM_TOKEN or KOAN_TELEGRAM_CHAT_ID not set.", file=sys.stderr)
+    if not bot_token or not chat_id:
+        print("[notify] KOAN_TELEGRAM_TOKEN or KOAN_TELEGRAM_CHAT_ID not set.",
+              file=sys.stderr)
         return False
 
-    TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+    api_base = f"https://api.telegram.org/bot{bot_token}"
+    
+    # Use same chunking algorithm as MessagingProvider.chunk_message()
+    # to ensure consistent behavior between provider and fallback path
+    max_chunk_size = 4000  # Telegram API limit
+    chunks = [text[i:i + max_chunk_size] for i in range(0, len(text), max_chunk_size)] if text else [text]
+    
     ok = True
-    for chunk in [text[i:i + 4000] for i in range(0, len(text), 4000)]:
+    for chunk in chunks:
         try:
             resp = requests.post(
-                f"{TELEGRAM_API}/sendMessage",
-                json={"chat_id": CHAT_ID, "text": chunk},
+                f"{api_base}/sendMessage",
+                json={"chat_id": chat_id, "text": chunk},
                 timeout=10,
             )
             data = resp.json()
             if not data.get("ok"):
-                print(f"[notify] Telegram API error: {resp.text[:200]}", file=sys.stderr)
+                print(f"[notify] Telegram API error: {resp.text[:200]}",
+                      file=sys.stderr)
                 ok = False
         except (requests.RequestException, ValueError) as e:
             print(f"[notify] Send error: {e}", file=sys.stderr)
@@ -73,37 +94,17 @@ def _send_raw(text: str) -> bool:
 
 
 def send_telegram(text: str) -> bool:
-    """Send a message to Telegram with flood protection.
+    """Send a message via the active messaging provider (with flood protection).
 
-    Detects consecutive duplicate messages within a 5-minute window.
-    First duplicate triggers a warning, subsequent duplicates are silently suppressed.
+    Backward-compatible facade — existing call sites continue to work unchanged.
     Returns True on success (suppression counts as success).
     """
-    global _flood_last_message, _flood_last_sent_at, _flood_warning_sent
-
-    # Empty messages skip flood tracking entirely
-    if not text:
-        return _send_raw(text)
-
-    now = time.time()
-
-    with _flood_lock:
-        if text == _flood_last_message and (now - _flood_last_sent_at) < FLOOD_WINDOW_SECONDS:
-            if not _flood_warning_sent:
-                _flood_warning_sent = True
-                # Send warning outside lock would be ideal, but keeping it simple:
-                # _send_raw is I/O but the lock ensures correct flood state transitions.
-                _send_raw("[flood] Duplicate message detected — suppressing repeats for 5 min.")
-            else:
-                print("[notify] Flood suppression: duplicate message dropped.", file=sys.stderr)
-            return True
-
-        # New or different message — reset state and send
-        _flood_last_message = text
-        _flood_last_sent_at = now
-        _flood_warning_sent = False
-
-    return _send_raw(text)
+    try:
+        from app.messaging import get_messaging_provider
+        provider = get_messaging_provider()
+        return provider.send_message(text)
+    except SystemExit:
+        return _direct_send(text)
 
 
 def format_and_send(raw_message: str, instance_dir: str = None,

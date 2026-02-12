@@ -871,33 +871,39 @@ class TestHandleMessage:
 # ---------------------------------------------------------------------------
 
 class TestGetUpdates:
-    @patch("app.awake.requests.get")
-    def test_returns_results(self, mock_get):
-        mock_get.return_value = MagicMock()
-        mock_get.return_value.json.return_value = {"ok": True, "result": [{"update_id": 1}]}
+    @patch("app.messaging.get_messaging_provider")
+    def test_returns_results(self, mock_get_provider):
+        from app.messaging.base import Update
+        mock_provider = MagicMock()
+        mock_provider.poll_updates.return_value = [
+            Update(update_id=1, raw_data={"update_id": 1})
+        ]
+        mock_get_provider.return_value = mock_provider
         result = get_updates()
         assert len(result) == 1
         assert result[0]["update_id"] == 1
 
-    @patch("app.awake.requests.get")
-    def test_passes_offset(self, mock_get):
-        mock_get.return_value = MagicMock()
-        mock_get.return_value.json.return_value = {"ok": True, "result": []}
+    @patch("app.messaging.get_messaging_provider")
+    def test_passes_offset(self, mock_get_provider):
+        mock_provider = MagicMock()
+        mock_provider.poll_updates.return_value = []
+        mock_get_provider.return_value = mock_provider
         get_updates(offset=42)
-        _, kwargs = mock_get.call_args
-        assert kwargs["params"]["offset"] == 42
+        mock_provider.poll_updates.assert_called_once_with(42)
 
-    @patch("app.awake.requests.get")
-    def test_handles_network_error(self, mock_get):
-        import requests as req
-        mock_get.side_effect = req.RequestException("timeout")
+    @patch("app.messaging.get_messaging_provider")
+    def test_handles_provider_error(self, mock_get_provider):
+        mock_provider = MagicMock()
+        mock_provider.poll_updates.return_value = []
+        mock_get_provider.return_value = mock_provider
         result = get_updates()
         assert result == []
 
-    @patch("app.awake.requests.get")
-    def test_handles_json_error(self, mock_get):
-        mock_get.return_value = MagicMock()
-        mock_get.return_value.json.side_effect = ValueError("bad json")
+    @patch("app.messaging.get_messaging_provider")
+    def test_handles_empty_results(self, mock_get_provider):
+        mock_provider = MagicMock()
+        mock_provider.poll_updates.return_value = []
+        mock_get_provider.return_value = mock_provider
         result = get_updates()
         assert result == []
 

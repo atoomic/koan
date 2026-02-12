@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Kōan Telegram Bridge — v2
+Kōan Messaging Bridge — v2
 
 Fast-response architecture:
-- Polls Telegram every 3s (configurable)
+- Polls messaging provider every 3s (configurable)
 - Chat messages → lightweight Claude call → instant reply
 - Mission-like messages → written to missions.md → ack sent immediately
 - Outbox flushed every cycle (no more waiting for next poll)
@@ -25,8 +25,6 @@ import time
 from datetime import date, datetime
 from typing import Optional, Tuple
 
-import requests
-
 from app.bridge_log import log
 from app.bridge_state import (
     BOT_TOKEN,
@@ -40,7 +38,6 @@ from app.bridge_state import (
     PROJECT_PATH,
     SOUL,
     SUMMARY,
-    TELEGRAM_API,
     CONVERSATION_HISTORY_FILE,
     TOPICS_FILE,
     _get_registry,
@@ -81,16 +78,16 @@ def check_config():
 
 
 def get_updates(offset=None):
-    params = {"timeout": 30}
-    if offset:
-        params["offset"] = offset
-    try:
-        resp = requests.get(f"{TELEGRAM_API}/getUpdates", params=params, timeout=35)
-        data = resp.json()
-        return data.get("result", [])
-    except (requests.RequestException, ValueError) as e:
-        log("error", f"Telegram error: {e}")
-        return []
+    """Fetch new updates from the messaging provider.
+
+    Returns a list of raw-dict-compatible updates for backward compatibility
+    with the existing message processing pipeline.
+    """
+    from app.messaging import get_messaging_provider
+    provider = get_messaging_provider()
+    updates = provider.poll_updates(offset)
+    # Convert Update objects to raw dicts for backward compat with main loop
+    return [u.raw_data for u in updates]
 
 
 # ---------------------------------------------------------------------------
