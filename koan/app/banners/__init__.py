@@ -48,28 +48,28 @@ def _apply_replacements(line: str, replacements: dict, base_color: str) -> str:
     return f"{base_color}{line}{RESET}"
 
 
+def _colorize_art(art: str, replacements: dict, base_color: str) -> str:
+    """Apply ANSI colors to ASCII art with given replacements and base color."""
+    lines = art.split("\n")
+    return "\n".join(_apply_replacements(line, replacements, base_color) for line in lines)
+
+
 def colorize_agent(art: str) -> str:
     """Apply ANSI colors to the agent (run loop) banner."""
-    replacements = {
-        "◉": CYAN,  # Eyes glow cyan
-        "☢": YELLOW,  # Radioactive symbol in yellow
-    }
-    lines = art.split("\n")
-    colored = [_apply_replacements(line, replacements, f"{DIM}{BLUE}") for line in lines]
-    return "\n".join(colored)
+    return _colorize_art(art, {
+        "◉": CYAN,
+        "☢": YELLOW,
+    }, f"{DIM}{BLUE}")
 
 
 def colorize_bridge(art: str) -> str:
     """Apply ANSI colors to the bridge (awake) banner."""
-    replacements = {
-        "◇": CYAN,  # Signal waves in cyan
+    return _colorize_art(art, {
+        "◇": CYAN,
         "◆": CYAN,
-        "→": GREEN,  # Arrows in green
+        "→": GREEN,
         "←": GREEN,
-    }
-    lines = art.split("\n")
-    colored = [_apply_replacements(line, replacements, f"{DIM}{MAGENTA}") for line in lines]
-    return "\n".join(colored)
+    }, f"{DIM}{MAGENTA}")
 
 
 def _print_banner(art_file: str, colorizer: callable, version_info: str = "") -> None:
@@ -109,16 +109,13 @@ def _visible_len(s: str) -> int:
 
 def colorize_startup(art: str) -> str:
     """Apply ANSI colors to the unified startup banner."""
-    replacements = {
-        "K Ō A N": f"{BOLD}{CYAN}",  # Title text in bold cyan
-        "cognitive sparring partner": f"{DIM}{WHITE}",  # Tagline in dim white
-        "─────────────────────": f"{DIM}{CYAN}",  # Separator line
-        "◉": CYAN,  # Eyes glow cyan
-        "☢": YELLOW,  # Radioactive symbol in yellow
-    }
-    lines = art.split("\n")
-    colored = [_apply_replacements(line, replacements, f"{DIM}{BLUE}") for line in lines]
-    return "\n".join(colored)
+    return _colorize_art(art, {
+        "K Ō A N": f"{BOLD}{CYAN}",
+        "cognitive sparring partner": f"{DIM}{WHITE}",
+        "─────────────────────": f"{DIM}{CYAN}",
+        "◉": CYAN,
+        "☢": YELLOW,
+    }, f"{DIM}{BLUE}")
 
 
 def _format_info_lines(system_info: dict) -> list:

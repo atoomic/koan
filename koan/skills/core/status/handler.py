@@ -1,7 +1,5 @@
 """Kōan status skill — consolidates /status, /ping, /usage."""
 
-import re
-
 # Telegram lines wrap around 40-45 chars on mobile; 60 is a good balance
 # between readability and information density.
 _MAX_MISSION_DISPLAY_LEN = 60
@@ -37,6 +35,7 @@ def handle(ctx):
 def _handle_status(ctx) -> str:
     """Build status message grouped by project."""
     from app.missions import group_by_project
+    from app.utils import parse_project
 
     koan_root = ctx.koan_root
     instance_dir = ctx.instance_dir
@@ -103,12 +102,12 @@ def _handle_status(ctx) -> str:
                     if in_progress:
                         parts.append(f"  In progress: {len(in_progress)}")
                         for m in in_progress[:2]:
-                            display = re.sub(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*', '', m)
+                            _, display = parse_project(m)
                             parts.append(f"    {_truncate(display)}")
                     if pending:
                         parts.append(f"  Pending: {len(pending)}")
                         for m in pending[:3]:
-                            display = re.sub(r'\[projec?t:[a-zA-Z0-9_-]+\]\s*', '', m)
+                            _, display = parse_project(m)
                             parts.append(f"    {_truncate(display)}")
 
     return "\n".join(parts)

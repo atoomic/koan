@@ -47,7 +47,6 @@ def refresh_projects(koan_root: str) -> List[Tuple[str, str]]:
     Call at startup and when /projects command is invoked.
     Returns the merged project list.
     """
-    from app.projects_config import load_projects_config, get_projects_from_config
     from app.workspace_discovery import discover_workspace_projects
 
     warnings = []

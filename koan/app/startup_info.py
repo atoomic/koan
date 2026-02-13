@@ -56,9 +56,11 @@ def gather_startup_info(koan_root: Path) -> dict:
 
 def _get_provider(koan_root: Path) -> str:
     """Detect the CLI provider from env or config."""
-    provider = os.environ.get("KOAN_CLI_PROVIDER", "").strip()
-    if not provider:
-        provider = os.environ.get("CLI_PROVIDER", "").strip()
+    try:
+        from app.utils import get_cli_provider_env
+        provider = get_cli_provider_env()
+    except Exception:
+        provider = ""
     if not provider:
         provider = _get_config_value("cli_provider", "claude")
     return provider

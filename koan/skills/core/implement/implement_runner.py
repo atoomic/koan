@@ -174,15 +174,15 @@ def _build_prompt(
             PLAN=plan,
             CONTEXT=context,
         )
-    else:
-        from app.prompts import load_prompt
-        return load_prompt(
-            "implement",
-            ISSUE_URL=issue_url,
-            ISSUE_TITLE=issue_title,
-            PLAN=plan,
-            CONTEXT=context,
-        )
+
+    from app.prompts import load_prompt
+    return load_prompt(
+        "implement",
+        ISSUE_URL=issue_url,
+        ISSUE_TITLE=issue_title,
+        PLAN=plan,
+        CONTEXT=context,
+    )
 
 
 def _execute_implementation(
