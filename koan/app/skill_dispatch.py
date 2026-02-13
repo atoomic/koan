@@ -189,20 +189,22 @@ def build_skill_command(
     python = os.path.join(koan_root, ".venv", "bin", "python3")
     base_cmd = [python, "-m", runner_module]
 
-    if command == "plan":
-        return _build_plan_cmd(base_cmd, args, project_path)
-    elif command == "implement":
-        return _build_implement_cmd(base_cmd, args, project_path)
-    elif command in ("rebase", "recreate"):
-        return _build_pr_url_cmd(base_cmd, args, project_path)
-    elif command == "ai":
-        return _build_ai_cmd(base_cmd, project_name, project_path, instance_dir)
-    elif command == "check":
-        return _build_check_cmd(base_cmd, args, instance_dir, koan_root)
-    elif command in ("claudemd", "claude", "claude.md", "claude_md"):
-        return _build_claudemd_cmd(base_cmd, project_name, project_path)
+    # Dispatch to command-specific builder
+    _COMMAND_BUILDERS = {
+        "plan": lambda: _build_plan_cmd(base_cmd, args, project_path),
+        "implement": lambda: _build_implement_cmd(base_cmd, args, project_path),
+        "rebase": lambda: _build_pr_url_cmd(base_cmd, args, project_path),
+        "recreate": lambda: _build_pr_url_cmd(base_cmd, args, project_path),
+        "ai": lambda: _build_ai_cmd(base_cmd, project_name, project_path, instance_dir),
+        "check": lambda: _build_check_cmd(base_cmd, args, instance_dir, koan_root),
+        "claudemd": lambda: _build_claudemd_cmd(base_cmd, project_name, project_path),
+        "claude": lambda: _build_claudemd_cmd(base_cmd, project_name, project_path),
+        "claude.md": lambda: _build_claudemd_cmd(base_cmd, project_name, project_path),
+        "claude_md": lambda: _build_claudemd_cmd(base_cmd, project_name, project_path),
+    }
 
-    return None
+    builder = _COMMAND_BUILDERS.get(command)
+    return builder() if builder else None
 
 
 def _extract_issue_url_and_context(args: str) -> Optional[Tuple[str, str]]:
