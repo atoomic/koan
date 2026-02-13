@@ -475,12 +475,20 @@ def _safe_checkout(branch: str, project_path: str) -> None:
         pass
 
 
+def _is_conflict_failure(summary: str) -> bool:
+    """Check if a rebase failure summary indicates a git conflict."""
+    return "Rebase conflict" in summary
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point — python3 -m app.rebase_pr <url> --project-path <path>
 # ---------------------------------------------------------------------------
 
 def main(argv=None):
     """CLI entry point for rebase_pr.
+
+    On rebase conflict, automatically falls back to recreate_pr which
+    creates a fresh branch from upstream and reimplements the feature.
 
     Returns exit code (0 = success, 1 = failure).
     """
@@ -505,12 +513,24 @@ def main(argv=None):
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    skill_dir = Path(__file__).resolve().parent.parent / "skills" / "core" / "rebase"
+    skills_base = Path(__file__).resolve().parent.parent / "skills" / "core"
 
     success, summary = run_rebase(
         owner, repo, pr_number, cli_args.project_path,
-        skill_dir=skill_dir,
+        skill_dir=skills_base / "rebase",
     )
+
+    if not success and _is_conflict_failure(summary):
+        print(f"{summary}\nFalling back to /recreate...")
+        from app.recreate_pr import run_recreate
+
+        recreate_ok, recreate_summary = run_recreate(
+            owner, repo, pr_number, cli_args.project_path,
+            skill_dir=skills_base / "recreate",
+        )
+        print(recreate_summary)
+        return 0 if recreate_ok else 1
+
     print(summary)
     return 0 if success else 1
 

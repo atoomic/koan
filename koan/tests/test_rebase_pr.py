@@ -18,6 +18,7 @@ from app.rebase_pr import (
     _build_rebase_prompt,
     _checkout_pr_branch,
     _get_current_branch,
+    _is_conflict_failure,
     _is_permission_error,
     _push_with_fallback,
     _safe_checkout,
@@ -863,3 +864,53 @@ class TestMain:
             skill_dir = call_kwargs[1].get("skill_dir")
             assert skill_dir is not None
             assert str(skill_dir).endswith("skills/core/rebase")
+
+    def test_main_conflict_falls_back_to_recreate(self):
+        """On rebase conflict, main() should fall back to /recreate."""
+        conflict_msg = "Rebase conflict on `main` (tried origin and upstream). Manual resolution required."
+        with patch("app.rebase_pr.run_rebase", return_value=(False, conflict_msg)), \
+             patch("app.recreate_pr.run_recreate", return_value=(True, "PR #42 recreated.")) as mock_recreate:
+            code = rebase_main([
+                "https://github.com/sukria/koan/pull/42",
+                "--project-path", "/project",
+            ])
+            assert code == 0
+            mock_recreate.assert_called_once()
+            call_args = mock_recreate.call_args
+            assert call_args[0][:3] == ("sukria", "koan", "42")
+            assert call_args[0][3] == "/project"
+            assert str(call_args[1]["skill_dir"]).endswith("skills/core/recreate")
+
+    def test_main_non_conflict_failure_no_fallback(self):
+        """Non-conflict failures should NOT trigger recreate fallback."""
+        with patch("app.rebase_pr.run_rebase", return_value=(False, "Push failed: auth error")), \
+             patch("app.recreate_pr.run_recreate") as mock_recreate:
+            code = rebase_main([
+                "https://github.com/sukria/koan/pull/42",
+                "--project-path", "/project",
+            ])
+            assert code == 1
+            mock_recreate.assert_not_called()
+
+    def test_main_conflict_recreate_also_fails(self):
+        """If recreate also fails after conflict, exit code should be 1."""
+        conflict_msg = "Rebase conflict on `main` (tried origin and upstream). Manual resolution required."
+        with patch("app.rebase_pr.run_rebase", return_value=(False, conflict_msg)), \
+             patch("app.recreate_pr.run_recreate", return_value=(False, "Recreation failed.")):
+            code = rebase_main([
+                "https://github.com/sukria/koan/pull/42",
+                "--project-path", "/project",
+            ])
+            assert code == 1
+
+
+class TestIsConflictFailure:
+    def test_detects_conflict_message(self):
+        msg = "Rebase conflict on `main` (tried origin and upstream). Manual resolution required."
+        assert _is_conflict_failure(msg) is True
+
+    def test_rejects_non_conflict(self):
+        assert _is_conflict_failure("Push failed: auth error") is False
+
+    def test_rejects_empty(self):
+        assert _is_conflict_failure("") is False
