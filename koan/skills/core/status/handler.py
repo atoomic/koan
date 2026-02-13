@@ -1,16 +1,5 @@
 """Kōan status skill — consolidates /status, /ping, /usage."""
 
-# Telegram lines wrap around 40-45 chars on mobile; 60 is a good balance
-# between readability and information density.
-_MAX_MISSION_DISPLAY_LEN = 60
-
-
-def _truncate(text: str, max_len: int = _MAX_MISSION_DISPLAY_LEN) -> str:
-    """Truncate mission text for Telegram display, adding ellipsis if needed."""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len].rstrip() + "…"
-
 
 def _needs_ollama() -> bool:
     """Return True if the configured provider requires ollama serve."""
@@ -19,6 +8,42 @@ def _needs_ollama() -> bool:
         return get_provider_name() in ("local", "ollama")
     except Exception:
         return False
+
+
+def _truncate(text: str, max_len: int = 60) -> str:
+    """Truncate text with ellipsis."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 1].rstrip() + "…"
+
+
+def _format_mission_display(mission: str) -> str:
+    """Format a mission for display: strip tags, add timing, truncate.
+
+    Returns a clean, truncated mission string with optional timing info.
+    """
+    from app.missions import mission_timing_display, strip_timestamps
+    from app.utils import parse_project
+
+    # Remove project tags
+    _, display = parse_project(mission)
+
+    # Extract timing before stripping timestamps
+    timing = mission_timing_display(display)
+
+    # Clean up timestamps for display
+    display = strip_timestamps(display)
+
+    # Reserve space for timing suffix when truncating
+    if timing:
+        suffix = f" ({timing})"
+        max_text = max(20, 60 - len(suffix))
+        display = _truncate(display, max_text)
+        display = f"{display}{suffix}"
+    else:
+        display = _truncate(display)
+
+    return display
 
 
 def handle(ctx):
@@ -35,7 +60,6 @@ def handle(ctx):
 def _handle_status(ctx) -> str:
     """Build status message grouped by project."""
     from app.missions import group_by_project
-    from app.utils import parse_project
 
     koan_root = ctx.koan_root
     instance_dir = ctx.instance_dir
@@ -102,13 +126,11 @@ def _handle_status(ctx) -> str:
                     if in_progress:
                         parts.append(f"  In progress: {len(in_progress)}")
                         for m in in_progress[:2]:
-                            _, display = parse_project(m)
-                            parts.append(f"    {_truncate(display)}")
+                            parts.append(f"    {_format_mission_display(m)}")
                     if pending:
                         parts.append(f"  Pending: {len(pending)}")
                         for m in pending[:3]:
-                            _, display = parse_project(m)
-                            parts.append(f"    {_truncate(display)}")
+                            parts.append(f"    {_format_mission_display(m)}")
 
     return "\n".join(parts)
 

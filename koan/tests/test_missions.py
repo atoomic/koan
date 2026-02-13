@@ -916,12 +916,12 @@ class TestInsertMissionOrdering:
         lines = [l for l in result.splitlines() if l.startswith("- ")]
         assert lines[0] == "- existing task one"
         assert lines[1] == "- existing task two"
-        assert lines[2] == "- new task"
+        assert lines[2].startswith("- new task")
 
     def test_urgent_inserts_at_top(self):
         result = insert_mission(self.CONTENT, "- urgent task", urgent=True)
         lines = [l for l in result.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- urgent task"
+        assert lines[0].startswith("- urgent task")
         assert lines[1] == "- existing task one"
         assert lines[2] == "- existing task two"
 
@@ -929,19 +929,17 @@ class TestInsertMissionOrdering:
         result = insert_mission(self.CONTENT, "- third task")
         result = insert_mission(result, "- fourth task")
         lines = [l for l in result.splitlines() if l.startswith("- ")]
-        assert lines == [
-            "- existing task one",
-            "- existing task two",
-            "- third task",
-            "- fourth task",
-        ]
+        assert lines[0] == "- existing task one"
+        assert lines[1] == "- existing task two"
+        assert lines[2].startswith("- third task")
+        assert lines[3].startswith("- fourth task")
 
     def test_multiple_urgent_inserts(self):
         result = insert_mission(self.CONTENT, "- urgent A", urgent=True)
         result = insert_mission(result, "- urgent B", urgent=True)
         lines = [l for l in result.splitlines() if l.startswith("- ")]
-        assert lines[0] == "- urgent B"
-        assert lines[1] == "- urgent A"
+        assert lines[0].startswith("- urgent B")
+        assert lines[1].startswith("- urgent A")
 
     def test_bottom_insert_into_empty_section(self):
         content = "# Missions\n\n## Pending\n\n## In Progress\n"
@@ -959,7 +957,7 @@ class TestInsertMissionOrdering:
         )
         result = insert_mission(content, "- nouvelle tache")
         lines = [l for l in result.splitlines() if l.startswith("- ")]
-        assert lines[-1] == "- nouvelle tache"
+        assert lines[-1].startswith("- nouvelle tache")
 
     def test_bottom_insert_with_multiline_mission(self):
         content = (
@@ -971,7 +969,7 @@ class TestInsertMissionOrdering:
         )
         result = insert_mission(content, "- task three")
         lines = [l for l in result.splitlines() if l.startswith("- ")]
-        assert lines[-1] == "- task three"
+        assert lines[-1].startswith("- task three")
         # task three should come after "task two" not after "with details"
         assert result.index("- task three") > result.index("  with details")
 
