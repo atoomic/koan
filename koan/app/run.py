@@ -1033,7 +1033,8 @@ def _run_iteration(
     # the Claude agent.
     if mission_title:
         from app.debug import debug_log as _debug_log
-        _debug_log(f"[run] checking skill dispatch for: {mission_title}")
+        preview = f"{mission_title[:100]}..." if len(mission_title) > 100 else mission_title
+        _debug_log(f"[run] checking skill dispatch for: {preview}")
         from app.skill_dispatch import dispatch_skill_mission, is_skill_mission
         skill_cmd = dispatch_skill_mission(
             mission_text=mission_title,
@@ -1162,7 +1163,8 @@ def _run_iteration(
             project_name=project_name,
         )
 
-        _debug_log(f"[run] cli: cmd={' '.join(cmd[:6])}... cwd={project_path}")
+        cmd_display = [c[:100] + '...' if len(c) > 100 else c for c in cmd[:6]]
+        _debug_log(f"[run] cli: cmd={' '.join(cmd_display)}... cwd={project_path}")
         claude_exit = run_claude_task(cmd, stdout_file, stderr_file, cwd=project_path)
         _debug_log(f"[run] cli: exit_code={claude_exit}")
 
