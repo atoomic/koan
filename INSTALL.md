@@ -20,7 +20,7 @@ This launches a web-based wizard that guides you through Telegram setup, project
 
 ## Recommended
 
-- GitHub cli `gh` setup and has one or more identities to access to your repositories
+- GitHub CLI `gh` installed and authenticated — see [Dedicated GitHub Identity](#dedicated-github-identity-recommended) for setting up a bot account
 
 ## LLM Providers
 
@@ -152,6 +152,136 @@ make awake
 # Terminal 2: Agent loop
 make run
 ```
+
+## Dedicated GitHub Identity (Recommended)
+
+For full autonomy, Kōan should have its own GitHub account. This gives it a distinct identity for PRs, commits, and @mention commands — clearly separated from your personal account.
+
+### 1. Create a GitHub account for the bot
+
+- Go to [github.com/signup](https://github.com/signup) and create a new account (e.g., `yourname-koan`)
+- Use a dedicated email address (or a Gmail alias like `yourname+koan@gmail.com`)
+- Pick a short, recognizable username — this will appear in @mentions and commit history
+
+### 2. Generate a classic Personal Access Token
+
+> **Important:** Use a **classic** token, not a fine-grained token. Fine-grained tokens do not support the `notifications` scope, which is required for GitHub @mention commands.
+
+On the bot's GitHub account:
+
+1. **Settings → Developer settings → Personal access tokens → Tokens (classic)**
+2. Click **"Generate new token (classic)"**
+3. Set an expiration (or "No expiration" for convenience)
+4. Select these scopes:
+
+| Scope | Required | Purpose |
+|-------|----------|---------|
+| `repo` | Yes | Push branches, create PRs and issues |
+| `notifications` | Yes | Poll @mention notifications |
+| `workflow` | Optional | Trigger GitHub Actions on push |
+
+5. Click **Generate token** and copy the `ghp_...` token
+
+### 3. Authenticate `gh` CLI with the bot identity
+
+```bash
+echo "ghp_YOUR_TOKEN_HERE" | gh auth login --user yourname-koan --with-token
+```
+
+No output means success. Verify both accounts are registered:
+
+```bash
+gh auth status
+```
+
+You should see both your personal account and the bot account:
+
+```
+github.com
+  ✓ Logged in to github.com account yourname-koan (keyring)
+  - Active account: true
+  - Token: ghp_****
+  - Token scopes: 'notifications', 'repo'
+
+  ✓ Logged in to github.com account yourname (keyring)
+  - Active account: false
+  - Token: gho_****
+```
+
+### 4. Invite the bot as a collaborator
+
+On each repository Kōan should work on:
+
+1. **Settings → Collaborators → Add people**
+2. Invite the bot account with **Write** access (or **Maintain** if you want it to merge PRs)
+3. Accept the invitation from the bot account
+
+### 5. Configure Kōan
+
+**In `.env`:**
+
+```bash
+GITHUB_USER=yourname-koan
+KOAN_EMAIL=yourname-koan@users.noreply.github.com
+```
+
+- `GITHUB_USER` tells Kōan which `gh` identity to use for API calls
+- `KOAN_EMAIL` sets the git author/committer on the bot's commits
+
+**In `instance/config.yaml`:**
+
+```yaml
+github:
+  nickname: "yourname-koan"        # The @mention name (must match the GitHub username)
+  commands_enabled: true            # Enable @mention commands
+  authorized_users: ["yourname"]   # Your personal account (who can command the bot)
+```
+
+**In `projects.yaml` (optional per-project override):**
+
+```yaml
+projects:
+  sensitive-repo:
+    path: "/path/to/sensitive-repo"
+    github:
+      authorized_users: ["alice", "bob"]  # Restrict who can command the bot on this repo
+```
+
+### 6. Verify the setup
+
+```bash
+# Confirm the bot identity resolves
+GH_TOKEN=$(gh auth token --user yourname-koan) gh api user --jq '.login'
+# → yourname-koan
+
+# Confirm notifications access (should return [] not 403)
+GH_TOKEN=$(gh auth token --user yourname-koan) gh api notifications
+# → []
+
+# Confirm repo access
+GH_TOKEN=$(gh auth token --user yourname-koan) gh api repos/OWNER/REPO/collaborators/yourname-koan/permission --jq '.permission'
+# → write (or admin/maintain)
+```
+
+### 7. Start Kōan
+
+```bash
+make start
+```
+
+You should see in the logs:
+
+```
+[init] GitHub CLI authenticated as yourname-koan
+```
+
+### How it works
+
+At startup, Kōan calls `gh auth token --user <GITHUB_USER>` to retrieve the bot's token and sets it as `GH_TOKEN` in the environment. All subsequent `gh` API calls use this token, so the bot operates under its own identity regardless of which `gh` account is "active" on your machine.
+
+During the sleep cycle between missions, Kōan polls the bot's GitHub notifications. When someone posts `@yourname-koan rebase` on a PR, the bot detects the mention, verifies the user's permissions, and queues a mission.
+
+See [docs/github-commands.md](docs/github-commands.md) for the full list of supported @mention commands and the security model.
 
 ## Troubleshooting
 
