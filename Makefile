@@ -5,6 +5,7 @@ export
 .PHONY: clean say migrate test sync-instance
 .PHONY: awake run errand-run errand-awake dashboard
 .PHONY: ollama logs
+.PHONY: docker-setup docker-up docker-down docker-logs docker-test
 
 PYTHON_BIN ?= python3
 
@@ -85,3 +86,21 @@ sync-instance:
 		fi; \
 	done
 	@echo "✓ instance/ synced with instance.example/"
+
+# --- Docker targets ---
+
+docker-setup:
+	@./setup-docker.sh
+
+docker-up: docker-setup
+	docker compose up --build -d
+	@echo "→ Kōan running in Docker. Use 'make docker-logs' to watch output."
+
+docker-down:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f
+
+docker-test:
+	docker compose run --rm koan test
