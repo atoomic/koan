@@ -994,7 +994,8 @@ def _run_iteration(
         except Exception as e:
             log("error", f"Reset time estimation failed: {e}")
         if reset_ts is None:
-            reset_ts = int(time.time()) + 5 * 3600  # fallback: now + 5h
+            from app.pause_manager import QUOTA_RETRY_SECONDS
+            reset_ts = int(time.time()) + QUOTA_RETRY_SECONDS
         from app.pause_manager import create_pause
         create_pause(koan_root, "quota", reset_ts, reset_display)
 
@@ -1009,6 +1010,44 @@ def _run_iteration(
             f"Auto-resume when session resets or use /resume."
         ))
         return
+
+    # --- Pre-flight quota check ---
+    if action in ("mission", "autonomous"):
+        try:
+            from app.preflight import preflight_quota_check
+            pf_ok, pf_error = preflight_quota_check(
+                project_path=project_path,
+                instance_dir=instance,
+                project_name=project_name,
+            )
+            if not pf_ok:
+                log("quota", "Pre-flight probe detected quota exhaustion")
+                # Try to extract reset time from probe output
+                pf_reset_ts = None
+                pf_reset_display = ""
+                try:
+                    from app.quota_handler import extract_reset_info, parse_reset_time, compute_resume_info
+                    reset_info = extract_reset_info(pf_error or "")
+                    pf_reset_ts, pf_reset_display = parse_reset_time(reset_info)
+                    pf_reset_ts, _ = compute_resume_info(pf_reset_ts, pf_reset_display)
+                except Exception as e:
+                    log("error", f"Pre-flight reset time extraction failed: {e}")
+                if pf_reset_ts is None:
+                    from app.pause_manager import QUOTA_RETRY_SECONDS
+                    pf_reset_ts = int(time.time()) + QUOTA_RETRY_SECONDS
+                from app.pause_manager import create_pause
+                create_pause(koan_root, "quota", pf_reset_ts, pf_reset_display)
+                label = plan["mission_title"] if plan["mission_title"] else "autonomous run"
+                _notify(instance, (
+                    f"⏸️ Pre-flight quota check failed before [{project_name}] {label}.\n"
+                    f"Pausing until quota resets. Use /resume to restart manually."
+                ))
+                # Mission stays In Progress — crash recovery will
+                # move it back to Pending on next startup.
+                return
+        except Exception as e:
+            log("error", f"Pre-flight quota check error: {e}")
+            # Proceed optimistically on error
 
     # --- Execute mission or autonomous run ---
     mission_title = plan["mission_title"]

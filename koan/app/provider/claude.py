@@ -1,6 +1,7 @@
 """Claude Code CLI provider implementation."""
 
-from typing import List, Optional
+import subprocess
+from typing import List, Optional, Tuple
 
 from app.provider.base import CLIProvider
 
@@ -52,3 +53,30 @@ class ClaudeProvider(CLIProvider):
         flags = ["--mcp-config"]
         flags.extend(configs)
         return flags
+
+    def check_quota_available(self, project_path: str, timeout: int = 15) -> Tuple[bool, str]:
+        """Check Claude API quota via ``claude usage`` (no tokens consumed).
+
+        Runs ``claude usage`` and checks the output for quota exhaustion
+        signals. Unlike a prompt-based probe, this costs zero tokens.
+        """
+        cmd = [self.binary(), "usage"]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=project_path,
+            )
+            combined = (result.stderr or "") + "\n" + (result.stdout or "")
+            from app.quota_handler import detect_quota_exhaustion
+            if detect_quota_exhaustion(combined):
+                return False, combined
+            return True, ""
+        except subprocess.TimeoutExpired:
+            # Timeout — proceed optimistically
+            return True, ""
+        except Exception:
+            # Non-quota error — proceed optimistically
+            return True, ""

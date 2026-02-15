@@ -1,7 +1,7 @@
 """Base class and constants for CLI provider abstraction."""
 
 import shutil
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +113,15 @@ class CLIProvider:
         cmd.extend(self.build_max_turns_args(max_turns))
         cmd.extend(self.build_mcp_args(mcp_configs))
         return cmd
+
+    def check_quota_available(self, project_path: str, timeout: int = 15) -> Tuple[bool, str]:
+        """Probe real API quota with a minimal CLI call.
+
+        Returns (available: bool, error_detail: str).
+        Base implementation returns (True, '') — no check needed
+        (e.g. local/ollama providers have no quota).
+        """
+        return True, ""
 
     def build_extra_flags(
         self,
