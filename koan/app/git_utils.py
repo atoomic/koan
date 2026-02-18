@@ -68,14 +68,18 @@ def run_git_strict(
     Raises:
         RuntimeError: If git exits with non-zero status.
     """
-    result = subprocess.run(
-        ["git"] + list(args),
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=cwd,
-    )
+    try:
+        result = subprocess.run(
+            ["git"] + list(args),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+        )
+    except subprocess.TimeoutExpired:
+        cmd_str = " ".join(["git"] + list(args))
+        raise RuntimeError(f"git timed out: {cmd_str} (timeout={timeout}s)")
     if result.returncode != 0:
         cmd_str = " ".join(["git"] + list(args))
         raise RuntimeError(f"git failed: {cmd_str} — {result.stderr[:200]}")

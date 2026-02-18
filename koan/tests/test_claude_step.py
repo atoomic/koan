@@ -140,9 +140,9 @@ class TestRebaseOntoTarget:
             ["git", "fetch", "origin", "main"], cwd="/project"
         )
 
-    @patch("app.cli_exec.subprocess.run")
+    @patch("app.git_utils.run_git")
     @patch("app.claude_step._run_git")
-    def test_origin_fails_upstream_succeeds(self, mock_git, mock_subprocess):
+    def test_origin_fails_upstream_succeeds(self, mock_git, mock_run_git):
         def side_effect(cmd, **kwargs):
             if "origin" in cmd:
                 raise RuntimeError("fetch failed")
@@ -152,25 +152,33 @@ class TestRebaseOntoTarget:
         result = _rebase_onto_target("main", "/project")
         assert result == "upstream"
 
-    @patch("app.cli_exec.subprocess.run")
+    @patch("app.git_utils.run_git")
     @patch("app.claude_step._run_git")
-    def test_both_fail_returns_none(self, mock_git, mock_subprocess):
+    def test_both_fail_returns_none(self, mock_git, mock_run_git):
         mock_git.side_effect = RuntimeError("fail")
         result = _rebase_onto_target("main", "/project")
         assert result is None
 
-    @patch("app.cli_exec.subprocess.run")
+    @patch("app.git_utils.run_git")
     @patch("app.claude_step._run_git")
-    def test_rebase_abort_called_on_failure(self, mock_git, mock_subprocess):
+    def test_rebase_abort_called_on_failure(self, mock_git, mock_run_git):
         mock_git.side_effect = RuntimeError("conflict")
         _rebase_onto_target("main", "/project")
-        # Should call rebase --abort for each failed remote
+        # Should call run_git("rebase", "--abort") for each failed remote
         abort_calls = [
-            c
-            for c in mock_subprocess.call_args_list
-            if "rebase" in c[0][0] and "--abort" in c[0][0]
+            c for c in mock_run_git.call_args_list
+            if c[0] == ("rebase", "--abort")
         ]
         assert len(abort_calls) == 2
+
+    @patch("app.git_utils.run_git")
+    @patch("app.claude_step._run_git")
+    def test_rebase_abort_uses_centralized_helper(self, mock_git, mock_run_git):
+        """Rebase abort should use run_git from git_utils, not raw subprocess."""
+        mock_git.side_effect = RuntimeError("conflict")
+        _rebase_onto_target("main", "/project")
+        # run_git (non-strict) is used for abort — it never raises
+        assert mock_run_git.call_count == 2
 
 
 # ---------- run_claude ----------
@@ -242,20 +250,16 @@ class TestCommitIfChanges:
     """Tests for commit_if_changes."""
 
     @patch("app.claude_step._run_git")
-    @patch("app.cli_exec.subprocess.run")
-    def test_no_changes_returns_false(self, mock_run, mock_git):
-        mock_run.return_value = MagicMock(stdout="", returncode=0)
+    @patch("app.git_utils.run_git", return_value=(0, "", ""))
+    def test_no_changes_returns_false(self, mock_run_git, mock_git):
         result = commit_if_changes("/project", "test msg")
         assert result is False
         # Should not call git add or commit
         mock_git.assert_not_called()
 
     @patch("app.claude_step._run_git")
-    @patch("app.cli_exec.subprocess.run")
-    def test_with_changes_commits(self, mock_run, mock_git):
-        mock_run.return_value = MagicMock(
-            stdout=" M file.py\n", returncode=0
-        )
+    @patch("app.git_utils.run_git", return_value=(0, " M file.py", ""))
+    def test_with_changes_commits(self, mock_run_git, mock_git):
         result = commit_if_changes("/project", "test msg")
         assert result is True
         assert mock_git.call_count == 2
@@ -265,11 +269,18 @@ class TestCommitIfChanges:
         )
 
     @patch("app.claude_step._run_git")
-    @patch("app.cli_exec.subprocess.run")
-    def test_whitespace_only_status_is_no_changes(self, mock_run, mock_git):
-        mock_run.return_value = MagicMock(stdout="   \n  ", returncode=0)
+    @patch("app.git_utils.run_git", return_value=(0, "   \n  ", ""))
+    def test_whitespace_only_status_is_no_changes(self, mock_run_git, mock_git):
         result = commit_if_changes("/project", "msg")
         assert result is False
+
+    @patch("app.claude_step._run_git")
+    @patch("app.git_utils.run_git")
+    def test_uses_centralized_git_helper(self, mock_run_git, mock_git):
+        """Verify commit_if_changes uses run_git from git_utils, not raw subprocess."""
+        mock_run_git.return_value = (0, " M file.py", "")
+        commit_if_changes("/project", "msg")
+        mock_run_git.assert_called_once_with("status", "--porcelain", cwd="/project")
 
 
 # ---------- run_claude_step ----------

@@ -140,10 +140,20 @@ class TestRunGitStrict:
         assert mock_run.call_args[1]["cwd"] == "/repo"
 
     @patch("app.git_utils.subprocess.run")
-    def test_timeout_raises(self, mock_run):
+    def test_timeout_raises_runtime_error(self, mock_run):
+        """TimeoutExpired is wrapped in RuntimeError for consistent caller handling."""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=60)
-        with pytest.raises(subprocess.TimeoutExpired):
+        with pytest.raises(RuntimeError, match="git timed out"):
             run_git_strict("fetch")
+
+    @patch("app.git_utils.subprocess.run")
+    def test_timeout_error_includes_command_and_duration(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=120)
+        with pytest.raises(RuntimeError) as exc_info:
+            run_git_strict("push", "origin", "main", timeout=120)
+        msg = str(exc_info.value)
+        assert "git push origin main" in msg
+        assert "timeout=120s" in msg
 
     @patch("app.git_utils.subprocess.run")
     def test_error_truncates_stderr(self, mock_run):

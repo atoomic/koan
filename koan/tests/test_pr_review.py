@@ -770,3 +770,116 @@ class TestRunPrReview:
         success, summary = run_pr_review("o", "r", "1", "/tmp/p", notify_fn=notify)
         assert success is True
         assert "fixed" in summary.lower() or "passing" in summary.lower()
+
+
+class TestRunPrReviewBranchRestore:
+    """Verify that run_pr_review restores the original branch after pipeline."""
+
+    @patch("app.pr_review._safe_checkout")
+    @patch("app.pr_review._get_current_branch", return_value="develop")
+    @patch("app.pr_review.fetch_pr_context")
+    def test_restores_branch_on_fetch_error(
+        self, mock_fetch, mock_branch, mock_checkout
+    ):
+        """When PR context fetch fails, original branch is NOT touched (early return)."""
+        mock_fetch.side_effect = RuntimeError("API error")
+        notify = MagicMock()
+        success, summary = run_pr_review("o", "r", "1", "/tmp/p", notify_fn=notify)
+        assert success is False
+        # Branch restore should not be called since we didn't checkout
+        mock_checkout.assert_not_called()
+
+    @patch("app.pr_review._safe_checkout")
+    @patch("app.pr_review._get_current_branch", return_value="develop")
+    @patch("app.pr_review._run_git")
+    @patch("app.pr_review.fetch_pr_context")
+    def test_restores_branch_on_checkout_failure(
+        self, mock_fetch, mock_git, mock_branch, mock_checkout
+    ):
+        """When checkout fails, restore original branch."""
+        mock_fetch.return_value = {
+            "title": "Fix", "body": "", "branch": "koan/fix",
+            "base": "main", "state": "OPEN", "author": "", "url": "",
+            "diff": "", "review_comments": "", "reviews": "",
+            "issue_comments": "",
+        }
+        mock_git.side_effect = RuntimeError("checkout failed")
+        notify = MagicMock()
+        success, summary = run_pr_review("o", "r", "1", "/tmp/p", notify_fn=notify)
+        assert success is False
+        # Should restore original branch
+        mock_checkout.assert_called_with("develop", "/tmp/p")
+
+    @patch("app.pr_review._safe_checkout")
+    @patch("app.pr_review._get_current_branch", return_value="develop")
+    @patch("app.pr_review.detect_skills", return_value=(None, None))
+    @patch("app.pr_review.detect_test_command", return_value=None)
+    @patch("app.pr_review.run_gh")
+    @patch("app.pr_review._run_git")
+    @patch("app.claude_step.run_claude")
+    @patch("app.claude_step.commit_if_changes")
+    @patch("app.claude_step._run_git")
+    @patch("app.claude_step.get_model_config")
+    @patch("app.claude_step.build_full_command", return_value=["c", "-p", "t"])
+    @patch("app.rebase_pr.run_gh")
+    def test_restores_branch_on_success(
+        self, mock_rb_gh, mock_cmd, mock_models, mock_cs_git, mock_commit,
+        mock_claude, mock_git, mock_gh, mock_test, mock_skills,
+        mock_branch, mock_checkout
+    ):
+        """After successful pipeline, restore original branch."""
+        mock_models.return_value = {"mission": "", "fallback": "sonnet"}
+        mock_rb_gh.side_effect = [
+            json.dumps({
+                "title": "Fix", "body": "", "headRefName": "koan/fix",
+                "baseRefName": "main", "state": "OPEN",
+                "author": {"login": "dev"},
+                "url": "https://github.com/o/r/pull/1",
+            }),
+            "diff", "comment", "review", "thread",
+        ]
+        mock_claude.return_value = {"success": True, "output": "OK", "error": ""}
+        mock_commit.return_value = True
+        notify = MagicMock()
+        success, _ = run_pr_review("o", "r", "1", "/tmp/p", notify_fn=notify)
+        assert success is True
+        # finally block always restores
+        mock_checkout.assert_called_with("develop", "/tmp/p")
+
+    @patch("app.pr_review._safe_checkout")
+    @patch("app.pr_review._get_current_branch", return_value="main")
+    @patch("app.pr_review.detect_skills", return_value=(None, None))
+    @patch("app.pr_review.detect_test_command", return_value=None)
+    @patch("app.pr_review.run_gh")
+    @patch("app.pr_review._run_git")
+    @patch("app.pr_review._rebase_onto_target", return_value="origin")
+    @patch("app.rebase_pr.run_gh")
+    def test_restores_branch_on_push_failure(
+        self, mock_rb_gh, mock_rebase, mock_git, mock_gh,
+        mock_test, mock_skills, mock_branch, mock_checkout
+    ):
+        """When push fails, restore original branch via finally."""
+        mock_rb_gh.side_effect = [
+            json.dumps({
+                "title": "X", "body": "", "headRefName": "koan/x",
+                "baseRefName": "main", "state": "OPEN",
+                "author": {"login": "dev"},
+                "url": "https://github.com/o/r/pull/1",
+            }),
+            "diff", "", "", "",
+        ]
+        # Make push (the last _run_git call) fail
+        call_count = [0]
+        def git_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            cmd = args[0] if args else kwargs.get("cmd", [])
+            if isinstance(cmd, list) and "push" in cmd:
+                raise RuntimeError("push permission denied")
+            return ""
+        mock_git.side_effect = git_side_effect
+        notify = MagicMock()
+        success, summary = run_pr_review("o", "r", "1", "/tmp/p", notify_fn=notify)
+        assert success is False
+        assert "Push failed" in summary
+        # finally block always restores
+        mock_checkout.assert_called_with("main", "/tmp/p")

@@ -20,8 +20,10 @@ from pathlib import Path
 from typing import Optional, Tuple, List
 
 from app.claude_step import (
+    _get_current_branch,
     _run_git,
     _rebase_onto_target,
+    _safe_checkout,
     run_claude_step as _run_claude_step,
 )
 from app.github import run_gh
@@ -227,139 +229,144 @@ def run_pr_review(
     base = context["base"]
 
     # ── Step 2: Checkout and rebase onto target branch ────────────────
+    original_branch = _get_current_branch(project_path)
     notify_fn(f"Rebasing `{branch}` onto `{base}`...")
     try:
         _run_git(["git", "fetch", "origin", branch], cwd=project_path)
         _run_git(["git", "checkout", branch], cwd=project_path)
         _run_git(["git", "pull", "origin", branch, "--rebase"], cwd=project_path)
     except Exception as e:
+        _safe_checkout(original_branch, project_path)
         return False, f"Failed to checkout branch {branch}: {e}"
 
-    # Rebase onto the upstream target branch (tries origin, then upstream)
-    rebase_remote = _rebase_onto_target(base, project_path)
-    if rebase_remote:
-        actions_log.append(f"Rebased `{branch}` onto `{rebase_remote}/{base}`")
-    else:
-        return False, f"Rebase conflict on {base} (tried origin and upstream)"
-
-    # ── Step 3: Address review feedback via Claude Code ───────────────
-    has_review_feedback = bool(
-        context["review_comments"].strip()
-        or context["reviews"].strip()
-        or context["issue_comments"].strip()
-    )
-
-    if has_review_feedback:
-        notify_fn(f"Addressing review comments on `{branch}`...")
-        _run_claude_step(
-            prompt=build_pr_prompt(context, skill_dir=skill_dir),
-            project_path=project_path,
-            commit_msg=f"pr-review: address feedback on #{pr_number}",
-            success_label="Addressed reviewer feedback",
-            failure_label="Review feedback step failed",
-            actions_log=actions_log,
-            max_turns=30,
-        )
-
-    # ── Step 4: Refactor pass ─────────────────────────────────────────
-    refactor_skill, review_skill = detect_skills(project_path)
-
-    if refactor_skill:
-        notify_fn(f"Running refactor pass ({refactor_skill})...")
-        _run_claude_step(
-            prompt=build_refactor_prompt(project_path, refactor_skill, skill_dir=skill_dir),
-            project_path=project_path,
-            commit_msg=f"refactor: apply refactoring pass on #{pr_number}",
-            success_label=f"Applied refactoring via `{refactor_skill}`",
-            failure_label="Refactor step skipped",
-            actions_log=actions_log,
-            use_skill=True,
-        )
-
-    # ── Step 5: Quality review pass ───────────────────────────────────
-    if review_skill:
-        notify_fn(f"Running quality review pass ({review_skill})...")
-        _run_claude_step(
-            prompt=build_quality_review_prompt(project_path, review_skill, skill_dir=skill_dir),
-            project_path=project_path,
-            commit_msg=f"review: apply quality improvements on #{pr_number}",
-            success_label=f"Applied quality review via `{review_skill}`",
-            failure_label="Quality review step skipped",
-            actions_log=actions_log,
-            use_skill=True,
-        )
-
-    # ── Step 6: Run tests ─────────────────────────────────────────────
-    test_cmd = detect_test_command(project_path)
-    if test_cmd:
-        notify_fn("Running tests...")
-        test_result = _run_tests(test_cmd, project_path)
-        if test_result["passed"]:
-            actions_log.append(
-                f"Tests passing ({test_result.get('details', 'OK')})"
-            )
+    try:
+        # Rebase onto the upstream target branch (tries origin, then upstream)
+        rebase_remote = _rebase_onto_target(base, project_path)
+        if rebase_remote:
+            actions_log.append(f"Rebased `{branch}` onto `{rebase_remote}/{base}`")
         else:
-            # Try to fix failing tests via Claude
-            notify_fn("Tests failing — attempting fix...")
-            fix_prompt = (
-                f"The test suite is failing after PR changes. "
-                f"Test command: `{test_cmd}`\n\n"
-                f"Test output:\n```\n{test_result.get('output', '')[:3000]}\n```\n\n"
-                f"Fix the failing tests. Only modify what's necessary."
-            )
+            return False, f"Rebase conflict on {base} (tried origin and upstream)"
+
+        # ── Step 3: Address review feedback via Claude Code ───────────────
+        has_review_feedback = bool(
+            context["review_comments"].strip()
+            or context["reviews"].strip()
+            or context["issue_comments"].strip()
+        )
+
+        if has_review_feedback:
+            notify_fn(f"Addressing review comments on `{branch}`...")
             _run_claude_step(
-                prompt=fix_prompt,
+                prompt=build_pr_prompt(context, skill_dir=skill_dir),
                 project_path=project_path,
-                commit_msg=f"fix: repair tests after PR #{pr_number} changes",
-                success_label="",  # handled below via retest
-                failure_label="",
-                actions_log=[],  # discard — we log based on retest below
-                max_turns=15,
-                timeout=300,
+                commit_msg=f"pr-review: address feedback on #{pr_number}",
+                success_label="Addressed reviewer feedback",
+                failure_label="Review feedback step failed",
+                actions_log=actions_log,
+                max_turns=30,
             )
 
-            # Re-run tests to confirm
-            retest = _run_tests(test_cmd, project_path)
-            if retest["passed"]:
-                actions_log.append("Tests fixed and passing")
-            else:
+        # ── Step 4: Refactor pass ─────────────────────────────────────────
+        refactor_skill, review_skill = detect_skills(project_path)
+
+        if refactor_skill:
+            notify_fn(f"Running refactor pass ({refactor_skill})...")
+            _run_claude_step(
+                prompt=build_refactor_prompt(project_path, refactor_skill, skill_dir=skill_dir),
+                project_path=project_path,
+                commit_msg=f"refactor: apply refactoring pass on #{pr_number}",
+                success_label=f"Applied refactoring via `{refactor_skill}`",
+                failure_label="Refactor step skipped",
+                actions_log=actions_log,
+                use_skill=True,
+            )
+
+        # ── Step 5: Quality review pass ───────────────────────────────────
+        if review_skill:
+            notify_fn(f"Running quality review pass ({review_skill})...")
+            _run_claude_step(
+                prompt=build_quality_review_prompt(project_path, review_skill, skill_dir=skill_dir),
+                project_path=project_path,
+                commit_msg=f"review: apply quality improvements on #{pr_number}",
+                success_label=f"Applied quality review via `{review_skill}`",
+                failure_label="Quality review step skipped",
+                actions_log=actions_log,
+                use_skill=True,
+            )
+
+        # ── Step 6: Run tests ─────────────────────────────────────────────
+        test_cmd = detect_test_command(project_path)
+        if test_cmd:
+            notify_fn("Running tests...")
+            test_result = _run_tests(test_cmd, project_path)
+            if test_result["passed"]:
                 actions_log.append(
-                    f"Tests still failing: {retest.get('details', 'unknown')}"
+                    f"Tests passing ({test_result.get('details', 'OK')})"
+                )
+            else:
+                # Try to fix failing tests via Claude
+                notify_fn("Tests failing — attempting fix...")
+                fix_prompt = (
+                    f"The test suite is failing after PR changes. "
+                    f"Test command: `{test_cmd}`\n\n"
+                    f"Test output:\n```\n{test_result.get('output', '')[:3000]}\n```\n\n"
+                    f"Fix the failing tests. Only modify what's necessary."
+                )
+                _run_claude_step(
+                    prompt=fix_prompt,
+                    project_path=project_path,
+                    commit_msg=f"fix: repair tests after PR #{pr_number} changes",
+                    success_label="",  # handled below via retest
+                    failure_label="",
+                    actions_log=[],  # discard — we log based on retest below
+                    max_turns=15,
+                    timeout=300,
                 )
 
-    # ── Step 7: Force-push ────────────────────────────────────────────
-    notify_fn(f"Pushing `{branch}`...")
-    try:
-        _run_git(
-            ["git", "push", "origin", branch, "--force-with-lease"],
-            cwd=project_path,
+                # Re-run tests to confirm
+                retest = _run_tests(test_cmd, project_path)
+                if retest["passed"]:
+                    actions_log.append("Tests fixed and passing")
+                else:
+                    actions_log.append(
+                        f"Tests still failing: {retest.get('details', 'unknown')}"
+                    )
+
+        # ── Step 7: Force-push ────────────────────────────────────────────
+        notify_fn(f"Pushing `{branch}`...")
+        try:
+            _run_git(
+                ["git", "push", "origin", branch, "--force-with-lease"],
+                cwd=project_path,
+            )
+            actions_log.append(f"Force-pushed `{branch}`")
+        except Exception as e:
+            return False, f"Push failed: {e}\n\nActions completed before failure:\n" + "\n".join(
+                f"- {a}" for a in actions_log
+            )
+
+        # ── Step 8: Comment on PR ─────────────────────────────────────────
+        comment_body = _build_pr_comment(
+            pr_number, branch, base, actions_log, context
         )
-        actions_log.append(f"Force-pushed `{branch}`")
-    except Exception as e:
-        return False, f"Push failed: {e}\n\nActions completed before failure:\n" + "\n".join(
+
+        try:
+            run_gh(
+                "pr", "comment", pr_number,
+                "--repo", full_repo,
+                "--body", comment_body,
+            )
+            actions_log.append("Commented on PR")
+        except Exception as e:
+            # Non-fatal
+            notify_fn(f"Changes pushed but failed to comment on PR: {e}")
+
+        summary = f"PR #{pr_number} updated.\n" + "\n".join(
             f"- {a}" for a in actions_log
         )
-
-    # ── Step 8: Comment on PR ─────────────────────────────────────────
-    comment_body = _build_pr_comment(
-        pr_number, branch, base, actions_log, context
-    )
-
-    try:
-        run_gh(
-            "pr", "comment", pr_number,
-            "--repo", full_repo,
-            "--body", comment_body,
-        )
-        actions_log.append("Commented on PR")
-    except Exception as e:
-        # Non-fatal
-        notify_fn(f"Changes pushed but failed to comment on PR: {e}")
-
-    summary = f"PR #{pr_number} updated.\n" + "\n".join(
-        f"- {a}" for a in actions_log
-    )
-    return True, summary
+        return True, summary
+    finally:
+        _safe_checkout(original_branch, project_path)
 
 
 # ---------------------------------------------------------------------------

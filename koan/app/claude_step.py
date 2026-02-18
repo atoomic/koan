@@ -48,11 +48,8 @@ def _rebase_onto_target(base: str, project_path: str) -> Optional[str]:
             )
             return remote
         except Exception:
-            subprocess.run(
-                ["git", "rebase", "--abort"],
-                stdin=subprocess.DEVNULL,
-                capture_output=True, cwd=project_path,
-            )
+            from app.git_utils import run_git
+            run_git("rebase", "--abort", cwd=project_path)
     return None
 
 
@@ -117,11 +114,9 @@ def commit_if_changes(project_path: str, message: str) -> bool:
 
     Returns True if a commit was created.
     """
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True, text=True, cwd=project_path,
-    )
-    if not status.stdout.strip():
+    from app.git_utils import run_git
+    rc, stdout, _ = run_git("status", "--porcelain", cwd=project_path)
+    if not stdout.strip():
         return False
 
     _run_git(["git", "add", "-A"], cwd=project_path)
