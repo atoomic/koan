@@ -473,7 +473,7 @@ def _detect_provider(koan_root: Path) -> str:
     """Detect the configured CLI provider.
 
     Uses the provider package resolution (env var > config.yaml > default).
-    Returns provider name: "claude", "copilot", "local", or "ollama".
+    Returns provider name: "claude", "copilot", "local", "ollama", or "ollama-claude".
     """
     try:
         # Lazy import to avoid circular deps and keep pid_manager lightweight

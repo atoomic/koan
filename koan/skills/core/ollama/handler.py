@@ -69,9 +69,15 @@ def handle(ctx):
 
     # Show configured model
     try:
-        from app.provider.local import LocalLLMProvider
-        p = LocalLLMProvider()
-        configured = p._get_default_model()
+        configured = None
+        if provider == "ollama-claude":
+            from app.provider.ollama_claude import OllamaClaudeProvider
+            p = OllamaClaudeProvider()
+            configured = p._get_model()
+        else:
+            from app.provider.local import LocalLLMProvider
+            p = LocalLLMProvider()
+            configured = p._get_default_model()
         if configured:
             from app.ollama_client import is_model_available
             available = is_model_available(configured)
