@@ -390,6 +390,21 @@ class TestCheckServerAndModel:
             check_server_and_model("model", base_url="http://gpu:11434/v1")
             mock_ready.assert_called_once_with(base_url="http://gpu:11434/v1", timeout=5.0)
 
+    def test_server_not_responding_default_host_shows_hint(self):
+        """When using default host, error includes config variable hints."""
+        with patch("app.ollama_client.is_server_ready", return_value=False):
+            ok, detail = check_server_and_model("model")
+            assert ok is False
+            assert "OLLAMA_HOST" in detail or "KOAN_LOCAL_LLM_BASE_URL" in detail
+
+    def test_server_not_responding_custom_host_no_hint(self):
+        """When using explicit base_url, error doesn't suggest env vars."""
+        with patch("app.ollama_client.is_server_ready", return_value=False):
+            ok, detail = check_server_and_model("model", base_url="http://gpu:11434/v1")
+            assert ok is False
+            assert "gpu:11434" in detail
+            assert "OLLAMA_HOST" not in detail
+
 
 # ---------------------------------------------------------------------------
 # Format model list
@@ -492,6 +507,32 @@ class TestLocalProviderIntegration:
             ok, detail = provider.check_quota_available("/tmp/project")
             assert ok is False
             assert "not found" in detail
+
+    def test_is_available_logs_no_model(self, caplog):
+        """is_available() logs why it returns False when no model configured."""
+        import logging
+        from app.provider.local import LocalLLMProvider
+
+        provider = LocalLLMProvider()
+        with patch.dict("os.environ", {}, clear=True), \
+             patch("app.utils.load_config", return_value={}), \
+             caplog.at_level(logging.DEBUG, logger="koan.provider"):
+            result = provider.is_available()
+            assert result is False
+            assert "no model configured" in caplog.text
+
+    def test_is_available_logs_server_down(self, caplog):
+        """is_available() logs why it returns False when server is unreachable."""
+        import logging
+        from app.provider.local import LocalLLMProvider
+
+        provider = LocalLLMProvider()
+        with patch.dict("os.environ", {"KOAN_LOCAL_LLM_MODEL": "test-model"}), \
+             patch("app.ollama_client.is_server_ready", return_value=False), \
+             caplog.at_level(logging.DEBUG, logger="koan.provider"):
+            result = provider.is_available()
+            assert result is False
+            assert "not responding" in caplog.text
 
 
 # ---------------------------------------------------------------------------

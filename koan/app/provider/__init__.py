@@ -43,6 +43,7 @@ _PROVIDERS = {
     "claude": ClaudeProvider,
     "copilot": CopilotProvider,
     "local": LocalLLMProvider,
+    "ollama": LocalLLMProvider,
 }
 
 # Cached provider instance (reset with reset_provider() in tests)

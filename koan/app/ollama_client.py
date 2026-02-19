@@ -212,7 +212,8 @@ def check_server_and_model(
     host = _get_ollama_host(base_url)
 
     if not is_server_ready(base_url=base_url, timeout=timeout):
-        return False, f"Ollama server not responding at {host}"
+        hint = " (check OLLAMA_HOST or KOAN_LOCAL_LLM_BASE_URL)" if host == DEFAULT_OLLAMA_HOST else ""
+        return False, f"Ollama server not responding at {host}{hint}"
 
     if not model_name:
         return False, "No model configured (set KOAN_LOCAL_LLM_MODEL or local_llm.model in config.yaml)"

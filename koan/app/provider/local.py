@@ -68,11 +68,22 @@ class LocalLLMProvider(CLIProvider):
         1. A model name is configured
         2. The Ollama server is responding
         """
+        import logging
         model = self._get_default_model()
         if not model:
+            logging.getLogger("koan.provider").debug(
+                "local provider unavailable: no model configured "
+                "(set KOAN_LOCAL_LLM_MODEL or local_llm.model in config.yaml)"
+            )
             return False
         from app.ollama_client import is_server_ready
-        return is_server_ready(base_url=self._get_base_url(), timeout=2.0)
+        base_url = self._get_base_url()
+        ready = is_server_ready(base_url=base_url, timeout=2.0)
+        if not ready:
+            logging.getLogger("koan.provider").debug(
+                "local provider unavailable: Ollama server not responding at %s", base_url
+            )
+        return ready
 
     def build_prompt_args(self, prompt: str) -> List[str]:
         return ["-m", "app.local_llm_runner", "-p", prompt]

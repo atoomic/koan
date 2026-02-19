@@ -446,6 +446,66 @@ class TestProviderResolution:
         os.environ.pop("CLI_PROVIDER", None)
         assert get_provider_name() == "claude"
 
+    @patch.dict("os.environ", {"KOAN_CLI_PROVIDER": "ollama"})
+    def test_env_var_ollama(self):
+        """'ollama' is a recognized provider alias for LocalLLMProvider."""
+        assert get_provider_name() == "ollama"
+
+    @patch.dict("os.environ", {"KOAN_CLI_PROVIDER": "ollama"})
+    def test_get_provider_returns_local_for_ollama(self):
+        """'ollama' provider resolves to LocalLLMProvider instance."""
+        provider = get_provider()
+        assert isinstance(provider, LocalLLMProvider)
+
+    @patch.dict("os.environ", {}, clear=False)
+    @patch("app.utils.load_config", return_value={"cli_provider": "ollama"})
+    def test_config_yaml_ollama(self, mock_config):
+        """'ollama' in config.yaml is recognized."""
+        import os
+        os.environ.pop("KOAN_CLI_PROVIDER", None)
+        assert get_provider_name() == "ollama"
+
+
+# ---------------------------------------------------------------------------
+# Ollama provider alias
+# ---------------------------------------------------------------------------
+
+class TestOllamaProviderAlias:
+    """Tests for 'ollama' as an alias for LocalLLMProvider."""
+
+    def setup_method(self):
+        reset_provider()
+
+    def teardown_method(self):
+        reset_provider()
+
+    def test_ollama_in_registry(self):
+        """'ollama' should be a registered provider name."""
+        from app.provider import _PROVIDERS
+        assert "ollama" in _PROVIDERS
+        assert _PROVIDERS["ollama"] is LocalLLMProvider
+
+    @patch.dict("os.environ", {"KOAN_CLI_PROVIDER": "ollama"})
+    def test_ollama_builds_local_commands(self):
+        """Provider 'ollama' builds same commands as 'local'."""
+        from app.provider import _PROVIDERS
+        local = _PROVIDERS["local"]()
+        ollama = _PROVIDERS["ollama"]()
+        # Both use sys.executable as binary
+        assert local.binary() == ollama.binary()
+
+    @patch.dict("os.environ", {
+        "KOAN_CLI_PROVIDER": "ollama",
+        "KOAN_LOCAL_LLM_MODEL": "qwen2.5",
+        "KOAN_LOCAL_LLM_BASE_URL": "http://localhost:11434/v1",
+    })
+    def test_ollama_build_full_command(self):
+        """build_full_command works correctly with 'ollama' provider."""
+        cmd = build_full_command(prompt="test prompt", max_turns=5)
+        assert "-p" in cmd
+        assert "test prompt" in cmd
+        assert "--base-url" in cmd
+
 
 # ---------------------------------------------------------------------------
 # Module-level convenience functions
