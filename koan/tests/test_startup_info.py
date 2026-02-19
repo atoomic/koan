@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from app.startup_info import (
+    _get_configured_model,
     _get_file_size,
     _get_messaging_provider,
     _get_ollama_summary,
@@ -119,6 +120,7 @@ class TestGetMessagingProvider:
 
 
 class TestGetOllamaSummary:
+    @patch("app.startup_info._get_configured_model", return_value="")
     @patch("app.ollama_client.is_server_ready", return_value=True)
     @patch("app.ollama_client.get_version", return_value="0.16.0")
     @patch("app.ollama_client.list_models", return_value=[
@@ -133,6 +135,7 @@ class TestGetOllamaSummary:
     def test_not_responding(self, _):
         assert _get_ollama_summary() == "not responding"
 
+    @patch("app.startup_info._get_configured_model", return_value="")
     @patch("app.ollama_client.is_server_ready", return_value=True)
     @patch("app.ollama_client.get_version", return_value=None)
     @patch("app.ollama_client.list_models", return_value=[])
@@ -144,6 +147,7 @@ class TestGetOllamaSummary:
     def test_error_returns_unavailable(self, _):
         assert _get_ollama_summary() == "unavailable"
 
+    @patch("app.startup_info._get_configured_model", return_value="")
     @patch("app.ollama_client.is_server_ready", return_value=True)
     @patch("app.ollama_client.get_version", return_value="0.15.0")
     @patch("app.ollama_client.list_models", return_value=[{"name": "a:latest"}])
@@ -151,6 +155,56 @@ class TestGetOllamaSummary:
         result = _get_ollama_summary()
         assert "1 model" in result
         assert "models" not in result
+
+    @patch("app.startup_info._get_configured_model", return_value="qwen2.5-coder:14b")
+    @patch("app.ollama_client.is_model_available", return_value=True)
+    @patch("app.ollama_client.is_server_ready", return_value=True)
+    @patch("app.ollama_client.get_version", return_value="0.16.0")
+    @patch("app.ollama_client.list_models", return_value=[{"name": "qwen2.5-coder:14b"}])
+    def test_shows_configured_model_ready(self, *_):
+        result = _get_ollama_summary()
+        assert "qwen2.5-coder:14b" in result
+        assert "ready" in result
+
+    @patch("app.startup_info._get_configured_model", return_value="llama3.3")
+    @patch("app.ollama_client.is_model_available", return_value=False)
+    @patch("app.ollama_client.is_server_ready", return_value=True)
+    @patch("app.ollama_client.get_version", return_value="0.16.0")
+    @patch("app.ollama_client.list_models", return_value=[])
+    def test_shows_configured_model_not_pulled(self, *_):
+        result = _get_ollama_summary()
+        assert "llama3.3" in result
+        assert "not pulled" in result
+
+
+class TestGetConfiguredModel:
+    def test_ollama_claude_provider(self, monkeypatch):
+        monkeypatch.setenv("KOAN_CLI_PROVIDER", "ollama-claude")
+        with patch("app.provider.ollama_claude.OllamaClaudeProvider._get_model",
+                   return_value="llama3.3"):
+            assert _get_configured_model() == "llama3.3"
+
+    def test_local_provider(self, monkeypatch):
+        monkeypatch.setenv("KOAN_CLI_PROVIDER", "local")
+        with patch("app.provider.local.LocalLLMProvider._get_default_model",
+                   return_value="qwen2.5-coder:14b"):
+            assert _get_configured_model() == "qwen2.5-coder:14b"
+
+    def test_ollama_provider(self, monkeypatch):
+        monkeypatch.setenv("KOAN_CLI_PROVIDER", "ollama")
+        with patch("app.provider.local.LocalLLMProvider._get_default_model",
+                   return_value="llama3.2"):
+            assert _get_configured_model() == "llama3.2"
+
+    def test_claude_provider_returns_empty(self, monkeypatch):
+        monkeypatch.setenv("KOAN_CLI_PROVIDER", "claude")
+        assert _get_configured_model() == ""
+
+    def test_exception_returns_empty(self, monkeypatch):
+        monkeypatch.setenv("KOAN_CLI_PROVIDER", "ollama-claude")
+        with patch("app.provider.ollama_claude.OllamaClaudeProvider._get_model",
+                   side_effect=Exception("no config")):
+            assert _get_configured_model() == ""
 
 
 class TestGatherStartupInfo:

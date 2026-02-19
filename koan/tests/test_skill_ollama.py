@@ -86,6 +86,36 @@ class TestFormatSize:
 
 
 # ---------------------------------------------------------------------------
+# handle — help subcommand
+# ---------------------------------------------------------------------------
+
+class TestHandleHelp:
+    def test_help_shows_commands(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="help")
+        result = handle(ctx)
+        assert "/ollama list" in result
+        assert "/ollama pull" in result
+        assert "/ollama rm" in result
+
+    def test_help_flag(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="-h")
+        result = handle(ctx)
+        assert "Ollama management" in result
+
+    def test_help_double_dash(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="--help")
+        result = handle(ctx)
+        assert "/llama" in result  # mentions alias
+
+    def test_help_does_not_check_provider(self, koan_root, instance_dir):
+        """Help should work regardless of provider — no provider check needed."""
+        ctx = _make_ctx(koan_root, instance_dir, args="help")
+        # No patches needed — help doesn't call _check_provider
+        result = handle(ctx)
+        assert "not active" not in result
+
+
+# ---------------------------------------------------------------------------
 # handle — provider check
 # ---------------------------------------------------------------------------
 
@@ -268,7 +298,7 @@ class TestHandlePull:
         with patch("app.provider.get_provider_name", return_value="local"), \
              patch("app.ollama_client.is_server_ready", return_value=True), \
              patch("app.ollama_client.is_model_available", return_value=False), \
-             patch("app.ollama_client.pull_model", return_value=(True, "success")):
+             patch("app.ollama_client.pull_model_streaming", return_value=(True, "success")):
             result = handle(ctx)
         assert "pulled successfully" in result
 
@@ -277,7 +307,7 @@ class TestHandlePull:
         with patch("app.provider.get_provider_name", return_value="local"), \
              patch("app.ollama_client.is_server_ready", return_value=True), \
              patch("app.ollama_client.is_model_available", return_value=False), \
-             patch("app.ollama_client.pull_model",
+             patch("app.ollama_client.pull_model_streaming",
                    return_value=(False, "model not found")):
             result = handle(ctx)
         assert "Failed" in result
@@ -288,7 +318,7 @@ class TestHandlePull:
         with patch("app.provider.get_provider_name", return_value="ollama"), \
              patch("app.ollama_client.is_server_ready", return_value=True), \
              patch("app.ollama_client.is_model_available", return_value=False), \
-             patch("app.ollama_client.pull_model", return_value=(True, "success")):
+             patch("app.ollama_client.pull_model_streaming", return_value=(True, "success")):
             result = handle(ctx)
         assert "pulled successfully" in result
 
@@ -297,7 +327,7 @@ class TestHandlePull:
         with patch("app.provider.get_provider_name", return_value="ollama-claude"), \
              patch("app.ollama_client.is_server_ready", return_value=True), \
              patch("app.ollama_client.is_model_available", return_value=False), \
-             patch("app.ollama_client.pull_model", return_value=(True, "success")):
+             patch("app.ollama_client.pull_model_streaming", return_value=(True, "success")):
             result = handle(ctx)
         assert "pulled successfully" in result
 
@@ -306,6 +336,170 @@ class TestHandlePull:
         with patch("app.provider.get_provider_name", return_value="local"), \
              patch("app.ollama_client.is_server_ready", return_value=True), \
              patch("app.ollama_client.is_model_available", return_value=False), \
-             patch("app.ollama_client.pull_model", return_value=(True, "success")):
+             patch("app.ollama_client.pull_model_streaming", return_value=(True, "success")):
             result = handle(ctx)
         assert "pulled successfully" in result
+
+    def test_pull_uses_streaming(self, koan_root, instance_dir):
+        """Pull now uses pull_model_streaming instead of pull_model."""
+        ctx = _make_ctx(koan_root, instance_dir, args="pull llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False), \
+             patch("app.ollama_client.pull_model_streaming",
+                   return_value=(True, "success")) as mock_pull:
+            result = handle(ctx)
+        mock_pull.assert_called_once()
+        assert "pulled successfully" in result
+
+
+# ---------------------------------------------------------------------------
+# handle — /ollama remove subcommand
+# ---------------------------------------------------------------------------
+
+class TestHandleRemove:
+    """Tests for /ollama remove <model> subcommand."""
+
+    def test_remove_no_model_shows_usage(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="remove")
+        result = handle(ctx)
+        assert "Usage" in result
+        assert "/ollama remove" in result
+
+    def test_rm_alias_no_model_shows_usage(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="rm")
+        result = handle(ctx)
+        assert "Usage" in result
+
+    def test_remove_wrong_provider(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="remove llama3.3")
+        with patch("app.provider.get_provider_name", return_value="claude"):
+            result = handle(ctx)
+        assert "not active" in result
+
+    def test_remove_server_not_responding(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="remove llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=False):
+            result = handle(ctx)
+        assert "not responding" in result
+
+    def test_remove_success(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="remove llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.get_model_info",
+                   return_value={"size": 5 * 1024 ** 3}), \
+             patch("app.ollama_client.delete_model",
+                   return_value=(True, "deleted")):
+            result = handle(ctx)
+        assert "removed" in result
+        assert "llama3.3" in result
+
+    def test_remove_shows_size(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="remove llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.get_model_info",
+                   return_value={"size": 5 * 1024 ** 3}), \
+             patch("app.ollama_client.delete_model",
+                   return_value=(True, "deleted")):
+            result = handle(ctx)
+        assert "5.0GB" in result
+
+    def test_remove_failure(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="remove nonexistent")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.get_model_info", return_value=None), \
+             patch("app.ollama_client.delete_model",
+                   return_value=(False, "not found locally")):
+            result = handle(ctx)
+        assert "Failed" in result
+        assert "not found" in result
+
+    def test_rm_alias_works(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="rm llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.get_model_info", return_value=None), \
+             patch("app.ollama_client.delete_model",
+                   return_value=(True, "deleted")):
+            result = handle(ctx)
+        assert "removed" in result
+
+    def test_remove_with_ollama_claude(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="remove test-model")
+        with patch("app.provider.get_provider_name", return_value="ollama-claude"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.get_model_info", return_value=None), \
+             patch("app.ollama_client.delete_model",
+                   return_value=(True, "deleted")):
+            result = handle(ctx)
+        assert "removed" in result
+
+
+# ---------------------------------------------------------------------------
+# handle — /ollama list subcommand
+# ---------------------------------------------------------------------------
+
+class TestHandleList:
+    """Tests for /ollama list subcommand."""
+
+    def test_list_wrong_provider(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="list")
+        with patch("app.provider.get_provider_name", return_value="claude"):
+            result = handle(ctx)
+        assert "not active" in result
+
+    def test_list_server_not_responding(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="list")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=False):
+            result = handle(ctx)
+        assert "not responding" in result
+
+    def test_list_no_models(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="list")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.list_models", return_value=[]):
+            result = handle(ctx)
+        assert "No models available" in result
+        assert "/ollama pull" in result
+
+    def test_list_shows_models(self, koan_root, instance_dir):
+        models = [
+            {"name": "qwen2.5-coder:14b", "size": 9 * 1024 ** 3,
+             "details": {"parameter_size": "14B", "quantization_level": "Q4_K_M"}},
+            {"name": "llama3.2:latest", "size": 2 * 1024 ** 3,
+             "details": {"parameter_size": "3B", "quantization_level": "Q8_0"}},
+        ]
+        ctx = _make_ctx(koan_root, instance_dir, args="list")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.list_models", return_value=models):
+            result = handle(ctx)
+        assert "Models (2)" in result
+        assert "qwen2.5-coder:14b" in result
+        assert "llama3.2:latest" in result
+        # Should NOT include server version or running models
+        assert "running" not in result.lower()
+
+    def test_ls_alias_works(self, koan_root, instance_dir):
+        models = [{"name": "test:latest", "size": 1024 ** 3, "details": {}}]
+        ctx = _make_ctx(koan_root, instance_dir, args="ls")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.list_models", return_value=models):
+            result = handle(ctx)
+        assert "Models (1)" in result
+
+    def test_models_alias_works(self, koan_root, instance_dir):
+        models = [{"name": "test:latest", "size": 1024 ** 3, "details": {}}]
+        ctx = _make_ctx(koan_root, instance_dir, args="models")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.list_models", return_value=models):
+            result = handle(ctx)
+        assert "Models (1)" in result

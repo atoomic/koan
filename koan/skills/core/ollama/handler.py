@@ -1,4 +1,4 @@
-"""Kōan ollama skill — server status, model listing, model pulling."""
+"""Kōan ollama skill — server status, model management, pulling and removal."""
 
 
 def _format_size(size_bytes):
@@ -12,26 +12,78 @@ def _format_size(size_bytes):
     return f"{mb:.0f}MB"
 
 
+def _format_model_line(m):
+    """Format a single model dict as an indented display line."""
+    name = m.get("name", m.get("model", "unknown"))
+    size = _format_size(m.get("size", 0))
+    details = m.get("details", {})
+    param_size = details.get("parameter_size", "")
+    quant = details.get("quantization_level", "")
+
+    parts = [f"  {name}"]
+    if param_size:
+        parts.append(f"({param_size})")
+    if quant:
+        parts.append(f"[{quant}]")
+    if size:
+        parts.append(size)
+    return " ".join(parts)
+
+
+def _check_provider():
+    """Return provider name if Ollama-compatible, else an error string."""
+    from app.provider import get_provider_name
+
+    provider = get_provider_name()
+    if provider not in ("local", "ollama", "ollama-claude"):
+        return None, f"Ollama not active (provider: {provider})"
+    return provider, None
+
+
 def handle(ctx):
     """Handle /ollama command — dispatch to subcommands."""
     args = (ctx.args or "").strip()
+
+    if args in ("help", "-h", "--help"):
+        return _handle_help()
 
     if args.startswith("pull "):
         return _handle_pull(ctx, args[5:].strip())
     if args == "pull":
         return "Usage: /ollama pull <model>\nExample: /ollama pull llama3.3"
 
+    if args.startswith("remove ") or args.startswith("rm "):
+        name = args.split(" ", 1)[1].strip()
+        return _handle_remove(ctx, name)
+    if args in ("remove", "rm"):
+        return "Usage: /ollama remove <model>\nExample: /ollama remove llama3.3"
+
+    if args in ("list", "ls", "models"):
+        return _handle_list(ctx)
+
     return _handle_status(ctx)
 
 
-def _handle_pull(ctx, model_name):
-    """Pull a model from the Ollama registry."""
-    from app.ollama_client import is_model_available, is_server_ready, pull_model
-    from app.provider import get_provider_name
+def _handle_help():
+    """Show available /ollama subcommands."""
+    return (
+        "Ollama management commands:\n"
+        "  /ollama          — Server status + models\n"
+        "  /ollama list     — List available models\n"
+        "  /ollama pull <m> — Download a model\n"
+        "  /ollama rm <m>   — Remove a model\n"
+        "  /ollama help     — This message\n"
+        "\nAliases: /llama, list→ls, remove→rm"
+    )
 
-    provider = get_provider_name()
-    if provider not in ("local", "ollama", "ollama-claude"):
-        return f"Ollama not active (provider: {provider})"
+
+def _handle_pull(ctx, model_name):
+    """Pull a model from the Ollama registry with progress tracking."""
+    from app.ollama_client import is_model_available, is_server_ready, pull_model_streaming
+
+    provider, err = _check_provider()
+    if err:
+        return err
 
     if not model_name:
         return "Usage: /ollama pull <model>\nExample: /ollama pull llama3.3"
@@ -39,14 +91,71 @@ def _handle_pull(ctx, model_name):
     if not is_server_ready():
         return "Ollama server not responding. Start with: ollama serve"
 
-    # Check if already available
     if is_model_available(model_name):
         return f"Model '{model_name}' is already available locally."
 
-    ok, detail = pull_model(model_name)
+    # Track progress for the final message
+    progress_state = {"last_pct": -1, "last_status": ""}
+
+    def _on_progress(status, completed, total):
+        progress_state["last_status"] = status
+        if total > 0:
+            progress_state["last_pct"] = int(completed * 100 / total)
+
+    ok, detail = pull_model_streaming(model_name, on_progress=_on_progress)
     if ok:
-        return f"Model '{model_name}' pulled successfully."
+        pct = progress_state["last_pct"]
+        size_info = f" ({pct}%)" if pct > 0 else ""
+        return f"Model '{model_name}' pulled successfully{size_info}."
     return f"Failed to pull '{model_name}': {detail}"
+
+
+def _handle_remove(ctx, model_name):
+    """Remove a locally stored model."""
+    from app.ollama_client import delete_model, get_model_info, is_server_ready
+
+    provider, err = _check_provider()
+    if err:
+        return err
+
+    if not model_name:
+        return "Usage: /ollama remove <model>\nExample: /ollama remove llama3.3"
+
+    if not is_server_ready():
+        return "Ollama server not responding. Start with: ollama serve"
+
+    # Show what's about to be deleted
+    info = get_model_info(model_name)
+    size_str = ""
+    if info:
+        size_str = f" ({_format_size(info.get('size', 0))})"
+
+    ok, detail = delete_model(model_name)
+    if ok:
+        return f"Model '{model_name}'{size_str} removed."
+    return f"Failed to remove '{model_name}': {detail}"
+
+
+def _handle_list(ctx):
+    """Show a compact model list without full server status."""
+    from app.ollama_client import is_server_ready, list_models
+
+    provider, err = _check_provider()
+    if err:
+        return err
+
+    if not is_server_ready():
+        return "Ollama server not responding."
+
+    models = list_models()
+    if not models:
+        return "No models available. Run: /ollama pull <model>"
+
+    lines = [f"Models ({len(models)}):"]
+    for m in models:
+        lines.append(_format_model_line(m))
+
+    return "\n".join(lines)
 
 
 def _handle_status(ctx):
@@ -57,11 +166,10 @@ def _handle_status(ctx):
         list_models,
         list_running_models,
     )
-    from app.provider import get_provider_name
 
-    provider = get_provider_name()
-    if provider not in ("local", "ollama", "ollama-claude"):
-        return f"Ollama not active (provider: {provider})"
+    provider, err = _check_provider()
+    if err:
+        return err
 
     lines = []
 
@@ -83,20 +191,7 @@ def _handle_status(ctx):
 
     lines.append(f"\nModels ({len(models)}):")
     for m in models:
-        name = m.get("name", m.get("model", "unknown"))
-        size = _format_size(m.get("size", 0))
-        details = m.get("details", {})
-        param_size = details.get("parameter_size", "")
-        quant = details.get("quantization_level", "")
-
-        parts = [f"  {name}"]
-        if param_size:
-            parts.append(f"({param_size})")
-        if quant:
-            parts.append(f"[{quant}]")
-        if size:
-            parts.append(size)
-        lines.append(" ".join(parts))
+        lines.append(_format_model_line(m))
 
     # Running models
     running = list_running_models()

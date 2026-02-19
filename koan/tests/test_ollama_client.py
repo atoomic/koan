@@ -8,6 +8,7 @@ import pytest
 from app.ollama_client import (
     _get_ollama_host,
     _api_get,
+    _api_delete,
     _model_matches_any,
     is_server_ready,
     get_version,
@@ -17,6 +18,8 @@ from app.ollama_client import (
     get_model_info,
     check_server_and_model,
     format_model_list,
+    delete_model,
+    pull_model_streaming,
     DEFAULT_OLLAMA_HOST,
 )
 
@@ -742,3 +745,256 @@ class TestPullModel:
             assert ok is True
             body = mock_post.call_args[0][2]
             assert body["name"] == "qwen2.5-coder:14b"
+
+
+# ---------------------------------------------------------------------------
+# _api_delete
+# ---------------------------------------------------------------------------
+
+
+class TestApiDelete:
+    """Tests for _api_delete() — low-level DELETE wrapper."""
+
+    def test_successful_delete(self):
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = _api_delete("http://localhost:11434", "/api/delete",
+                                 {"name": "test:latest"})
+        assert result is True
+
+    def test_http_error_raises_runtime(self):
+        import urllib.error
+        error = urllib.error.HTTPError(
+            "http://x", 404, "not found", {}, None
+        )
+        error.read = MagicMock(return_value=b"model not found")
+        with patch("urllib.request.urlopen", side_effect=error):
+            with pytest.raises(RuntimeError, match="404"):
+                _api_delete("http://localhost:11434", "/api/delete",
+                            {"name": "test"})
+
+    def test_connection_error_raises_runtime(self):
+        import urllib.error
+        error = urllib.error.URLError("Connection refused")
+        with patch("urllib.request.urlopen", side_effect=error):
+            with pytest.raises(RuntimeError, match="Cannot connect"):
+                _api_delete("http://localhost:11434", "/api/delete",
+                            {"name": "test"})
+
+    def test_generic_error_raises_runtime(self):
+        with patch("urllib.request.urlopen", side_effect=OSError("boom")):
+            with pytest.raises(RuntimeError, match="request failed"):
+                _api_delete("http://localhost:11434", "/api/delete",
+                            {"name": "test"})
+
+
+# ---------------------------------------------------------------------------
+# delete_model
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteModel:
+    """Tests for delete_model() — model removal."""
+
+    def test_delete_success(self):
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=True), \
+             patch("app.ollama_client._api_delete", return_value=True):
+            ok, detail = delete_model("llama3.3")
+        assert ok is True
+        assert detail == "deleted"
+
+    def test_delete_empty_name(self):
+        ok, detail = delete_model("")
+        assert ok is False
+        assert "No model name" in detail
+
+    def test_delete_whitespace_name(self):
+        ok, detail = delete_model("   ")
+        assert ok is False
+        assert "No model name" in detail
+
+    def test_delete_server_not_responding(self):
+        with patch("app.ollama_client.is_server_ready", return_value=False):
+            ok, detail = delete_model("llama3.3")
+        assert ok is False
+        assert "not responding" in detail
+
+    def test_delete_model_not_found(self):
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False):
+            ok, detail = delete_model("nonexistent")
+        assert ok is False
+        assert "not found locally" in detail
+
+    def test_delete_api_error(self):
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=True), \
+             patch("app.ollama_client._api_delete",
+                   side_effect=RuntimeError("API error 500")):
+            ok, detail = delete_model("llama3.3")
+        assert ok is False
+        assert "500" in detail
+
+    def test_delete_strips_model_name(self):
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=True), \
+             patch("app.ollama_client._api_delete", return_value=True) as mock_del:
+            delete_model("  llama3.3  ")
+            body = mock_del.call_args[0][2]
+            assert body["name"] == "llama3.3"
+
+    def test_delete_with_tag(self):
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=True), \
+             patch("app.ollama_client._api_delete", return_value=True) as mock_del:
+            ok, _ = delete_model("qwen2.5-coder:14b")
+            assert ok is True
+            body = mock_del.call_args[0][2]
+            assert body["name"] == "qwen2.5-coder:14b"
+
+    def test_delete_custom_timeout(self):
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=True), \
+             patch("app.ollama_client._api_delete", return_value=True) as mock_del:
+            delete_model("llama3.3", timeout=60.0)
+            assert mock_del.call_args[1].get("timeout", 0) == 60.0
+
+
+# ---------------------------------------------------------------------------
+# pull_model_streaming
+# ---------------------------------------------------------------------------
+
+
+class TestPullModelStreaming:
+    """Tests for pull_model_streaming() — streaming NDJSON progress."""
+
+    def _mock_streaming_response(self, lines):
+        """Create a mock HTTP response that yields NDJSON lines."""
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.__iter__ = MagicMock(
+            return_value=iter(
+                [json.dumps(line).encode("utf-8") + b"\n" for line in lines]
+            )
+        )
+        return mock_resp
+
+    def test_streaming_pull_success(self):
+        lines = [
+            {"status": "pulling manifest"},
+            {"status": "downloading", "completed": 500, "total": 1000},
+            {"status": "downloading", "completed": 1000, "total": 1000},
+            {"status": "success"},
+        ]
+        mock_resp = self._mock_streaming_response(lines)
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("urllib.request.urlopen", return_value=mock_resp):
+            ok, detail = pull_model_streaming("llama3.3")
+        assert ok is True
+        assert detail == "success"
+
+    def test_streaming_pull_calls_progress_callback(self):
+        lines = [
+            {"status": "downloading", "completed": 250, "total": 1000},
+            {"status": "downloading", "completed": 500, "total": 1000},
+            {"status": "success"},
+        ]
+        mock_resp = self._mock_streaming_response(lines)
+        progress_calls = []
+
+        def on_progress(status, completed, total):
+            progress_calls.append((status, completed, total))
+
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("urllib.request.urlopen", return_value=mock_resp):
+            ok, _ = pull_model_streaming("llama3.3", on_progress=on_progress)
+
+        assert ok is True
+        assert len(progress_calls) == 3
+        assert progress_calls[0] == ("downloading", 250, 1000)
+        assert progress_calls[1] == ("downloading", 500, 1000)
+        assert progress_calls[2] == ("success", 0, 0)
+
+    def test_streaming_pull_empty_name(self):
+        ok, detail = pull_model_streaming("")
+        assert ok is False
+        assert "No model name" in detail
+
+    def test_streaming_pull_server_down(self):
+        with patch("app.ollama_client.is_server_ready", return_value=False):
+            ok, detail = pull_model_streaming("llama3.3")
+        assert ok is False
+        assert "not responding" in detail
+
+    def test_streaming_pull_http_error(self):
+        import urllib.error
+        error = urllib.error.HTTPError("http://x", 404, "not found", {}, None)
+        error.read = MagicMock(return_value=b"model not found")
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("urllib.request.urlopen", side_effect=error):
+            ok, detail = pull_model_streaming("nonexistent")
+        assert ok is False
+        assert "404" in detail
+
+    def test_streaming_pull_connection_error(self):
+        import urllib.error
+        error = urllib.error.URLError("Connection refused")
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("urllib.request.urlopen", side_effect=error):
+            ok, detail = pull_model_streaming("llama3.3")
+        assert ok is False
+        assert "Cannot connect" in detail
+
+    def test_streaming_pull_non_success_status(self):
+        lines = [
+            {"status": "pulling manifest"},
+            {"status": "verifying"},
+        ]
+        mock_resp = self._mock_streaming_response(lines)
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("urllib.request.urlopen", return_value=mock_resp):
+            ok, detail = pull_model_streaming("llama3.3")
+        assert ok is True
+        assert detail == "verifying"
+
+    def test_streaming_pull_skips_malformed_json(self):
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.__iter__ = MagicMock(
+            return_value=iter([
+                b"not json\n",
+                b"\n",
+                json.dumps({"status": "success"}).encode() + b"\n",
+            ])
+        )
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("urllib.request.urlopen", return_value=mock_resp):
+            ok, detail = pull_model_streaming("llama3.3")
+        assert ok is True
+        assert detail == "success"
+
+    def test_streaming_pull_no_callback(self):
+        """Streaming pull works without an on_progress callback."""
+        lines = [{"status": "success"}]
+        mock_resp = self._mock_streaming_response(lines)
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("urllib.request.urlopen", return_value=mock_resp):
+            ok, detail = pull_model_streaming("llama3.3", on_progress=None)
+        assert ok is True
+
+    def test_streaming_pull_sends_stream_true(self):
+        lines = [{"status": "success"}]
+        mock_resp = self._mock_streaming_response(lines)
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            pull_model_streaming("llama3.3")
+            req = mock_open.call_args[0][0]
+            body = json.loads(req.data.decode())
+            assert body["stream"] is True

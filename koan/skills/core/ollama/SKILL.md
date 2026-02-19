@@ -1,13 +1,13 @@
 ---
 name: ollama
 scope: core
-description: Ollama server status, model listing, and model pulling
-version: 1.1.0
+description: Ollama server status, model listing, pulling, and removal
+version: 1.2.0
 audience: bridge
 worker: true
 commands:
   - name: ollama
-    description: Show Ollama server status and models. Use /ollama pull <model> to download.
+    description: "Ollama management: /ollama [list|pull|remove] — show status, list/pull/remove models."
     aliases: [llama]
 handler: handler.py
 ---

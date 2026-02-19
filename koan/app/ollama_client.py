@@ -2,15 +2,16 @@
 
 Wraps the native Ollama HTTP API (not the OpenAI-compatible /v1 endpoint)
 for server management: health checks, model listing, version detection,
-and model pulling.
+model pulling, and model deletion.
 
 The Ollama API runs at http://localhost:11434 by default.
 Endpoints used:
-  GET  /api/tags     — list available models
-  GET  /api/ps       — list running/loaded models
-  GET  /api/version  — server version info
-  POST /api/pull     — pull a model (streaming NDJSON progress)
-  HEAD /              — lightweight health probe
+  GET    /api/tags     — list available models
+  GET    /api/ps       — list running/loaded models
+  GET    /api/version  — server version info
+  POST   /api/pull     — pull a model (streaming NDJSON progress)
+  DELETE /api/delete   — remove a locally stored model
+  HEAD   /              — lightweight health probe
 
 Reference: https://github.com/ollama/ollama/blob/main/docs/api.md
 """
@@ -46,45 +47,24 @@ def _get_ollama_host(base_url: str = "") -> str:
     return os.environ.get("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
 
 
-def _api_get(host: str, path: str, timeout: float = 5.0) -> Dict[str, Any]:
-    """Perform a GET request to the Ollama API.
+def _api_request(
+    host: str, path: str, method: str = "GET",
+    body: Optional[Dict[str, Any]] = None, timeout: float = 5.0,
+) -> urllib.request.Request:
+    """Build and execute an Ollama API request, returning the raw response.
 
-    Returns the parsed JSON response.
+    This is the shared error-handling layer for all API methods.
     Raises RuntimeError on connection or HTTP errors.
     """
     url = f"{host.rstrip('/')}{path}"
-    req = urllib.request.Request(url, method="GET")
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "application/json")
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")[:200]
-        raise RuntimeError(f"Ollama API error {e.code} on {path}: {body}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(
-            f"Cannot connect to Ollama at {host}: {e.reason}"
-        ) from e
-    except Exception as e:
-        raise RuntimeError(f"Ollama API request failed: {e}") from e
-
-
-def _api_post(host: str, path: str, body: Dict[str, Any], timeout: float = 5.0) -> Dict[str, Any]:
-    """Perform a POST request to the Ollama API.
-
-    Returns the parsed JSON response.
-    Raises RuntimeError on connection or HTTP errors.
-    """
-    url = f"{host.rstrip('/')}{path}"
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("Accept", "application/json")
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        return urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:
         resp_body = e.read().decode("utf-8", errors="replace")[:200]
         raise RuntimeError(f"Ollama API error {e.code} on {path}: {resp_body}") from e
@@ -94,6 +74,24 @@ def _api_post(host: str, path: str, body: Dict[str, Any], timeout: float = 5.0) 
         ) from e
     except Exception as e:
         raise RuntimeError(f"Ollama API request failed: {e}") from e
+
+
+def _api_get(host: str, path: str, timeout: float = 5.0) -> Dict[str, Any]:
+    """Perform a GET request to the Ollama API. Returns parsed JSON."""
+    with _api_request(host, path, "GET", timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _api_post(host: str, path: str, body: Dict[str, Any], timeout: float = 5.0) -> Dict[str, Any]:
+    """Perform a POST request to the Ollama API. Returns parsed JSON."""
+    with _api_request(host, path, "POST", body=body, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _api_delete(host: str, path: str, body: Dict[str, Any], timeout: float = 5.0) -> bool:
+    """Perform a DELETE request to the Ollama API. Returns True on 2xx."""
+    with _api_request(host, path, "DELETE", body=body, timeout=timeout) as resp:
+        return 200 <= resp.status < 300
 
 
 def is_server_ready(base_url: str = "", timeout: float = 3.0) -> bool:
@@ -175,42 +173,18 @@ def is_model_available(model_name: str, base_url: str = "", timeout: float = 5.0
     return _model_matches_any(model_name, models)
 
 
-def _model_matches_any(model_name: str, models: List[Dict[str, Any]]) -> bool:
-    """Check if model_name matches any model in the list.
+def _find_matching_model(
+    model_name: str, models: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Find a model in the list by fuzzy name matching.
 
     Handles Ollama naming conventions:
     - Exact match on 'name' or 'model' field
     - "foo" matches "foo:latest"
     - "foo:tag" matches "foo:tag"
-    """
-    if not model_name:
-        return False
-
-    # Normalize: add :latest if no tag specified
-    query = model_name.strip()
-    query_with_tag = query if ":" in query else f"{query}:latest"
-
-    for m in models:
-        for key in ("name", "model"):
-            val = m.get(key, "")
-            if not val:
-                continue
-            # Exact match
-            if val == query or val == query_with_tag:
-                return True
-            # Model field without tag matches query without tag
-            base = val.split(":")[0]
-            if base == query.split(":")[0] and ":" not in query:
-                return True
-    return False
-
-
-def get_model_info(model_name: str, base_url: str = "", timeout: float = 5.0) -> Optional[Dict[str, Any]]:
-    """Get info about a specific model from the local model list.
 
     Returns the model dict if found, None otherwise.
     """
-    models = list_models(base_url=base_url, timeout=timeout)
     if not model_name:
         return None
 
@@ -220,12 +194,28 @@ def get_model_info(model_name: str, base_url: str = "", timeout: float = 5.0) ->
     for m in models:
         for key in ("name", "model"):
             val = m.get(key, "")
+            if not val:
+                continue
             if val == query or val == query_with_tag:
                 return m
             base = val.split(":")[0]
             if base == query.split(":")[0] and ":" not in query:
                 return m
     return None
+
+
+def _model_matches_any(model_name: str, models: List[Dict[str, Any]]) -> bool:
+    """Check if model_name matches any model in the list."""
+    return _find_matching_model(model_name, models) is not None
+
+
+def get_model_info(model_name: str, base_url: str = "", timeout: float = 5.0) -> Optional[Dict[str, Any]]:
+    """Get info about a specific model from the local model list.
+
+    Returns the model dict if found, None otherwise.
+    """
+    models = list_models(base_url=base_url, timeout=timeout)
+    return _find_matching_model(model_name, models)
 
 
 def check_server_and_model(
@@ -289,6 +279,109 @@ def pull_model(
         return True, status or "completed"
     except RuntimeError as e:
         return False, str(e)
+
+
+def delete_model(
+    model_name: str, base_url: str = "", timeout: float = 30.0
+) -> Tuple[bool, str]:
+    """Delete a locally stored model.
+
+    Uses the DELETE /api/delete endpoint.
+
+    Args:
+        model_name: Model to delete (e.g. "llama3.3", "qwen2.5-coder:14b").
+        base_url: Ollama server URL.
+        timeout: Request timeout.
+
+    Returns (ok, detail):
+        ok=True, detail="deleted" — model removed successfully
+        ok=False, detail="..." — error message
+    """
+    if not model_name or not model_name.strip():
+        return False, "No model name provided"
+
+    host = _get_ollama_host(base_url)
+
+    if not is_server_ready(base_url=base_url, timeout=5.0):
+        return False, f"Ollama server not responding at {host}"
+
+    # Verify model exists before attempting deletion
+    if not is_model_available(model_name, base_url=base_url, timeout=5.0):
+        return False, f"Model '{model_name}' not found locally"
+
+    try:
+        _api_delete(
+            host, "/api/delete",
+            {"name": model_name.strip()},
+            timeout=timeout,
+        )
+        return True, "deleted"
+    except RuntimeError as e:
+        return False, str(e)
+
+
+def pull_model_streaming(
+    model_name: str, base_url: str = "", timeout: float = 600.0,
+    on_progress=None,
+) -> Tuple[bool, str]:
+    """Pull a model with streaming progress updates.
+
+    Parses NDJSON progress lines from the Ollama /api/pull endpoint.
+    Calls on_progress(status, completed, total) for each progress update.
+
+    Args:
+        model_name: Model to pull.
+        base_url: Ollama server URL.
+        timeout: Total request timeout (default 10 min).
+        on_progress: Optional callback(status: str, completed: int, total: int).
+
+    Returns (ok, detail):
+        ok=True, detail="success" — model pulled successfully
+        ok=False, detail="..." — error message
+    """
+    if not model_name or not model_name.strip():
+        return False, "No model name provided"
+
+    host = _get_ollama_host(base_url)
+
+    if not is_server_ready(base_url=base_url, timeout=5.0):
+        return False, f"Ollama server not responding at {host}"
+
+    url = f"{host.rstrip('/')}/api/pull"
+    data = json.dumps({"name": model_name.strip(), "stream": True}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            last_status = ""
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    progress = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                status = progress.get("status", "")
+                completed = progress.get("completed", 0)
+                total = progress.get("total", 0)
+                last_status = status
+
+                if on_progress and callable(on_progress):
+                    on_progress(status, completed, total)
+
+            if "success" in last_status.lower():
+                return True, "success"
+            return True, last_status or "completed"
+    except urllib.error.HTTPError as e:
+        resp_body = e.read().decode("utf-8", errors="replace")[:200]
+        return False, f"Ollama API error {e.code}: {resp_body}"
+    except urllib.error.URLError as e:
+        return False, f"Cannot connect to Ollama at {host}: {e.reason}"
+    except Exception as e:
+        return False, f"Pull failed: {e}"
 
 
 def format_model_list(base_url: str = "", timeout: float = 5.0) -> str:
