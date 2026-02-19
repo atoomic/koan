@@ -30,6 +30,11 @@ venv/
 projects.yaml
 projects.docker.yaml
 
+# custom skills
+# ignore all dirs with the exception of core
+/koan/skills/*/
+!/koan/skills/core/
+
 # wp-copilot-skills: Ignore symlinked agents (pointing to shared installation)
 .github/agents/wp.*
 .github/prompts/wp.*
