@@ -1,13 +1,15 @@
 """Ollama REST API client for Kōan.
 
 Wraps the native Ollama HTTP API (not the OpenAI-compatible /v1 endpoint)
-for server management: health checks, model listing, version detection.
+for server management: health checks, model listing, version detection,
+and model pulling.
 
 The Ollama API runs at http://localhost:11434 by default.
 Endpoints used:
   GET  /api/tags     — list available models
   GET  /api/ps       — list running/loaded models
   GET  /api/version  — server version info
+  POST /api/pull     — pull a model (streaming NDJSON progress)
   HEAD /              — lightweight health probe
 
 Reference: https://github.com/ollama/ollama/blob/main/docs/api.md
@@ -60,6 +62,32 @@ def _api_get(host: str, path: str, timeout: float = 5.0) -> Dict[str, Any]:
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")[:200]
         raise RuntimeError(f"Ollama API error {e.code} on {path}: {body}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Cannot connect to Ollama at {host}: {e.reason}"
+        ) from e
+    except Exception as e:
+        raise RuntimeError(f"Ollama API request failed: {e}") from e
+
+
+def _api_post(host: str, path: str, body: Dict[str, Any], timeout: float = 5.0) -> Dict[str, Any]:
+    """Perform a POST request to the Ollama API.
+
+    Returns the parsed JSON response.
+    Raises RuntimeError on connection or HTTP errors.
+    """
+    url = f"{host.rstrip('/')}{path}"
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        resp_body = e.read().decode("utf-8", errors="replace")[:200]
+        raise RuntimeError(f"Ollama API error {e.code} on {path}: {resp_body}") from e
     except urllib.error.URLError as e:
         raise RuntimeError(
             f"Cannot connect to Ollama at {host}: {e.reason}"
@@ -222,6 +250,45 @@ def check_server_and_model(
         return False, f"Model '{model_name}' not found locally. Run: ollama pull {model_name}"
 
     return True, ""
+
+
+def pull_model(
+    model_name: str, base_url: str = "", timeout: float = 600.0
+) -> Tuple[bool, str]:
+    """Pull (download) a model from the Ollama registry.
+
+    Uses the POST /api/pull endpoint with stream=false for simplicity.
+    This is a blocking call — large models may take several minutes.
+
+    Args:
+        model_name: Model to pull (e.g. "llama3.3", "qwen2.5-coder:14b").
+        base_url: Ollama server URL.
+        timeout: Request timeout (default 10 min for large models).
+
+    Returns (ok, detail):
+        ok=True, detail="success" — model pulled successfully
+        ok=False, detail="..." — error message
+    """
+    if not model_name or not model_name.strip():
+        return False, "No model name provided"
+
+    host = _get_ollama_host(base_url)
+
+    if not is_server_ready(base_url=base_url, timeout=5.0):
+        return False, f"Ollama server not responding at {host}"
+
+    try:
+        result = _api_post(
+            host, "/api/pull",
+            {"name": model_name.strip(), "stream": False},
+            timeout=timeout,
+        )
+        status = result.get("status", "")
+        if "success" in status.lower():
+            return True, "success"
+        return True, status or "completed"
+    except RuntimeError as e:
+        return False, str(e)
 
 
 def format_model_list(base_url: str = "", timeout: float = 5.0) -> str:

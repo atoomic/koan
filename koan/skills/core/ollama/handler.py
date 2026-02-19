@@ -1,4 +1,4 @@
-"""Kōan ollama skill — server status, model listing, diagnostics."""
+"""Kōan ollama skill — server status, model listing, model pulling."""
 
 
 def _format_size(size_bytes):
@@ -13,7 +13,44 @@ def _format_size(size_bytes):
 
 
 def handle(ctx):
-    """Handle /ollama command — show server status and models."""
+    """Handle /ollama command — dispatch to subcommands."""
+    args = (ctx.args or "").strip()
+
+    if args.startswith("pull "):
+        return _handle_pull(ctx, args[5:].strip())
+    if args == "pull":
+        return "Usage: /ollama pull <model>\nExample: /ollama pull llama3.3"
+
+    return _handle_status(ctx)
+
+
+def _handle_pull(ctx, model_name):
+    """Pull a model from the Ollama registry."""
+    from app.ollama_client import is_model_available, is_server_ready, pull_model
+    from app.provider import get_provider_name
+
+    provider = get_provider_name()
+    if provider not in ("local", "ollama", "ollama-claude"):
+        return f"Ollama not active (provider: {provider})"
+
+    if not model_name:
+        return "Usage: /ollama pull <model>\nExample: /ollama pull llama3.3"
+
+    if not is_server_ready():
+        return "Ollama server not responding. Start with: ollama serve"
+
+    # Check if already available
+    if is_model_available(model_name):
+        return f"Model '{model_name}' is already available locally."
+
+    ok, detail = pull_model(model_name)
+    if ok:
+        return f"Model '{model_name}' pulled successfully."
+    return f"Failed to pull '{model_name}': {detail}"
+
+
+def _handle_status(ctx):
+    """Show server status and models."""
     from app.ollama_client import (
         get_version,
         is_server_ready,
@@ -41,7 +78,7 @@ def handle(ctx):
     # Available models
     models = list_models()
     if not models:
-        lines.append("\nNo models pulled. Run: ollama pull <model>")
+        lines.append("\nNo models pulled. Run: /ollama pull <model>")
         return "\n".join(lines)
 
     lines.append(f"\nModels ({len(models)}):")
@@ -84,7 +121,7 @@ def handle(ctx):
             status = "ready" if available else "not pulled"
             lines.append(f"\nConfigured model: {configured} ({status})")
             if not available:
-                lines.append(f"  Run: ollama pull {configured}")
+                lines.append(f"  Run: /ollama pull {configured}")
     except Exception:
         pass
 

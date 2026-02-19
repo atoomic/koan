@@ -596,3 +596,149 @@ class TestPidManagerIntegration:
                 ok, msg = start_ollama(root)
                 assert ok is True
                 assert "warming up" in msg
+
+
+# ---------------------------------------------------------------------------
+# _api_post
+# ---------------------------------------------------------------------------
+
+
+class TestApiPost:
+    """Tests for _api_post() — low-level POST wrapper."""
+
+    def test_successful_post(self):
+        from app.ollama_client import _api_post
+        response_data = {"status": "success"}
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(response_data).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = _api_post("http://localhost:11434", "/api/pull", {"name": "llama3.3"})
+        assert result == {"status": "success"}
+
+    def test_http_error_raises(self):
+        import urllib.error
+        from app.ollama_client import _api_post
+        error = urllib.error.HTTPError(
+            "http://localhost:11434/api/pull", 404, "Not Found",
+            {}, MagicMock(read=MagicMock(return_value=b"model not found"))
+        )
+        with patch("urllib.request.urlopen", side_effect=error):
+            with pytest.raises(RuntimeError, match="API error 404"):
+                _api_post("http://localhost:11434", "/api/pull", {"name": "nope"})
+
+    def test_connection_error_raises(self):
+        import urllib.error
+        from app.ollama_client import _api_post
+        error = urllib.error.URLError("Connection refused")
+        with patch("urllib.request.urlopen", side_effect=error):
+            with pytest.raises(RuntimeError, match="Cannot connect"):
+                _api_post("http://localhost:11434", "/api/pull", {"name": "llama3.3"})
+
+    def test_posts_json_body(self):
+        from app.ollama_client import _api_post
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"status": "ok"}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            _api_post("http://localhost:11434", "/api/pull", {"name": "test", "stream": False})
+            req = mock_open.call_args[0][0]
+            assert req.method == "POST"
+            assert req.get_header("Content-type") == "application/json"
+            body = json.loads(req.data.decode())
+            assert body["name"] == "test"
+            assert body["stream"] is False
+
+
+# ---------------------------------------------------------------------------
+# pull_model
+# ---------------------------------------------------------------------------
+
+
+class TestPullModel:
+    """Tests for pull_model() — downloading models from Ollama registry."""
+
+    def test_successful_pull(self):
+        from app.ollama_client import pull_model
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client._api_post",
+                   return_value={"status": "success"}):
+            ok, detail = pull_model("llama3.3")
+        assert ok is True
+        assert detail == "success"
+
+    def test_pull_empty_model_name(self):
+        from app.ollama_client import pull_model
+        ok, detail = pull_model("")
+        assert ok is False
+        assert "No model name" in detail
+
+    def test_pull_whitespace_model_name(self):
+        from app.ollama_client import pull_model
+        ok, detail = pull_model("   ")
+        assert ok is False
+        assert "No model name" in detail
+
+    def test_pull_server_not_ready(self):
+        from app.ollama_client import pull_model
+        with patch("app.ollama_client.is_server_ready", return_value=False):
+            ok, detail = pull_model("llama3.3")
+        assert ok is False
+        assert "not responding" in detail
+
+    def test_pull_api_error(self):
+        from app.ollama_client import pull_model
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client._api_post",
+                   side_effect=RuntimeError("API error 404: model not found")):
+            ok, detail = pull_model("nonexistent-model")
+        assert ok is False
+        assert "404" in detail
+
+    def test_pull_non_success_status(self):
+        from app.ollama_client import pull_model
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client._api_post",
+                   return_value={"status": "downloading"}):
+            ok, detail = pull_model("llama3.3")
+        assert ok is True
+        assert detail == "downloading"
+
+    def test_pull_empty_status(self):
+        from app.ollama_client import pull_model
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client._api_post", return_value={}):
+            ok, detail = pull_model("llama3.3")
+        assert ok is True
+        assert detail == "completed"
+
+    def test_pull_strips_model_name(self):
+        from app.ollama_client import pull_model
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client._api_post",
+                   return_value={"status": "success"}) as mock_post:
+            pull_model("  llama3.3  ")
+            body = mock_post.call_args[0][2]
+            assert body["name"] == "llama3.3"
+
+    def test_pull_uses_long_timeout(self):
+        from app.ollama_client import pull_model
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client._api_post",
+                   return_value={"status": "success"}) as mock_post:
+            pull_model("llama3.3")
+            assert mock_post.call_args[1].get("timeout", 0) == 600.0
+
+    def test_pull_with_tag(self):
+        from app.ollama_client import pull_model
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client._api_post",
+                   return_value={"status": "success"}) as mock_post:
+            ok, _ = pull_model("qwen2.5-coder:14b")
+            assert ok is True
+            body = mock_post.call_args[0][2]
+            assert body["name"] == "qwen2.5-coder:14b"

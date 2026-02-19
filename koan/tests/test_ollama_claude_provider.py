@@ -291,10 +291,11 @@ class TestOllamaClaudeAvailability:
 # ---------------------------------------------------------------------------
 
 class TestOllamaClaudeQuota:
-    """Quota is always available for local models."""
+    """Quota check validates proxy reachability (no API quota concept)."""
 
-    def test_always_available(self):
-        with _mock_config():
+    def test_available_when_proxy_reachable(self):
+        with _mock_config(), \
+             patch("app.ollama_client.is_server_ready", return_value=True):
             p = OllamaClaudeProvider()
             ok, detail = p.check_quota_available("/tmp/project")
             assert ok is True
@@ -464,3 +465,61 @@ class TestBaseProviderGetEnv:
         from app.provider.local import LocalLLMProvider
         p = LocalLLMProvider()
         assert p.get_env() == {}
+
+
+# ---------------------------------------------------------------------------
+# check_quota_available — proxy validation
+# ---------------------------------------------------------------------------
+
+class TestOllamaClaudeQuotaCheck:
+    """check_quota_available validates proxy reachability."""
+
+    def test_quota_ok_when_proxy_reachable(self):
+        with _mock_config(), \
+             patch("app.ollama_client.is_server_ready", return_value=True):
+            p = OllamaClaudeProvider()
+            ok, detail = p.check_quota_available("/tmp/project")
+            assert ok is True
+            assert detail == ""
+
+    def test_quota_fails_when_proxy_unreachable(self):
+        with _mock_config(), \
+             patch("app.ollama_client.is_server_ready", return_value=False):
+            p = OllamaClaudeProvider()
+            ok, detail = p.check_quota_available("/tmp/project")
+            assert ok is False
+            assert "not responding" in detail
+
+    def test_quota_fails_when_no_base_url(self):
+        config = {"ollama_claude": {"model": "llama3.3"}}
+        with _mock_config(config):
+            p = OllamaClaudeProvider()
+            ok, detail = p.check_quota_available("/tmp/project")
+            assert ok is False
+            assert "base_url" in detail
+
+    def test_quota_fails_when_no_model(self):
+        config = {"ollama_claude": {"base_url": "http://localhost:8080"}}
+        with _mock_config(config):
+            p = OllamaClaudeProvider()
+            ok, detail = p.check_quota_available("/tmp/project")
+            assert ok is False
+            assert "model" in detail
+
+    def test_quota_uses_configured_base_url(self):
+        with _mock_config(), \
+             patch("app.ollama_client.is_server_ready", return_value=True) as mock_ready:
+            p = OllamaClaudeProvider()
+            p.check_quota_available("/tmp/project")
+            mock_ready.assert_called_once_with(
+                base_url="http://localhost:8080", timeout=15.0
+            )
+
+    def test_quota_passes_timeout(self):
+        with _mock_config(), \
+             patch("app.ollama_client.is_server_ready", return_value=True) as mock_ready:
+            p = OllamaClaudeProvider()
+            p.check_quota_available("/tmp/project", timeout=30)
+            mock_ready.assert_called_once_with(
+                base_url="http://localhost:8080", timeout=30.0
+            )

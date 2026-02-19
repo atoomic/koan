@@ -219,3 +219,93 @@ class TestHandleConfiguredModel:
              patch("app.provider.local.LocalLLMProvider._get_default_model", return_value=""):
             result = handle(ctx)
         assert "Configured model" not in result
+
+    def test_not_pulled_model_suggests_ollama_pull_command(self, koan_root, instance_dir):
+        """When no models are pulled, suggest /ollama pull instead of CLI."""
+        ctx = _make_ctx(koan_root, instance_dir)
+        patches = _patch_ollama(models=[])
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = handle(ctx)
+        assert "/ollama pull" in result
+
+
+# ---------------------------------------------------------------------------
+# handle — /ollama pull subcommand
+# ---------------------------------------------------------------------------
+
+class TestHandlePull:
+    """Tests for /ollama pull <model> subcommand."""
+
+    def test_pull_no_model_shows_usage(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="pull")
+        result = handle(ctx)
+        assert "Usage" in result
+        assert "/ollama pull" in result
+
+    def test_pull_wrong_provider(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="pull llama3.3")
+        with patch("app.provider.get_provider_name", return_value="claude"):
+            result = handle(ctx)
+        assert "not active" in result
+
+    def test_pull_server_not_responding(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="pull llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=False):
+            result = handle(ctx)
+        assert "not responding" in result
+
+    def test_pull_already_available(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="pull llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=True):
+            result = handle(ctx)
+        assert "already available" in result
+
+    def test_pull_success(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="pull llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False), \
+             patch("app.ollama_client.pull_model", return_value=(True, "success")):
+            result = handle(ctx)
+        assert "pulled successfully" in result
+
+    def test_pull_failure(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="pull llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False), \
+             patch("app.ollama_client.pull_model",
+                   return_value=(False, "model not found")):
+            result = handle(ctx)
+        assert "Failed" in result
+        assert "model not found" in result
+
+    def test_pull_works_with_ollama_provider(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="pull test-model")
+        with patch("app.provider.get_provider_name", return_value="ollama"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False), \
+             patch("app.ollama_client.pull_model", return_value=(True, "success")):
+            result = handle(ctx)
+        assert "pulled successfully" in result
+
+    def test_pull_works_with_ollama_claude_provider(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="pull test-model")
+        with patch("app.provider.get_provider_name", return_value="ollama-claude"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False), \
+             patch("app.ollama_client.pull_model", return_value=(True, "success")):
+            result = handle(ctx)
+        assert "pulled successfully" in result
+
+    def test_pull_with_tag(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="pull qwen2.5-coder:14b")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False), \
+             patch("app.ollama_client.pull_model", return_value=(True, "success")):
+            result = handle(ctx)
+        assert "pulled successfully" in result

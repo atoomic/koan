@@ -123,7 +123,21 @@ class OllamaClaudeProvider(ClaudeProvider):
         return env
 
     def check_quota_available(self, project_path: str, timeout: int = 15) -> Tuple[bool, str]:
-        """No quota concept with local models — always available."""
+        """Validate that the proxy endpoint is reachable and model is set.
+
+        No quota concept with local models, but the proxy must be up
+        and configuration must be valid.
+        """
+        try:
+            self._validate()
+        except ValueError as e:
+            return False, str(e)
+
+        base_url = self._get_base_url()
+        from app.ollama_client import is_server_ready
+        if not is_server_ready(base_url=base_url, timeout=float(timeout)):
+            return False, f"Ollama proxy not responding at {base_url}"
+
         return True, ""
 
     def build_model_args(self, model: str = "", fallback: str = "") -> List[str]:
