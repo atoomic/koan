@@ -9,6 +9,7 @@ import pytest
 from app.startup_info import (
     _get_file_size,
     _get_messaging_provider,
+    _get_ollama_summary,
     _get_projects_summary,
     _get_provider,
     _get_skills_summary,
@@ -117,6 +118,41 @@ class TestGetMessagingProvider:
             assert _get_messaging_provider() == "telegram"
 
 
+class TestGetOllamaSummary:
+    @patch("app.ollama_client.is_server_ready", return_value=True)
+    @patch("app.ollama_client.get_version", return_value="0.16.0")
+    @patch("app.ollama_client.list_models", return_value=[
+        {"name": "a:latest"}, {"name": "b:latest"},
+    ])
+    def test_running_with_models(self, *_):
+        result = _get_ollama_summary()
+        assert "v0.16.0" in result
+        assert "2 models" in result
+
+    @patch("app.ollama_client.is_server_ready", return_value=False)
+    def test_not_responding(self, _):
+        assert _get_ollama_summary() == "not responding"
+
+    @patch("app.ollama_client.is_server_ready", return_value=True)
+    @patch("app.ollama_client.get_version", return_value=None)
+    @patch("app.ollama_client.list_models", return_value=[])
+    def test_no_version_no_models(self, *_):
+        result = _get_ollama_summary()
+        assert "0 models" in result
+
+    @patch("app.ollama_client.is_server_ready", side_effect=Exception("fail"))
+    def test_error_returns_unavailable(self, _):
+        assert _get_ollama_summary() == "unavailable"
+
+    @patch("app.ollama_client.is_server_ready", return_value=True)
+    @patch("app.ollama_client.get_version", return_value="0.15.0")
+    @patch("app.ollama_client.list_models", return_value=[{"name": "a:latest"}])
+    def test_singular_model(self, *_):
+        result = _get_ollama_summary()
+        assert "1 model" in result
+        assert "models" not in result
+
+
 class TestGatherStartupInfo:
     def test_returns_all_keys(self, tmp_path):
         instance = tmp_path / "instance"
@@ -132,3 +168,29 @@ class TestGatherStartupInfo:
             assert "skills" in info
             assert "soul" in info
             assert "messaging" in info
+            assert "ollama" not in info  # Not included for claude provider
+
+    def test_includes_ollama_for_local_provider(self, tmp_path):
+        instance = tmp_path / "instance"
+        instance.mkdir()
+        (instance / "soul.md").write_text("test soul")
+        with patch("app.startup_info._get_provider", return_value="local"), \
+             patch("app.startup_info._get_projects_summary", return_value="1 (koan)"), \
+             patch("app.startup_info._get_skills_summary", return_value="29 core"), \
+             patch("app.startup_info._get_messaging_provider", return_value="telegram"), \
+             patch("app.startup_info._get_ollama_summary", return_value="v0.16.0, 2 models"):
+            info = gather_startup_info(tmp_path)
+            assert "ollama" in info
+            assert "v0.16.0" in info["ollama"]
+
+    def test_includes_ollama_for_ollama_claude_provider(self, tmp_path):
+        instance = tmp_path / "instance"
+        instance.mkdir()
+        (instance / "soul.md").write_text("test soul")
+        with patch("app.startup_info._get_provider", return_value="ollama-claude"), \
+             patch("app.startup_info._get_projects_summary", return_value="1 (koan)"), \
+             patch("app.startup_info._get_skills_summary", return_value="29 core"), \
+             patch("app.startup_info._get_messaging_provider", return_value="telegram"), \
+             patch("app.startup_info._get_ollama_summary", return_value="v0.16.0"):
+            info = gather_startup_info(tmp_path)
+            assert "ollama" in info

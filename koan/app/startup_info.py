@@ -51,6 +51,10 @@ def gather_startup_info(koan_root: Path) -> dict:
     # Messaging
     info["messaging"] = _get_messaging_provider()
 
+    # Ollama (only when provider needs it)
+    if info["provider"] in ("local", "ollama", "ollama-claude"):
+        info["ollama"] = _get_ollama_summary()
+
     return info
 
 
@@ -109,6 +113,24 @@ def _get_file_size(path: Path) -> str:
         if size >= 1000:
             return f"{size // 1000}k chars"
         return f"{size} chars"
+    except Exception:
+        return "unavailable"
+
+
+def _get_ollama_summary() -> str:
+    """Get Ollama server status summary for startup banner."""
+    try:
+        from app.ollama_client import get_version, is_server_ready, list_models
+        if not is_server_ready(timeout=2.0):
+            return "not responding"
+        parts = []
+        version = get_version(timeout=2.0)
+        if version:
+            parts.append(f"v{version}")
+        models = list_models(timeout=2.0)
+        count = len(models)
+        parts.append(f"{count} model{'s' if count != 1 else ''}")
+        return ", ".join(parts)
     except Exception:
         return "unavailable"
 

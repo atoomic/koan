@@ -485,7 +485,7 @@ def _detect_provider(koan_root: Path) -> str:
 
 def _needs_ollama(provider: str) -> bool:
     """Return True if the provider requires ollama serve."""
-    return provider in ("local", "ollama")
+    return provider in ("local", "ollama", "ollama-claude")
 
 
 def _show_startup_banner(koan_root: Path, provider: str) -> None:
