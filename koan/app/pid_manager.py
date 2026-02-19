@@ -331,13 +331,23 @@ def start_ollama(koan_root: Path, verify_timeout: float = OLLAMA_VERIFY_TIMEOUT)
     # Write PID file — ollama serve is an external binary (no flock)
     acquire_pid(koan_root, "ollama", proc.pid)
 
-    # Wait briefly for ollama to start listening
+    # Wait for ollama to start listening (verify both process and HTTP)
     deadline = time.monotonic() + verify_timeout
     while time.monotonic() < deadline:
-        if _is_process_alive(proc.pid):
-            return True, f"ollama serve started (PID {proc.pid})"
+        if not _is_process_alive(proc.pid):
+            return False, "ollama launched but exited immediately — check ollama logs"
+        # Check if the HTTP server is actually accepting connections
+        try:
+            from app.ollama_client import is_server_ready
+            if is_server_ready(timeout=1.0):
+                return True, f"ollama serve started (PID {proc.pid})"
+        except Exception:
+            pass
         time.sleep(0.3)
 
+    # Process alive but not responding to HTTP — still useful
+    if _is_process_alive(proc.pid):
+        return True, f"ollama serve started (PID {proc.pid}) — still warming up"
     return False, "ollama launched but exited immediately — check ollama logs"
 
 

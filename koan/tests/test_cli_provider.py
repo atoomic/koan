@@ -671,8 +671,14 @@ class TestLocalLLMProvider:
         assert self.provider._get_default_model() == "cfg-model"
 
     @patch.dict("os.environ", {"KOAN_LOCAL_LLM_MODEL": "some-model"})
-    def test_is_available_with_model(self):
+    @patch("app.ollama_client.is_server_ready", return_value=True)
+    def test_is_available_with_model_and_server(self, mock_ready):
         assert self.provider.is_available()
+
+    @patch.dict("os.environ", {"KOAN_LOCAL_LLM_MODEL": "some-model"})
+    @patch("app.ollama_client.is_server_ready", return_value=False)
+    def test_not_available_when_server_down(self, mock_ready):
+        assert not self.provider.is_available()
 
     @patch.dict("os.environ", {}, clear=False)
     @patch("app.utils.load_config", return_value={})
