@@ -503,3 +503,68 @@ class TestHandleList:
              patch("app.ollama_client.list_models", return_value=models):
             result = handle(ctx)
         assert "Models (1)" in result
+
+
+# ---------------------------------------------------------------------------
+# /ollama show <model>
+# ---------------------------------------------------------------------------
+
+
+class TestHandleShow:
+    """Tests for /ollama show <model> subcommand."""
+
+    def test_show_requires_model_name(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="show")
+        result = handle(ctx)
+        assert "Usage:" in result
+
+    def test_show_displays_model_details(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="show llama3.3")
+        details_output = "Model: llama3.3\n  Parameters: 8B\n  Family: llama"
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.format_model_details", return_value=details_output):
+            result = handle(ctx)
+        assert "llama3.3" in result
+        assert "8B" in result
+
+    def test_show_not_found(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="show nonexistent")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.format_model_details", return_value="Model 'nonexistent' not found."):
+            result = handle(ctx)
+        assert "not found" in result.lower()
+
+    def test_show_requires_ollama_provider(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="show llama3.3")
+        with patch("app.provider.get_provider_name", return_value="claude"):
+            result = handle(ctx)
+        assert "not active" in result.lower()
+
+    def test_show_server_not_responding(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="show llama3.3")
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=False):
+            result = handle(ctx)
+        assert "not responding" in result.lower()
+
+    def test_info_alias_works(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="info llama3.3")
+        details_output = "Model: llama3.3\n  Parameters: 8B"
+        with patch("app.provider.get_provider_name", return_value="local"), \
+             patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.format_model_details", return_value=details_output):
+            result = handle(ctx)
+        assert "llama3.3" in result
+
+    def test_info_bare_shows_usage(self, koan_root, instance_dir):
+        ctx = _make_ctx(koan_root, instance_dir, args="info")
+        result = handle(ctx)
+        assert "Usage:" in result
+
+    def test_help_includes_show(self, koan_root, instance_dir):
+        """Help text should mention the show command."""
+        ctx = _make_ctx(koan_root, instance_dir, args="help")
+        result = handle(ctx)
+        assert "show" in result.lower()

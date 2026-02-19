@@ -291,11 +291,11 @@ class TestOllamaClaudeAvailability:
 # ---------------------------------------------------------------------------
 
 class TestOllamaClaudeQuota:
-    """Quota check validates proxy reachability (no API quota concept)."""
+    """Quota check validates proxy reachability and model availability."""
 
-    def test_available_when_proxy_reachable(self):
+    def test_available_when_server_and_model_ready(self):
         with _mock_config(), \
-             patch("app.ollama_client.is_server_ready", return_value=True):
+             patch("app.ollama_client.check_server_and_model", return_value=(True, "")):
             p = OllamaClaudeProvider()
             ok, detail = p.check_quota_available("/tmp/project")
             assert ok is True
@@ -472,11 +472,11 @@ class TestBaseProviderGetEnv:
 # ---------------------------------------------------------------------------
 
 class TestOllamaClaudeQuotaCheck:
-    """check_quota_available validates proxy reachability."""
+    """check_quota_available validates proxy reachability and model."""
 
-    def test_quota_ok_when_proxy_reachable(self):
+    def test_quota_ok_when_server_and_model_ready(self):
         with _mock_config(), \
-             patch("app.ollama_client.is_server_ready", return_value=True):
+             patch("app.ollama_client.check_server_and_model", return_value=(True, "")):
             p = OllamaClaudeProvider()
             ok, detail = p.check_quota_available("/tmp/project")
             assert ok is True
@@ -484,7 +484,8 @@ class TestOllamaClaudeQuotaCheck:
 
     def test_quota_fails_when_proxy_unreachable(self):
         with _mock_config(), \
-             patch("app.ollama_client.is_server_ready", return_value=False):
+             patch("app.ollama_client.check_server_and_model",
+                   return_value=(False, "Ollama server not responding at http://localhost:8080")):
             p = OllamaClaudeProvider()
             ok, detail = p.check_quota_available("/tmp/project")
             assert ok is False
@@ -506,20 +507,54 @@ class TestOllamaClaudeQuotaCheck:
             assert ok is False
             assert "model" in detail
 
-    def test_quota_uses_configured_base_url(self):
+    def test_quota_passes_base_url_and_model(self):
         with _mock_config(), \
-             patch("app.ollama_client.is_server_ready", return_value=True) as mock_ready:
+             patch("app.ollama_client.check_server_and_model",
+                   return_value=(True, "")) as mock_check:
             p = OllamaClaudeProvider()
             p.check_quota_available("/tmp/project")
-            mock_ready.assert_called_once_with(
-                base_url="http://localhost:8080", timeout=15.0
+            mock_check.assert_called_once_with(
+                model_name="llama3.3",
+                base_url="http://localhost:8080",
+                timeout=15.0,
+                auto_pull=False,
             )
 
     def test_quota_passes_timeout(self):
         with _mock_config(), \
-             patch("app.ollama_client.is_server_ready", return_value=True) as mock_ready:
+             patch("app.ollama_client.check_server_and_model",
+                   return_value=(True, "")) as mock_check:
             p = OllamaClaudeProvider()
             p.check_quota_available("/tmp/project", timeout=30)
-            mock_ready.assert_called_once_with(
-                base_url="http://localhost:8080", timeout=30.0
+            mock_check.assert_called_once_with(
+                model_name="llama3.3",
+                base_url="http://localhost:8080",
+                timeout=30.0,
+                auto_pull=False,
             )
+
+    def test_auto_pull_disabled_by_default(self):
+        with _mock_config(), \
+             patch("app.ollama_client.check_server_and_model",
+                   return_value=(True, "")) as mock_check:
+            p = OllamaClaudeProvider()
+            p.check_quota_available("/tmp/project")
+            _, kwargs = mock_check.call_args
+            assert kwargs["auto_pull"] is False
+
+    def test_auto_pull_enabled_from_config(self):
+        config = {
+            "ollama_claude": {
+                "base_url": "http://localhost:8080",
+                "model": "llama3.3",
+                "api_key": "ollama",
+                "auto_pull": True,
+            }
+        }
+        with _mock_config(config), \
+             patch("app.ollama_client.check_server_and_model",
+                   return_value=(True, "")) as mock_check:
+            p = OllamaClaudeProvider()
+            p.check_quota_available("/tmp/project")
+            _, kwargs = mock_check.call_args
+            assert kwargs["auto_pull"] is True

@@ -90,6 +90,7 @@ cli_provider: "claude"
 #   base_url: "http://localhost:11434/v1"
 #   model: "glm4"
 #   api_key: ""   # Usually empty for local servers
+#   auto_pull: false  # Auto-pull missing models on startup (default: false)
 
 # Ollama-Claude configuration (used when cli_provider: "ollama-claude")
 # Routes the real Claude CLI through a local Ollama backend via an
@@ -103,6 +104,7 @@ cli_provider: "claude"
 #   model: "llama3.3"                     # Default model (required)
 #   sonnet_model: ""                      # Override ANTHROPIC_DEFAULT_SONNET_MODEL
 #   haiku_model: ""                       # Override ANTHROPIC_DEFAULT_HAIKU_MODEL
+#   auto_pull: false                      # Auto-pull missing models on startup (default: false)
 
 # Claude model configuration
 # Controls which models are used for different types of Claude calls

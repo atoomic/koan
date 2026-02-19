@@ -219,9 +219,16 @@ def get_model_info(model_name: str, base_url: str = "", timeout: float = 5.0) ->
 
 
 def check_server_and_model(
-    model_name: str, base_url: str = "", timeout: float = 5.0
+    model_name: str, base_url: str = "", timeout: float = 5.0,
+    auto_pull: bool = False,
 ) -> Tuple[bool, str]:
     """Combined check: server reachable + model available.
+
+    Args:
+        model_name: Model to check (e.g. "llama3.3").
+        base_url: Ollama server URL.
+        timeout: Request timeout.
+        auto_pull: If True, automatically pull the model when not available.
 
     Returns (ok, detail) where:
         ok=True, detail="" — ready to use
@@ -237,6 +244,11 @@ def check_server_and_model(
         return False, "No model configured (set KOAN_LOCAL_LLM_MODEL or local_llm.model in config.yaml)"
 
     if not is_model_available(model_name, base_url=base_url, timeout=timeout):
+        if auto_pull:
+            ok, detail = pull_model(model_name, base_url=base_url)
+            if ok:
+                return True, f"auto-pulled {model_name}"
+            return False, f"Auto-pull failed for '{model_name}': {detail}"
         return False, f"Model '{model_name}' not found locally. Run: ollama pull {model_name}"
 
     return True, ""
@@ -382,6 +394,76 @@ def pull_model_streaming(
         return False, f"Cannot connect to Ollama at {host}: {e.reason}"
     except Exception as e:
         return False, f"Pull failed: {e}"
+
+
+def show_model(
+    model_name: str, base_url: str = "", timeout: float = 5.0
+) -> Optional[Dict[str, Any]]:
+    """Get detailed model information via the /api/show endpoint.
+
+    Returns model metadata including architecture, parameter count,
+    quantization, context length, license, and template info.
+
+    Returns None if the model is not found or the server is unreachable.
+
+    Response keys (non-exhaustive):
+        modelfile, parameters, template, details, model_info
+    The 'details' dict contains: parent_model, format, family,
+        families, parameter_size, quantization_level.
+    The 'model_info' dict contains architecture-level metadata like
+        context_length, embedding_length, etc.
+    """
+    if not model_name or not model_name.strip():
+        return None
+
+    host = _get_ollama_host(base_url)
+    try:
+        return _api_post(
+            host, "/api/show",
+            {"name": model_name.strip()},
+            timeout=timeout,
+        )
+    except RuntimeError:
+        return None
+
+
+def format_model_details(model_name: str, base_url: str = "", timeout: float = 5.0) -> str:
+    """Format detailed model information for display.
+
+    Calls /api/show and presents key metadata in a readable format.
+    Returns a multi-line string suitable for Telegram/console display.
+    """
+    info = show_model(model_name, base_url=base_url, timeout=timeout)
+    if info is None:
+        return f"Model '{model_name}' not found."
+
+    lines = [f"Model: {model_name}"]
+
+    details = info.get("details", {})
+    if details.get("parameter_size"):
+        lines.append(f"  Parameters: {details['parameter_size']}")
+    if details.get("family"):
+        lines.append(f"  Family: {details['family']}")
+    if details.get("quantization_level"):
+        lines.append(f"  Quantization: {details['quantization_level']}")
+    if details.get("format"):
+        lines.append(f"  Format: {details['format']}")
+
+    # Extract context length from model_info if available
+    model_info = info.get("model_info", {})
+    for key in model_info:
+        if "context_length" in key:
+            lines.append(f"  Context: {model_info[key]} tokens")
+            break
+
+    # Show license snippet if present
+    license_text = info.get("license", "")
+    if license_text:
+        # Show first line only (licenses can be very long)
+        first_line = license_text.strip().split("\n")[0][:80]
+        lines.append(f"  License: {first_line}")
+
+    return "\n".join(lines)
 
 
 def format_model_list(base_url: str = "", timeout: float = 5.0) -> str:

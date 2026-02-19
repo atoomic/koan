@@ -122,11 +122,16 @@ class OllamaClaudeProvider(ClaudeProvider):
 
         return env
 
-    def check_quota_available(self, project_path: str, timeout: int = 15) -> Tuple[bool, str]:
-        """Validate that the proxy endpoint is reachable and model is set.
+    def _get_auto_pull(self) -> bool:
+        """Check if auto_pull is enabled in ollama_claude config."""
+        return bool(self._get_config().get("auto_pull", False))
 
-        No quota concept with local models, but the proxy must be up
-        and configuration must be valid.
+    def check_quota_available(self, project_path: str, timeout: int = 15) -> Tuple[bool, str]:
+        """Validate proxy reachability, model availability, and configuration.
+
+        No quota concept with local models, but the proxy must be up,
+        configuration must be valid, and the model must be available.
+        When auto_pull is enabled, missing models are pulled automatically.
         """
         try:
             self._validate()
@@ -134,11 +139,15 @@ class OllamaClaudeProvider(ClaudeProvider):
             return False, str(e)
 
         base_url = self._get_base_url()
-        from app.ollama_client import is_server_ready
-        if not is_server_ready(base_url=base_url, timeout=float(timeout)):
-            return False, f"Ollama proxy not responding at {base_url}"
+        model = self._get_model()
 
-        return True, ""
+        from app.ollama_client import check_server_and_model
+        return check_server_and_model(
+            model_name=model,
+            base_url=base_url,
+            timeout=float(timeout),
+            auto_pull=self._get_auto_pull(),
+        )
 
     def build_model_args(self, model: str = "", fallback: str = "") -> List[str]:
         """Build model args, using configured Ollama model as default.

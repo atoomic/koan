@@ -18,7 +18,10 @@ from app.ollama_client import (
     get_model_info,
     check_server_and_model,
     format_model_list,
+    format_model_details,
+    show_model,
     delete_model,
+    pull_model,
     pull_model_streaming,
     DEFAULT_OLLAMA_HOST,
 )
@@ -498,6 +501,7 @@ class TestLocalProviderIntegration:
                 model_name="test-model",
                 base_url="http://localhost:11434/v1",
                 timeout=15.0,
+                auto_pull=False,
             )
 
     def test_check_quota_returns_error_detail(self):
@@ -559,13 +563,15 @@ class TestPidManagerIntegration:
             mock_proc = MagicMock()
             mock_proc.pid = 12345
 
+            # First call: system-wide check (False = not running),
+            # Second call: startup verification (True = started)
             with patch("shutil.which", return_value="/usr/bin/ollama"), \
                  patch("app.pid_manager.check_pidfile", return_value=None), \
                  patch("app.pid_manager._open_log_file", return_value=MagicMock()), \
                  patch("subprocess.Popen", return_value=mock_proc), \
                  patch("app.pid_manager.acquire_pid"), \
                  patch("app.pid_manager._is_process_alive", return_value=True), \
-                 patch("app.ollama_client.is_server_ready", return_value=True), \
+                 patch("app.ollama_client.is_server_ready", side_effect=[False, True]), \
                  patch("time.monotonic", side_effect=[0, 0.1, 0.2]):
                 ok, msg = start_ollama(root)
                 assert ok is True
@@ -998,3 +1004,176 @@ class TestPullModelStreaming:
             req = mock_open.call_args[0][0]
             body = json.loads(req.data.decode())
             assert body["stream"] is True
+
+
+# ---------------------------------------------------------------------------
+# show_model
+# ---------------------------------------------------------------------------
+
+
+class TestShowModel:
+    """Tests for show_model() — detailed model info via /api/show."""
+
+    def _mock_show_response(self, data):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(data).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        return mock_resp
+
+    def test_returns_model_info(self):
+        info = {
+            "details": {"family": "llama", "parameter_size": "8B"},
+            "model_info": {"llama.context_length": 8192},
+        }
+        mock_resp = self._mock_show_response(info)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = show_model("llama3.3")
+        assert result is not None
+        assert result["details"]["family"] == "llama"
+
+    def test_returns_none_for_empty_name(self):
+        assert show_model("") is None
+        assert show_model(None) is None
+
+    def test_returns_none_on_connection_error(self):
+        import urllib.error
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("fail")):
+            assert show_model("llama3.3") is None
+
+    def test_returns_none_on_http_error(self):
+        import urllib.error
+        err = urllib.error.HTTPError("url", 404, "Not Found", {}, MagicMock())
+        err.read = MagicMock(return_value=b"not found")
+        with patch("urllib.request.urlopen", side_effect=err):
+            assert show_model("llama3.3") is None
+
+    def test_sends_post_request_with_model_name(self):
+        info = {"details": {}}
+        mock_resp = self._mock_show_response(info)
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            show_model("  llama3.3  ")
+            req = mock_open.call_args[0][0]
+            assert req.method == "POST"
+            body = json.loads(req.data.decode())
+            assert body["name"] == "llama3.3"
+
+    def test_uses_custom_base_url(self):
+        info = {"details": {}}
+        mock_resp = self._mock_show_response(info)
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            show_model("llama3.3", base_url="http://gpu:8080")
+            req = mock_open.call_args[0][0]
+            assert "gpu:8080" in req.full_url
+
+
+# ---------------------------------------------------------------------------
+# format_model_details
+# ---------------------------------------------------------------------------
+
+
+class TestFormatModelDetails:
+    """Tests for format_model_details() — human-readable model info."""
+
+    def test_not_found(self):
+        with patch("app.ollama_client.show_model", return_value=None):
+            result = format_model_details("nonexistent")
+        assert "not found" in result.lower()
+
+    def test_basic_details(self):
+        info = {
+            "details": {
+                "family": "llama",
+                "parameter_size": "8B",
+                "quantization_level": "Q4_K_M",
+                "format": "gguf",
+            },
+            "model_info": {},
+        }
+        with patch("app.ollama_client.show_model", return_value=info):
+            result = format_model_details("llama3.3")
+        assert "llama3.3" in result
+        assert "8B" in result
+        assert "llama" in result
+        assert "Q4_K_M" in result
+        assert "gguf" in result
+
+    def test_context_length_from_model_info(self):
+        info = {
+            "details": {},
+            "model_info": {"llama.context_length": 131072},
+        }
+        with patch("app.ollama_client.show_model", return_value=info):
+            result = format_model_details("llama3.3")
+        assert "131072" in result
+        assert "tokens" in result.lower()
+
+    def test_license_truncated(self):
+        info = {
+            "details": {},
+            "model_info": {},
+            "license": "MIT License\nFull license text here...\nMore lines",
+        }
+        with patch("app.ollama_client.show_model", return_value=info):
+            result = format_model_details("llama3.3")
+        assert "MIT License" in result
+        # Should not include subsequent lines
+        assert "More lines" not in result
+
+    def test_empty_details(self):
+        info = {"details": {}, "model_info": {}}
+        with patch("app.ollama_client.show_model", return_value=info):
+            result = format_model_details("llama3.3")
+        assert "llama3.3" in result
+
+
+# ---------------------------------------------------------------------------
+# check_server_and_model — auto_pull
+# ---------------------------------------------------------------------------
+
+
+class TestCheckServerAndModelAutoPull:
+    """Tests for auto_pull parameter in check_server_and_model()."""
+
+    def test_auto_pull_disabled_by_default(self):
+        """Without auto_pull, missing model returns error."""
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False):
+            ok, detail = check_server_and_model("llama3.3")
+        assert ok is False
+        assert "not found locally" in detail
+
+    def test_auto_pull_triggers_on_missing_model(self):
+        """With auto_pull=True, missing model triggers pull."""
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False), \
+             patch("app.ollama_client.pull_model", return_value=(True, "success")) as mock_pull:
+            ok, detail = check_server_and_model("llama3.3", auto_pull=True)
+        assert ok is True
+        assert "auto-pulled" in detail
+        mock_pull.assert_called_once_with("llama3.3", base_url="")
+
+    def test_auto_pull_failure(self):
+        """Auto-pull failure returns error."""
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=False), \
+             patch("app.ollama_client.pull_model", return_value=(False, "network error")):
+            ok, detail = check_server_and_model("llama3.3", auto_pull=True)
+        assert ok is False
+        assert "Auto-pull failed" in detail
+
+    def test_auto_pull_skipped_when_model_available(self):
+        """Auto-pull not triggered when model already available."""
+        with patch("app.ollama_client.is_server_ready", return_value=True), \
+             patch("app.ollama_client.is_model_available", return_value=True), \
+             patch("app.ollama_client.pull_model") as mock_pull:
+            ok, detail = check_server_and_model("llama3.3", auto_pull=True)
+        assert ok is True
+        mock_pull.assert_not_called()
+
+    def test_auto_pull_not_triggered_without_server(self):
+        """Auto-pull not attempted if server is down."""
+        with patch("app.ollama_client.is_server_ready", return_value=False):
+            ok, detail = check_server_and_model("llama3.3", auto_pull=True)
+        assert ok is False
+        assert "not responding" in detail

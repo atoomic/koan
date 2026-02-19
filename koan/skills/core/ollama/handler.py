@@ -61,6 +61,12 @@ def handle(ctx):
     if args in ("list", "ls", "models"):
         return _handle_list(ctx)
 
+    if args.startswith("show ") or args.startswith("info "):
+        name = args.split(" ", 1)[1].strip()
+        return _handle_show(ctx, name)
+    if args in ("show", "info"):
+        return "Usage: /ollama show <model>\nExample: /ollama show llama3.3"
+
     return _handle_status(ctx)
 
 
@@ -68,12 +74,13 @@ def _handle_help():
     """Show available /ollama subcommands."""
     return (
         "Ollama management commands:\n"
-        "  /ollama          — Server status + models\n"
-        "  /ollama list     — List available models\n"
-        "  /ollama pull <m> — Download a model\n"
-        "  /ollama rm <m>   — Remove a model\n"
-        "  /ollama help     — This message\n"
-        "\nAliases: /llama, list→ls, remove→rm"
+        "  /ollama           — Server status + models\n"
+        "  /ollama list      — List available models\n"
+        "  /ollama show <m>  — Detailed model info\n"
+        "  /ollama pull <m>  — Download a model\n"
+        "  /ollama rm <m>    — Remove a model\n"
+        "  /ollama help      — This message\n"
+        "\nAliases: /llama, list→ls, show→info, remove→rm"
     )
 
 
@@ -134,6 +141,23 @@ def _handle_remove(ctx, model_name):
     if ok:
         return f"Model '{model_name}'{size_str} removed."
     return f"Failed to remove '{model_name}': {detail}"
+
+
+def _handle_show(ctx, model_name):
+    """Show detailed model information via /api/show."""
+    from app.ollama_client import format_model_details, is_server_ready
+
+    provider, err = _check_provider()
+    if err:
+        return err
+
+    if not model_name:
+        return "Usage: /ollama show <model>\nExample: /ollama show llama3.3"
+
+    if not is_server_ready():
+        return "Ollama server not responding."
+
+    return format_model_details(model_name)
 
 
 def _handle_list(ctx):

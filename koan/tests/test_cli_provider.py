@@ -768,6 +768,32 @@ class TestLocalLLMProvider:
         assert "glm4" in result
         assert "--disallowed-tools" in result
 
+    @patch("app.utils.load_config", return_value={"local_llm": {"auto_pull": True}})
+    def test_auto_pull_enabled_from_config(self, mock_config):
+        assert self.provider._get_auto_pull() is True
+
+    @patch("app.utils.load_config", return_value={"local_llm": {}})
+    def test_auto_pull_disabled_by_default(self, mock_config):
+        assert self.provider._get_auto_pull() is False
+
+    @patch("app.utils.load_config", return_value={})
+    def test_auto_pull_disabled_when_no_config(self, mock_config):
+        assert self.provider._get_auto_pull() is False
+
+    @patch("app.utils.load_config", return_value={"local_llm": {"model": "glm4", "auto_pull": True}})
+    @patch("app.ollama_client.check_server_and_model", return_value=(True, ""))
+    def test_quota_check_passes_auto_pull(self, mock_check, mock_config):
+        self.provider.check_quota_available("/tmp/project")
+        _, kwargs = mock_check.call_args
+        assert kwargs["auto_pull"] is True
+
+    @patch("app.utils.load_config", return_value={"local_llm": {"model": "glm4"}})
+    @patch("app.ollama_client.check_server_and_model", return_value=(True, ""))
+    def test_quota_check_auto_pull_off_by_default(self, mock_check, mock_config):
+        self.provider.check_quota_available("/tmp/project")
+        _, kwargs = mock_check.call_args
+        assert kwargs["auto_pull"] is False
+
 
 # ---------------------------------------------------------------------------
 # Provider resolution with local provider

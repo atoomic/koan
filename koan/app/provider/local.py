@@ -122,11 +122,20 @@ class LocalLLMProvider(CLIProvider):
         # MCP not supported by local LLM runner — tools are built-in
         return []
 
+    def _get_auto_pull(self) -> bool:
+        """Check if auto_pull is enabled in config.yaml.
+
+        When enabled, models are automatically pulled on first use
+        if not already available locally.
+        """
+        return bool(self._get_config().get("auto_pull", False))
+
     def check_quota_available(self, project_path: str, timeout: int = 15) -> Tuple[bool, str]:
         """Check that Ollama server is running and the model is available.
 
         Local LLMs have no quota, but the server must be reachable and
-        the configured model must be pulled locally.
+        the configured model must be pulled locally. When auto_pull is
+        enabled, missing models are pulled automatically.
         """
         from app.ollama_client import check_server_and_model
         model = self._get_default_model()
@@ -134,6 +143,7 @@ class LocalLLMProvider(CLIProvider):
             model_name=model,
             base_url=self._get_base_url(),
             timeout=float(timeout),
+            auto_pull=self._get_auto_pull(),
         )
 
     def build_command(self, prompt: str, **kwargs) -> List[str]:

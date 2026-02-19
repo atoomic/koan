@@ -302,11 +302,23 @@ def start_ollama(koan_root: Path, verify_timeout: float = OLLAMA_VERIFY_TIMEOUT)
     Checks that ollama binary is available, not already running,
     then launches it in the background with a tracked PID file.
 
+    Detects system-wide Ollama instances (brew services, manual start,
+    Docker) by probing the HTTP endpoint before spawning a new process.
+
     Returns (success: bool, message: str).
     """
     pid = check_pidfile(koan_root, "ollama")
     if pid:
         return False, f"ollama already running (PID {pid})"
+
+    # Detect system-wide Ollama instance before spawning a new one.
+    # The server may be running via brew services, Docker, or manual start.
+    try:
+        from app.ollama_client import is_server_ready
+        if is_server_ready(timeout=2.0):
+            return True, "ollama already running (system-wide) — adopted"
+    except Exception:
+        pass
 
     ollama_bin = shutil.which("ollama")
     if not ollama_bin:
