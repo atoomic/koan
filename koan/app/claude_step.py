@@ -53,6 +53,7 @@ def _rebase_onto_target(base: str, project_path: str) -> Optional[str]:
                 ["git", "rebase", "--abort"],
                 stdin=subprocess.DEVNULL,
                 capture_output=True, cwd=project_path,
+                timeout=30,
             )
     return None
 
@@ -121,6 +122,7 @@ def commit_if_changes(project_path: str, message: str) -> bool:
     status = subprocess.run(
         ["git", "status", "--porcelain"],
         capture_output=True, text=True, cwd=project_path,
+        timeout=30,
     )
     if not status.stdout.strip():
         return False
