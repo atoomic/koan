@@ -272,6 +272,32 @@ def _on_sigint(signum, frame):
 
 
 # ---------------------------------------------------------------------------
+# Process group helpers
+# ---------------------------------------------------------------------------
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """Kill a subprocess and its entire process group.
+
+    With start_new_session=True the child is the process group leader.
+    proc.kill() only sends SIGKILL to the leader — children survive.
+    os.killpg() terminates the whole group.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        # Process already exited or we lack permission — fall back
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Claude subprocess execution
 # ---------------------------------------------------------------------------
 
@@ -1750,6 +1776,11 @@ def _run_skill_mission(
             text=True,
             start_new_session=True,
         )
+        # Register with signal handler so double-tap CTRL-C can terminate
+        # the subprocess.  Without this, the child becomes an orphan because
+        # _on_sigint() checks _sig.claude_proc which would be None.
+        _sig.claude_proc = proc
+
         # Drain stderr in a background thread to prevent deadlock.
         # If the child fills the stderr pipe buffer (~64KB) while we
         # block reading stdout, both processes stall indefinitely.
@@ -1789,8 +1820,7 @@ def _run_skill_mission(
             if skill_stderr:
                 debug_log(f"[run] skill stderr: {skill_stderr[:2000]}")
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+        _kill_process_group(proc)
         log("error", "Skill runner timed out (10min)")
         debug_log("[run] skill exec: TIMEOUT (600s)")
         exit_code = 1
@@ -1803,6 +1833,7 @@ def _run_skill_mission(
         skill_stdout = "\n".join(stdout_lines)
         skill_stderr = "\n".join(stderr_lines)
     finally:
+        _sig.claude_proc = None
         _reset_terminal()
         # Restore koan repo branch if it was changed by the skill.
         _restore_koan_branch(koan_root, koan_branch_before)
