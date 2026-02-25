@@ -63,7 +63,7 @@ def _open_log_file(koan_root: Path, process_name: str):
     try:
         from app.utils import load_config
         config = load_config()
-    except Exception:
+    except (ImportError, OSError, ValueError):
         pass  # Fall back to defaults
     
     cfg = get_log_config(config)

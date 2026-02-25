@@ -41,22 +41,7 @@ ALLOWLIST: Set[Tuple[str, str]] = {
     ("run.py", "_cleanup_temp"),                # unlink best-effort
     # --- Best-effort display / info gathering ---
     ("ai_runner.py", "_gather_project_structure"),  # dir listing for prompt context
-    ("startup_info.py", "_get_config_value"),    # config value fallback
-    ("startup_info.py", "_get_provider"),         # provider detection fallback
-    ("startup_info.py", "_get_projects_summary"), # project count fallback
-    ("startup_info.py", "_get_skills_summary"),   # skill count fallback
-    ("startup_info.py", "_get_file_size"),         # file size fallback
-    ("dashboard.py", "get_signal_status"),        # pause file read for web dashboard
     # --- Config / init loading (defaults are safe) ---
-    ("debug.py", "_init"),                       # debug mode config loading
-    ("pid_manager.py", "_open_log_file"),         # log rotation config loading
-    ("provider/claude.py", "check_quota_available"),  # tool allowlist parsing
-    ("provider/local.py", "_get_config"),         # model list parsing
-    # --- Context gathering for prompts (empty string is safe) ---
-    ("prompt_builder.py", "_load_config_safe"),   # config loading for prompt
-    ("prompt_builder.py", "_is_auto_merge_enabled"),  # merge config check
-    ("prompt_builder.py", "_get_branch_prefix"),  # branch prefix fallback
-    ("awake.py", "_build_chat_prompt"),           # pending.md read for chat context
     # --- GitHub API best-effort (None/empty is safe) ---
     ("github.py", "get_gh_username"),             # gh username cache miss
     ("github.py", "detect_parent_repo"),          # parent repo detection
