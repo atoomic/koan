@@ -1208,6 +1208,91 @@ projects:
         mock_count.assert_not_called()
 
     @patch("app.github.get_gh_username", return_value="koan-bot")
+    @patch("app.github.count_open_prs", return_value=10)
+    def test_workspace_project_uses_cached_github_url(self, mock_count, mock_user, koan_root):
+        """Workspace project with github_url only in memory cache — PR limit enforced."""
+        # Config has defaults.max_open_prs but the project has no github_url in yaml
+        (koan_root / "projects.yaml").write_text("""
+defaults:
+  max_open_prs: 5
+projects:
+  yaml-proj:
+    path: /path/to/yaml-proj
+    github_url: owner/yaml-proj
+""")
+        # Simulate workspace project with github_url cached in projects_merged
+        from app.projects_merged import set_github_url, _github_url_cache
+        old_cache = dict(_github_url_cache)
+        try:
+            set_github_url("ws-proj", "owner/ws-proj")
+            result = _filter_exploration_projects(
+                [("yaml-proj", "/path/to/yaml-proj"), ("ws-proj", "/path/to/ws-proj")],
+                str(koan_root),
+            )
+            # Both projects should be PR-limited (count=10, limit=5)
+            assert "yaml-proj" in result.pr_limited
+            assert "ws-proj" in result.pr_limited
+            assert result.projects == []
+        finally:
+            _github_url_cache.clear()
+            _github_url_cache.update(old_cache)
+
+    @patch("app.github.get_gh_username", return_value="koan-bot")
+    @patch("app.github.count_open_prs", return_value=2)
+    def test_workspace_project_under_limit_included(self, mock_count, mock_user, koan_root):
+        """Workspace project with cached github_url and under PR limit — included."""
+        (koan_root / "projects.yaml").write_text("""
+defaults:
+  max_open_prs: 5
+projects:
+  yaml-proj:
+    path: /path/to/yaml-proj
+    github_url: owner/yaml-proj
+""")
+        from app.projects_merged import set_github_url, _github_url_cache
+        old_cache = dict(_github_url_cache)
+        try:
+            set_github_url("ws-proj", "owner/ws-proj")
+            result = _filter_exploration_projects(
+                [("yaml-proj", "/path/to/yaml-proj"), ("ws-proj", "/path/to/ws-proj")],
+                str(koan_root),
+            )
+            # Both under limit (count=2, limit=5) — both included
+            assert len(result.projects) == 2
+            assert result.pr_limited == []
+        finally:
+            _github_url_cache.clear()
+            _github_url_cache.update(old_cache)
+
+    @patch("app.github.get_gh_username", return_value="koan-bot")
+    @patch("app.github.count_open_prs")
+    def test_workspace_project_no_cache_no_yaml_skips_check(self, mock_count, mock_user, koan_root):
+        """Workspace project with no github_url anywhere — PR check skipped (fail-open)."""
+        (koan_root / "projects.yaml").write_text("""
+defaults:
+  max_open_prs: 5
+projects:
+  yaml-proj:
+    path: /path/to/yaml-proj
+    github_url: owner/yaml-proj
+""")
+        from app.projects_merged import _github_url_cache
+        old_cache = dict(_github_url_cache)
+        try:
+            # No cached URL for ws-proj
+            _github_url_cache.pop("ws-proj", None)
+            result = _filter_exploration_projects(
+                [("ws-proj", "/path/to/ws-proj")],
+                str(koan_root),
+            )
+            # No github_url → included (fail-open), no gh call
+            assert len(result.projects) == 1
+            mock_count.assert_not_called()
+        finally:
+            _github_url_cache.clear()
+            _github_url_cache.update(old_cache)
+
+    @patch("app.github.get_gh_username", return_value="koan-bot")
     @patch("app.github.count_open_prs")
     def test_zero_limit_means_unlimited(self, mock_count, mock_user, koan_root):
         """max_open_prs: 0 means unlimited — no gh call made."""

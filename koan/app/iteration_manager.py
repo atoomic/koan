@@ -379,9 +379,16 @@ def _filter_exploration_projects(
             filtered.append((name, path))
             continue
 
-        # Resolve github_url from project config
+        # Resolve github_url from project config, falling back to the
+        # in-memory cache (populated at startup for workspace projects).
         project_cfg = config.get("projects", {}).get(name, {}) or {}
         github_url = project_cfg.get("github_url", "")
+        if not github_url:
+            try:
+                from app.projects_merged import get_github_url
+                github_url = get_github_url(name) or ""
+            except (ImportError, OSError) as e:
+                _log_iteration("debug", f"github_url cache lookup failed for '{name}': {e}")
         if not github_url:
             _log_iteration("debug",
                 f"Project '{name}' has max_open_prs={limit} but no github_url — skipping PR check")
