@@ -107,6 +107,42 @@ class TestRecoverMissions:
         assert "Complex Project" in in_progress_section
         assert "Step 2" in in_progress_section
 
+    def test_complex_mission_with_indented_lines(self, instance_dir):
+        """Indented continuation lines don't terminate complex mission context.
+
+        Regression: stripped.startswith("  ") was always False because
+        strip() removes leading whitespace. Sub-items after indented lines
+        would be incorrectly recovered as simple missions.
+        """
+        missions = instance_dir / "missions.md"
+        missions.write_text(
+            _missions(
+                in_progress=(
+                    "### Migration project\n"
+                    "- Phase 1: done\n"
+                    "  notes about phase 1\n"
+                    "- Phase 2: in progress\n"
+                    "- Phase 3: todo\n"
+                    "\n"
+                    "- Simple orphan task"
+                )
+            )
+        )
+
+        count = recover_missions(str(instance_dir))
+        # Only the simple orphan after the blank line separator should be recovered
+        assert count == 1
+
+        content = missions.read_text()
+        lines = content.splitlines()
+        in_prog_idx = next(i for i, l in enumerate(lines) if "en cours" in l.lower())
+        done_idx = next(i for i, l in enumerate(lines) if "terminées" in l.lower())
+        in_progress_section = "\n".join(lines[in_prog_idx + 1 : done_idx])
+        # ALL complex sub-items (including those after indented lines) must stay
+        assert "Migration project" in in_progress_section
+        assert "Phase 2" in in_progress_section
+        assert "Phase 3" in in_progress_section
+
     def test_removes_aucune_placeholder(self, instance_dir):
         """The (aucune) placeholder is removed from pending when missions are added."""
         missions = instance_dir / "missions.md"

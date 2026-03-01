@@ -310,6 +310,10 @@ class GitAutoMerger:
 
         exit_code, _, stderr = run_git(self.project_path, "push", "origin", base_branch)
         if exit_code != 0:
+            # Rollback local merge to stay in sync with remote.
+            # Without this, the orphan merge commit persists and causes
+            # "nothing to commit" on the next auto-merge attempt.
+            run_git(self.project_path, "reset", "--hard", f"origin/{base_branch}")
             return False, f"Failed to push {base_branch}: {stderr}"
 
         return True, ""
@@ -503,6 +507,8 @@ def _perform_merge_inner(project_path: str, branch: str, base_branch: str, strat
 
     exit_code, _, stderr = run_git(project_path, "push", "origin", base_branch)
     if exit_code != 0:
+        # Rollback local merge to stay in sync with remote
+        run_git(project_path, "reset", "--hard", f"origin/{base_branch}")
         return False, f"Failed to push {base_branch}: {stderr}"
 
     return True, ""

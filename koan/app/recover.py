@@ -89,7 +89,11 @@ def recover_missions(instance_dir: str) -> int:
 
         if in_complex_mission:
             # Sub-item of a complex mission — keep it
-            if stripped.startswith("- ") or stripped.startswith("  ") or stripped == "":
+            # Check original `line` for indentation (not `stripped` which has
+            # no leading whitespace). Without this, indented continuation lines
+            # prematurely terminate the complex mission context and subsequent
+            # sub-items get incorrectly recovered as simple missions.
+            if stripped.startswith("- ") or line.startswith("  ") or stripped == "":
                 remaining_in_progress.append(line)
                 if stripped == "":
                     in_complex_mission = False

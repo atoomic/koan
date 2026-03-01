@@ -823,8 +823,8 @@ class TestPerformMerge:
             assert ok is False
             assert "pull" in err.lower()
 
-    def test_push_failure(self):
-        """Push failure after successful merge."""
+    def test_push_failure_triggers_rollback(self):
+        """Push failure after successful merge rolls back local branch."""
         calls = [
             (0, "", ""),   # git log
             (0, "", ""),   # checkout
@@ -832,12 +832,18 @@ class TestPerformMerge:
             (0, "", ""),   # merge --squash
             (0, "", ""),   # commit
             (1, "", "rejected"),  # push fails
+            (0, "", ""),   # reset --hard origin/main (rollback)
             (0, "", ""),   # checkout main (finally)
         ]
-        with self._mock_git(calls):
+        with self._mock_git(calls) as mock:
             ok, err = perform_merge("/tmp", "koan/fix", "main", "squash")
             assert ok is False
             assert "push" in err.lower()
+            # Verify rollback was called with reset --hard
+            reset_call = mock.call_args_list[6]
+            assert "reset" in str(reset_call)
+            assert "--hard" in str(reset_call)
+            assert "origin/main" in str(reset_call)
 
     def test_rebase_ff_merge_failure(self):
         """After successful rebase, ff-merge fails."""

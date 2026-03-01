@@ -59,6 +59,7 @@ def call_claude(prompt: str) -> str:
     )
     result = subprocess.run(
         cmd,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=60,

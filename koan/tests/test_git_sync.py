@@ -45,7 +45,8 @@ class TestGetKoanBranches:
             "  remotes/origin/koan/other\n"
             "  main\n"
         )
-        with patch("app.git_sync.run_git", return_value=mock_output):
+        with patch("app.git_sync.run_git", return_value=mock_output), \
+             patch("app.git_sync._get_prefix", return_value="koan/"):
             branches = get_koan_branches("/fake")
         assert "koan/fix-bug" in branches
         assert "koan/current" in branches
@@ -54,14 +55,35 @@ class TestGetKoanBranches:
         assert len([b for b in branches if b == "koan/fix-bug"]) == 1
 
     def test_empty_output(self):
-        with patch("app.git_sync.run_git", return_value=""):
+        with patch("app.git_sync.run_git", return_value=""), \
+             patch("app.git_sync._get_prefix", return_value="koan/"):
             assert get_koan_branches("/fake") == []
+
+    def test_respects_custom_prefix(self):
+        """Branches are filtered by configured prefix, not hardcoded 'koan/'.
+
+        Regression: get_koan_branches() previously hardcoded 'koan/' instead
+        of using _get_prefix(), breaking custom prefix configurations.
+        """
+        mock_output = (
+            "  mybot/fix-bug\n"
+            "  mybot/feature\n"
+            "  koan/should-not-match\n"
+            "  main\n"
+        )
+        with patch("app.git_sync.run_git", return_value=mock_output), \
+             patch("app.git_sync._get_prefix", return_value="mybot/"):
+            branches = get_koan_branches("/fake")
+        assert "mybot/fix-bug" in branches
+        assert "mybot/feature" in branches
+        assert "koan/should-not-match" not in branches
 
 
 class TestGetMergedBranches:
     def test_parses_merged(self):
         mock_output = "  remotes/origin/koan/done-feature\n  remotes/origin/koan/old-fix\n"
-        with patch("app.git_sync.run_git", return_value=mock_output):
+        with patch("app.git_sync.run_git", return_value=mock_output), \
+             patch("app.git_sync._get_prefix", return_value="koan/"):
             merged = get_merged_branches("/fake")
         assert "koan/done-feature" in merged
         assert "koan/old-fix" in merged
@@ -80,7 +102,8 @@ class TestGetUnmergedBranches:
                 return merged_output
             return all_branches
 
-        with patch("app.git_sync.run_git", side_effect=side_effect):
+        with patch("app.git_sync.run_git", side_effect=side_effect), \
+             patch("app.git_sync._get_prefix", return_value="koan/"):
             unmerged = get_unmerged_branches("/fake")
         assert "koan/wip" in unmerged
         assert "koan/pending-review" in unmerged
@@ -102,7 +125,8 @@ class TestGetRecentMainCommits:
 
 class TestBuildSyncReport:
     def test_report_includes_merged_and_unmerged(self):
-        with patch("app.git_sync.run_git") as mock_git:
+        with patch("app.git_sync.run_git") as mock_git, \
+             patch("app.git_sync._get_prefix", return_value="koan/"):
             def side_effect(cwd, *args):
                 args_str = " ".join(args)
                 if "fetch" in args_str:
@@ -127,7 +151,8 @@ class TestBuildSyncReport:
         assert "Git sync" in report
 
     def test_report_no_changes(self):
-        with patch("app.git_sync.run_git", return_value=""):
+        with patch("app.git_sync.run_git", return_value=""), \
+             patch("app.git_sync._get_prefix", return_value="koan/"):
             report = build_sync_report("/fake")
         assert "No notable changes" in report
 
