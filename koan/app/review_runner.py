@@ -42,16 +42,20 @@ def build_review_prompt(context: dict, skill_dir: Optional[Path] = None) -> str:
     )
 
 
-def _run_claude_review(prompt: str, project_path: str, timeout: int = 300) -> str:
+def _run_claude_review(
+    prompt: str, project_path: str, timeout: int = 600,
+) -> Tuple[str, str]:
     """Run Claude CLI with read-only tools and return the output text.
 
     Args:
         prompt: The review prompt.
         project_path: Path to the project for codebase context.
-        timeout: Maximum seconds to wait.
+        timeout: Maximum seconds to wait (default 600s — large PRs need
+                 more time than the old 300s default).
 
     Returns:
-        Claude's review text, or empty string on failure.
+        (output, error) tuple. output is Claude's review text (empty on
+        failure), error is the failure reason (empty on success).
     """
     from app.claude_step import run_claude
     from app.cli_provider import build_full_command
@@ -68,8 +72,10 @@ def _run_claude_review(prompt: str, project_path: str, timeout: int = 300) -> st
 
     result = run_claude(cmd, project_path, timeout=timeout)
     if result["success"]:
-        return result["output"]
-    return ""
+        return result["output"], ""
+    error = result.get("error", "unknown error")
+    print(f"[review_runner] Claude review failed: {error}", file=sys.stderr)
+    return "", error
 
 
 def _extract_review_body(raw_output: str) -> str:
@@ -164,9 +170,10 @@ def run_review(
 
     # Step 3: Run Claude review (read-only)
     notify_fn(f"Analyzing code changes on `{context['branch']}`...")
-    raw_output = _run_claude_review(prompt, project_path)
+    raw_output, error = _run_claude_review(prompt, project_path)
     if not raw_output:
-        return False, f"Claude review produced no output for PR #{pr_number}."
+        detail = f" ({error})" if error else ""
+        return False, f"Claude review failed for PR #{pr_number}{detail}."
 
     # Step 4: Extract structured review
     review_body = _extract_review_body(raw_output)
