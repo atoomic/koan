@@ -146,6 +146,26 @@ class TestHandleCommandRouting:
         msg = mock_send.call_args[0][0]
         assert "Did you mean" not in msg
 
+    def test_group_name_as_command_shows_group_help(
+        self, patch_bridge_state, mock_send, mock_registry
+    ):
+        """/missions (group name) should expand the group, not error."""
+        from app.command_handlers import handle_command
+        from app.skills import Skill, SkillCommand
+        skill = MagicMock(spec=Skill)
+        skill.description = "Create or manage missions"
+        cmd = MagicMock(spec=SkillCommand)
+        cmd.name = "mission"
+        cmd.description = "Create a mission"
+        cmd.aliases = []
+        skill.commands = [cmd]
+        mock_registry.list_by_group.return_value = [skill]
+        handle_command("/missions")
+        mock_send.assert_called_once()
+        msg = mock_send.call_args[0][0]
+        assert "Missions" in msg
+        assert "❌ Unknown command" not in msg
+
     def test_help_command(self, patch_bridge_state, mock_send, mock_registry):
         from app.command_handlers import handle_command
         handle_command("/help")
@@ -745,12 +765,12 @@ class TestHandleHelp:
         _handle_help()
         msg = mock_send.call_args[0][0]
         assert "Help" in msg
-        assert "/missions" in msg
-        assert "/code" in msg
-        assert "/status" in msg
-        assert "/config" in msg
-        assert "/ideas" in msg
-        assert "/system" in msg
+        assert "missions" in msg
+        assert "code" in msg
+        assert "status" in msg
+        assert "config" in msg
+        assert "ideas" in msg
+        assert "system" in msg
 
     def test_help_shows_navigation_hints(self, patch_bridge_state, mock_send, mock_registry):
         from app.command_handlers import _handle_help

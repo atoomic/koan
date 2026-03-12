@@ -128,6 +128,11 @@ def handle_command(text: str):
         handle_mission(f"{command_name} {command_args}")
         return
 
+    # Group-name fallback: /<group> → /help <group>
+    if command_name in _GROUP_META:
+        _handle_help_group(command_name, registry)
+        return
+
     # Unknown command — reject immediately instead of wasting LLM credits
     suggestion = registry.suggest_command(command_name, extra_commands=list(CORE_COMMANDS))
     hint = f"\nDid you mean /{suggestion}?" if suggestion else ""
@@ -484,7 +489,7 @@ def _handle_help():
     for group in registry.groups():
         if group not in _GROUP_META:
             count = len(registry.list_by_group(group))
-            parts.append(f"📦 /{group} — {count} command{'s' if count != 1 else ''}")
+            parts.append(f"📦 {group} — {count} command{'s' if count != 1 else ''}")
 
     # Non-core skills section (if any installed)
     non_core = [s for s in registry.list_all() if s.scope != "core"]
