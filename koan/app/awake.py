@@ -623,6 +623,67 @@ set_callbacks(handle_chat=handle_chat, run_in_worker=_run_in_worker)
 # Main loop
 # ---------------------------------------------------------------------------
 
+REACTIONS_FILE = INSTANCE_DIR / "reactions.jsonl"
+
+
+def _handle_reaction_update(update: dict):
+    """Process a message_reaction update from Telegram.
+
+    Looks up the reacted-to message in conversation history to enrich
+    the reaction with context, then stores it in reactions.jsonl.
+    """
+    from app.reaction_store import save_reaction, lookup_message_context
+
+    reaction_data = update.get("message_reaction", {})
+    chat_id = str(reaction_data.get("chat", {}).get("id", ""))
+    if chat_id != CHAT_ID:
+        return
+
+    message_id = reaction_data.get("message_id", 0)
+    if not message_id:
+        return
+
+    new_emojis = {
+        e.get("emoji", "")
+        for e in reaction_data.get("new_reaction", [])
+        if e.get("type") == "emoji"
+    }
+    old_emojis = {
+        e.get("emoji", "")
+        for e in reaction_data.get("old_reaction", [])
+        if e.get("type") == "emoji"
+    }
+
+    added = new_emojis - old_emojis
+    removed = old_emojis - new_emojis
+
+    # Look up original message context
+    context = lookup_message_context(CONVERSATION_HISTORY_FILE, message_id)
+    text_preview = ""
+    msg_type = ""
+    if context:
+        text_preview = context.get("text", "")[:100]
+        msg_type = context.get("message_type", "")
+
+    for emoji in added:
+        save_reaction(
+            REACTIONS_FILE, message_id, emoji,
+            is_added=True,
+            original_text_preview=text_preview,
+            message_type=msg_type,
+        )
+        log("reaction", f"Reaction {emoji} added on message {message_id}")
+
+    for emoji in removed:
+        save_reaction(
+            REACTIONS_FILE, message_id, emoji,
+            is_added=False,
+            original_text_preview=text_preview,
+            message_type=msg_type,
+        )
+        log("reaction", f"Reaction {emoji} removed from message {message_id}")
+
+
 def handle_message(text: str):
     text = text.strip()
     if not text:
@@ -725,6 +786,15 @@ def main():
 
             for update in updates:
                 offset = update["update_id"] + 1
+
+                # Handle reaction updates
+                if "message_reaction" in update:
+                    try:
+                        _handle_reaction_update(update)
+                    except Exception as e:
+                        log("error", f"Reaction handling failed: {e}")
+                    continue
+
                 msg = update.get("message", {})
                 text = msg.get("text", "")
                 chat_id = str(msg.get("chat", {}).get("id", ""))
