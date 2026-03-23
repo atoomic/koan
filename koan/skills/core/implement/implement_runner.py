@@ -11,6 +11,7 @@ CLI:
     python3 -m skills.core.implement.implement_runner --project-path <path> --issue-url <url> --context "Phase 1 to 3"
 """
 
+import datetime
 import logging
 import re
 from pathlib import Path
@@ -26,6 +27,16 @@ from app.pr_submit import (
 from app.prompts import load_prompt_or_skill
 
 logger = logging.getLogger(__name__)
+
+
+def _progress(msg: str) -> None:
+    """Print a timestamped progress line to stdout.
+
+    These lines are captured by ``_run_skill_mission`` in run.py and
+    appended to ``pending.md``, making them visible via ``/live``.
+    """
+    ts = datetime.datetime.now().strftime("%H:%M")
+    print(f"{ts} — {msg}", flush=True)
 
 
 # Regex pattern matching plan structure markers
@@ -68,6 +79,7 @@ def run_implement(
         return False, str(e)
 
     context_label = f" ({context})" if context else ""
+    _progress(f"Fetching issue #{issue_number} ({owner}/{repo}){context_label}")
     notify_fn(
         f"\U0001f528 Implementing issue #{issue_number} "
         f"({owner}/{repo}){context_label}..."
@@ -88,8 +100,10 @@ def run_implement(
             f"No plan found in issue #{issue_number}. "
             "The issue should contain implementation phases."
         )
+    _progress(f"Plan extracted from issue ({len(plan)} chars, {len(comments)} comments)")
 
     # Invoke Claude with the plan
+    _progress("Starting implementation with Claude...")
     try:
         output = _execute_implementation(
             project_path=project_path,
@@ -107,6 +121,7 @@ def run_implement(
         return False, "Claude returned empty output."
 
     # Post-implementation: submit draft PR
+    _progress("Implementation complete, submitting draft PR...")
     pr_url = None
     try:
         pr_url = _submit_implement_pr(
