@@ -220,7 +220,7 @@ class TestBuildPrompt:
 class TestExecuteImplementation:
     def test_passes_correct_run_command_params(self):
         with patch(f"{_IMPL_MODULE}._build_prompt", return_value="prompt"), \
-             patch("app.cli_provider.run_command", return_value="ok") as mock_run:
+             patch("app.cli_provider.run_command_streaming", return_value="ok") as mock_run:
             result = _execute_implementation(
                 "/project", "url", "t", "p", "c",
                 skill_dir=Path("/skill"),
@@ -229,14 +229,14 @@ class TestExecuteImplementation:
             call_kwargs = mock_run.call_args
             assert call_kwargs[0][0] == "prompt"
             assert call_kwargs[0][1] == "/project"
-            assert call_kwargs[1]["max_turns"] == 50
+            assert call_kwargs[1]["max_turns"] == 200
             assert call_kwargs[1]["timeout"] == 3600
             assert result == "ok"
 
     def test_passes_allowed_tools(self):
         """run_command must receive allowed_tools covering full CLAUDE_TOOLS set."""
         with patch(f"{_IMPL_MODULE}._build_prompt", return_value="p"), \
-             patch("app.cli_provider.run_command", return_value="ok") as mock_run:
+             patch("app.cli_provider.run_command_streaming", return_value="ok") as mock_run:
             _execute_implementation("/project", "url", "t", "p", "c")
             call_args = mock_run.call_args
             tools = call_args[1].get("allowed_tools") or call_args[0][2]
@@ -737,6 +737,41 @@ class TestGetProjectSubmitToRepository:
         result = get_project_submit_to_repository(config, "app")
         assert result == {"repo": "up/stream"}
         assert "remote" not in result
+
+
+# ---------------------------------------------------------------------------
+# Progress output
+# ---------------------------------------------------------------------------
+
+class TestProgressOutput:
+    """Verify that run_implement prints timestamped progress lines to stdout."""
+
+    def test_progress_lines_emitted(self, capsys):
+        """Pipeline stages should print HH:MM — <message> lines."""
+        notify = MagicMock()
+        body = "### Summary\nPlan\n#### Phase 1: Do it"
+        with patch(f"{_IMPL_MODULE}.fetch_issue_with_comments",
+                    return_value=("Title", body, [])), \
+             patch(f"{_IMPL_MODULE}._execute_implementation",
+                    return_value="Done"), \
+             patch(f"{_IMPL_MODULE}._submit_implement_pr",
+                    return_value="https://github.com/o/r/pull/10"), \
+             patch(f"{_IMPL_MODULE}.get_current_branch",
+                    return_value="koan/implement-42"):
+            run_implement(
+                "/project",
+                "https://github.com/o/r/issues/42",
+                notify_fn=notify,
+            )
+        captured = capsys.readouterr().out
+        lines = captured.strip().splitlines()
+        # Expect at least: fetch, plan extracted, starting impl, submitting PR
+        progress_lines = [l for l in lines if " — " in l]
+        assert len(progress_lines) >= 4, f"Expected ≥4 progress lines, got: {progress_lines}"
+        # Verify timestamp format HH:MM
+        import re
+        for line in progress_lines:
+            assert re.match(r"\d{2}:\d{2} — ", line), f"Bad format: {line}"
 
 
 # ---------------------------------------------------------------------------

@@ -209,6 +209,10 @@ _NOTIF_CACHE_MAX = 2000
 _notif_cache: dict = {}
 _notif_cache_lock = threading.Lock()
 
+# SSO alert cooldown: only send one Telegram alert per hour.
+_SSO_ALERT_COOLDOWN = 3600  # 1 hour
+_last_sso_alert: float = 0
+
 # Lock protecting all module-level mutable GitHub state above.
 # Acquired for short state reads/writes only — never held during API calls.
 _github_state_lock = threading.Lock()
@@ -231,14 +235,28 @@ def _github_log(message: str, level: str = "info") -> None:
         log.info(message)
 
 
-def _notif_cache_key(notif: dict) -> tuple:
-    """Build a cache key from a notification's thread ID and updated_at."""
-    return (str(notif.get("id", "")), notif.get("updated_at", ""))
+def _notif_cache_key(notif: dict) -> Optional[tuple]:
+    """Build a cache key from a notification's thread ID and updated_at.
+
+    Returns None if the notification has no truthy ``id`` — callers must
+    skip caching to avoid all ID-less notifications colliding on the same
+    cache slot.
+    """
+    notif_id = notif.get("id")
+    if not notif_id:
+        log.warning(
+            "GitHub notification missing 'id', skipping cache: %s",
+            notif.get("subject", {}).get("title", "<unknown>"),
+        )
+        return None
+    return (str(notif_id), notif.get("updated_at", ""))
 
 
 def _is_notif_cached(notif: dict) -> bool:
     """Check if a notification is in the processing cache and not expired."""
     key = _notif_cache_key(notif)
+    if key is None:
+        return False  # ID-less notifications are never considered cached
     with _notif_cache_lock:
         cached_at = _notif_cache.get(key)
         if cached_at is None:
@@ -252,6 +270,8 @@ def _is_notif_cached(notif: dict) -> bool:
 def _cache_notif(notif: dict) -> None:
     """Add a notification to the processing cache."""
     key = _notif_cache_key(notif)
+    if key is None:
+        return  # Warning already emitted by _notif_cache_key
     now = time.time()
     with _notif_cache_lock:
         _notif_cache[key] = now
@@ -457,10 +477,42 @@ def _get_effective_check_interval() -> int:
         return _get_effective_check_interval_locked()
 
 
+def _check_sso_failures() -> None:
+    """After a notification cycle, check for SSO failures and alert once per cooldown."""
+    global _last_sso_alert
+
+    from app.github_notifications import get_sso_failure_count
+
+    count = get_sso_failure_count()
+    if count == 0:
+        return
+
+    now = time.time()
+    with _github_state_lock:
+        if now - _last_sso_alert < _SSO_ALERT_COOLDOWN:
+            return
+        _last_sso_alert = now
+
+    _github_log(
+        f"SSO auth failure: {count} API call(s) returned 403 — "
+        "run: gh auth refresh -h github.com -s read:org",
+        "warning",
+    )
+    try:
+        from app.notify import send_telegram
+        send_telegram(
+            "⚠️ GitHub API returning 403 for enterprise org repos — "
+            "SSO token needs re-authorization.\n"
+            "Run: gh auth refresh -h github.com -s read:org"
+        )
+    except (ImportError, OSError) as e:
+        log.debug("Failed to send SSO alert: %s", e)
+
+
 def reset_github_backoff() -> None:
     """Reset backoff state. Useful for tests and when external events suggest activity."""
     global _last_github_check, _last_github_check_iso, _consecutive_empty_checks, _github_config_logged, _github_interval_loaded
-    global _github_config_cache, _github_config_cache_mtime
+    global _github_config_cache, _github_config_cache_mtime, _last_sso_alert
     with _github_state_lock:
         _last_github_check = 0
         _last_github_check_iso = ""
@@ -469,6 +521,7 @@ def reset_github_backoff() -> None:
         _github_interval_loaded = False
         _github_config_cache = _GITHUB_CONFIG_UNSET
         _github_config_cache_mtime = 0
+        _last_sso_alert = 0
     with _notif_cache_lock:
         _notif_cache.clear()
 
@@ -538,7 +591,8 @@ def process_github_notifications(
         projects_config = load_projects_config(koan_root)
 
         # Fetch and process notifications
-        from app.github_notifications import fetch_unread_notifications, mark_notification_read
+        from app.github_notifications import fetch_unread_notifications, mark_notification_read, reset_sso_failure_count
+        reset_sso_failure_count()
         from app.github_command_handler import (
             process_single_notification,
             post_error_reply,
@@ -625,6 +679,9 @@ def process_github_notifications(
         drained = _drain_notifications(result.drain)
         if drained > 0:
             log.debug("GitHub: drained %d non-actionable notification(s)", drained)
+
+        # Check for SSO failures and alert if needed
+        _check_sso_failures()
 
         # Update backoff state
         with _github_state_lock:

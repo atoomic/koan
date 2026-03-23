@@ -9,6 +9,16 @@
 # project_path: "/path/to/your/project"
 # pilot_repo: "/path/to/koan"
 
+# Start on pause — boot directly into pause mode
+# When true, Kōan starts paused and waits for an explicit /resume before
+# picking up missions. Useful for scheduled launches (cron, launchd) where
+# you want the stack running but idle until you're ready.
+# Manual pauses (/pause) are preserved; stale system pauses (quota, max_runs)
+# are replaced with a clean start_on_pause reason.
+# The /resume command sets KOAN_SKIP_START_PAUSE=1 internally so auto-restart
+# after resume doesn't immediately re-pause.
+# start_on_pause: false
+
 # Budget & Scheduling
 # These are the primary source of truth for run loop configuration.
 # max_runs_per_day: Maximum runs before auto-pause (resets on /resume or quota reset)
@@ -47,6 +57,14 @@ fast_reply: false
 # Increase if you see timeouts on complex issues; decrease to save quota.
 # Default: 3600 (60 minutes). Previous default was 900 (15 minutes).
 skill_timeout: 3600
+
+# Skill max turns — maximum agentic turns for heavy skill execution
+# Controls how many back-and-forth turns Claude CLI is allowed during
+# /implement, /fix, and /incident invocations. Complex multi-step plans
+# may need more turns to complete. If you see "Reached max turns (N)"
+# errors, increase this value.
+# Default: 200.
+# skill_max_turns: 200
 
 # Contemplative mode trigger chance (0-100%)
 # When no mission is pending, this is the probability of running a reflective
@@ -90,7 +108,7 @@ tools:
     - Shell: Bash (run git, gh, make, and other commands)
 
 # CLI provider — which AI CLI to use as the backend
-# Options: "claude" (default), "copilot" (GitHub Copilot CLI), "local" (local LLM)
+# Options: "claude" (default), "codex" (OpenAI Codex CLI), "copilot" (GitHub Copilot CLI), "local" (local LLM)
 # Can also be set via KOAN_CLI_PROVIDER env var (overrides this)
 cli_provider: "claude"
 
@@ -164,7 +182,7 @@ usage:
 # Per-project overrides are now configured in projects.yaml.
 # Supported per-project settings:
 #   - git_auto_merge: per-project merge rules
-#   - cli_provider: override AI provider ("claude", "copilot", "local")
+#   - cli_provider: override AI provider ("claude", "codex", "copilot", "local")
 #   - models: override model selection (mission, chat, lightweight, etc.)
 #   - tools: restrict available tools (mission, chat tool lists)
 #   - github: override authorized_users for GitHub @mention commands

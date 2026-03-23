@@ -2080,6 +2080,71 @@ class TestNotificationCache:
         assert mock_process.call_args[0][0]["id"] == "2"
 
 
+class TestNotificationCacheIdValidation:
+    """Verify that notifications with missing/falsy IDs are not cached."""
+
+    def setup_method(self):
+        from app.loop_manager import reset_github_backoff
+        reset_github_backoff()
+
+    def test_missing_id_returns_none_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"updated_at": "2026-03-20T10:00:00Z"}
+        assert _notif_cache_key(notif) is None
+
+    def test_none_id_returns_none_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"id": None, "updated_at": "2026-03-20T10:00:00Z"}
+        assert _notif_cache_key(notif) is None
+
+    def test_empty_string_id_returns_none_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"id": "", "updated_at": "2026-03-20T10:00:00Z"}
+        assert _notif_cache_key(notif) is None
+
+    def test_falsy_zero_id_returns_none_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"id": 0, "updated_at": "2026-03-20T10:00:00Z"}
+        assert _notif_cache_key(notif) is None
+
+    def test_truthy_id_returns_valid_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"id": "42", "updated_at": "2026-03-20T10:00:00Z"}
+        key = _notif_cache_key(notif)
+        assert key == ("42", "2026-03-20T10:00:00Z")
+
+    def test_idless_notif_is_never_cached(self):
+        from app.loop_manager import _is_notif_cached, _cache_notif
+        notif = {"updated_at": "2026-03-20T10:00:00Z"}
+        _cache_notif(notif)
+        assert not _is_notif_cached(notif)
+
+    def test_idless_notifs_dont_collide(self):
+        """Two ID-less notifications with different updated_at must not
+        deduplicate against each other."""
+        from app.loop_manager import _is_notif_cached, _cache_notif
+        notif_a = {"updated_at": "2026-03-20T10:00:00Z",
+                   "subject": {"title": "A"}}
+        notif_b = {"updated_at": "2026-03-20T11:00:00Z",
+                   "subject": {"title": "B"}}
+        _cache_notif(notif_a)
+        _cache_notif(notif_b)
+        # Neither should be considered cached — both pass through
+        assert not _is_notif_cached(notif_a)
+        assert not _is_notif_cached(notif_b)
+
+    def test_warning_logged_for_missing_id(self, caplog):
+        import logging
+        from app.loop_manager import _notif_cache_key
+        notif = {"subject": {"title": "Test PR"},
+                 "updated_at": "2026-03-20T10:00:00Z"}
+        with caplog.at_level(logging.WARNING, logger="app.loop_manager"):
+            result = _notif_cache_key(notif)
+        assert result is None
+        assert "missing 'id'" in caplog.text
+        assert "Test PR" in caplog.text
+
+
 # --- Thread-safety tests ---
 
 
@@ -2149,3 +2214,55 @@ class TestThreadSafety:
             t.join(timeout=5)
 
         assert not errors, f"Thread-safety errors: {errors}"
+
+
+# ---------------------------------------------------------------------------
+# SSO alert detection (_check_sso_failures)
+# ---------------------------------------------------------------------------
+
+class TestCheckSSOFailures:
+    def setup_method(self):
+        from app.loop_manager import reset_github_backoff
+        from app.github_notifications import reset_sso_failure_count
+        reset_github_backoff()
+        reset_sso_failure_count()
+
+    def teardown_method(self):
+        from app.loop_manager import reset_github_backoff
+        from app.github_notifications import reset_sso_failure_count
+        reset_github_backoff()
+        reset_sso_failure_count()
+
+    @patch("app.loop_manager.log")
+    def test_no_alert_when_no_sso_failures(self, mock_log):
+        from app.loop_manager import _check_sso_failures
+        _check_sso_failures()
+        # Should not log any warning
+        mock_log.warning.assert_not_called()
+
+    def test_sends_telegram_on_sso_failure(self):
+        from app.loop_manager import _check_sso_failures
+        from app.github_notifications import _record_sso_failure
+        _record_sso_failure("test")
+
+        with patch("app.notify.send_telegram") as mock_tg:
+            _check_sso_failures()
+            mock_tg.assert_called_once()
+            msg = mock_tg.call_args[0][0]
+            assert "SSO" in msg
+            assert "gh auth refresh" in msg
+
+    def test_cooldown_prevents_repeated_alerts(self):
+        from app.loop_manager import _check_sso_failures
+        from app.github_notifications import _record_sso_failure, reset_sso_failure_count
+
+        with patch("app.notify.send_telegram") as mock_tg:
+            _record_sso_failure("test1")
+            _check_sso_failures()
+            assert mock_tg.call_count == 1
+
+            # Second call within cooldown — should not alert again
+            reset_sso_failure_count()
+            _record_sso_failure("test2")
+            _check_sso_failures()
+            assert mock_tg.call_count == 1
