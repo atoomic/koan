@@ -15,6 +15,8 @@ structured plan. Your task has two parts:
 
 {BODY}
 {PROJECT_MEMORY}
+{ISSUE_CONTEXT}
+
 ---
 
 ## Original Plan
