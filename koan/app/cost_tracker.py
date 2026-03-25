@@ -211,9 +211,19 @@ def _aggregate(entries: list) -> dict:
 
         # By model
         if model not in result["by_model"]:
-            result["by_model"][model] = {"input_tokens": 0, "output_tokens": 0, "count": 0}
+            result["by_model"][model] = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "total_cost_usd": 0.0,
+                "count": 0,
+            }
         result["by_model"][model]["input_tokens"] += inp
         result["by_model"][model]["output_tokens"] += out
+        result["by_model"][model]["cache_creation_input_tokens"] += cache_create
+        result["by_model"][model]["cache_read_input_tokens"] += cache_read
+        result["by_model"][model]["total_cost_usd"] += cost
         result["by_model"][model]["count"] += 1
 
     # Compute cache hit rate: cache_read / (cache_read + non-cached input)
@@ -225,6 +235,53 @@ def _aggregate(entries: list) -> dict:
         result["cache_hit_rate"] = 0.0
 
     return result
+
+
+def estimate_cache_savings(summary: dict, pricing: Optional[dict] = None) -> Optional[float]:
+    """Estimate dollar savings from prompt cache reads.
+
+    Uses by-model cache read token counts and configured input-token pricing.
+    Anthropic prompt cache reads are billed at ~10% of regular input cost,
+    so savings are approximated as 90% of normal input price for cache-read tokens.
+
+    Args:
+        summary: Aggregated summary dict from _aggregate/summarize_*.
+        pricing: Optional pricing table from config.
+
+    Returns:
+        Estimated savings in USD, or None when pricing is unavailable.
+    """
+    if not pricing:
+        return None
+
+    by_model = summary.get("by_model", {}) if isinstance(summary, dict) else {}
+    if not isinstance(by_model, dict) or not by_model:
+        return 0.0
+
+    savings = 0.0
+    for model_id, model_data in by_model.items():
+        if not isinstance(model_data, dict):
+            continue
+
+        cache_read = model_data.get("cache_read_input_tokens", 0) or 0
+        if cache_read <= 0:
+            continue
+
+        model_price = None
+        model_lower = str(model_id).lower()
+        for key in pricing:
+            if str(key).lower() in model_lower:
+                model_price = pricing[key]
+                break
+
+        if not isinstance(model_price, dict):
+            continue
+
+        input_price = model_price.get("input", 0) or 0
+        # Approximation: read is billed at 10% => 90% saved vs uncached input.
+        savings += (cache_read / 1_000_000) * float(input_price) * 0.9
+
+    return round(savings, 6)
 
 
 def estimate_cost(tokens: dict, pricing: Optional[dict] = None) -> Optional[float]:
@@ -275,7 +332,8 @@ def daily_series(
         project: Optional project name to filter by.
 
     Returns:
-        List of dicts, one per day: {date, total_input, total_output, count, cost}.
+        List of dicts, one per day: {date, total_input, total_output, count, cost,
+        cache_read_input_tokens, cache_creation_input_tokens, cache_hit_rate}.
         cost is a float (USD) when pricing is configured, otherwise None.
     """
     usage_dir = Path(instance_dir) / "usage"
@@ -307,11 +365,68 @@ def daily_series(
             "date": current.isoformat(),
             "total_input": day_summary["total_input"],
             "total_output": day_summary["total_output"],
+            "cache_creation_input_tokens": day_summary["cache_creation_input_tokens"],
+            "cache_read_input_tokens": day_summary["cache_read_input_tokens"],
+            "cache_hit_rate": day_summary["cache_hit_rate"],
             "count": day_summary["count"],
             "cost": cost,
+            "cache_read_input_tokens": day_summary["cache_read_input_tokens"],
+            "cache_creation_input_tokens": day_summary["cache_creation_input_tokens"],
+            "cache_hit_rate": day_summary["cache_hit_rate"],
         })
         current += timedelta(days=1)
     return result
+
+
+def format_cache_summary(instance_dir: Path, days: int = 1) -> str:
+    """Return a one-line human-readable cache performance summary.
+
+    Args:
+        instance_dir: Path to instance directory.
+        days: Number of days to aggregate (default: today only).
+
+    Returns:
+        A string like "Cache: 45% hit rate (12.3k read / 8.1k created)"
+        or empty string if no cache data.
+    """
+    end = date.today()
+    start = end - timedelta(days=days - 1)
+    summary = summarize_range(instance_dir, start, end)
+    cache_read = summary.get("cache_read_input_tokens", 0)
+    cache_create = summary.get("cache_creation_input_tokens", 0)
+    if not cache_read and not cache_create:
+        return ""
+    hit_rate = summary.get("cache_hit_rate", 0.0)
+    return (
+        f"Cache: {hit_rate:.0%} hit rate "
+        f"({_format_tokens(cache_read)} read / {_format_tokens(cache_create)} created)"
+    )
+
+
+def format_mission_cache_line(
+    cache_read: int, cache_create: int, input_tokens: int
+) -> str:
+    """Format a compact cache line for a single mission.
+
+    Returns empty string if no cache activity.
+    """
+    if not cache_read and not cache_create:
+        return ""
+    total_input = input_tokens + cache_read + cache_create
+    hit_rate = cache_read / total_input if total_input > 0 else 0.0
+    return (
+        f"Cache: {hit_rate:.0%} hit "
+        f"({_format_tokens(cache_read)} read / {_format_tokens(cache_create)} created)"
+    )
+
+
+def _format_tokens(n: int) -> str:
+    """Format token count in human-friendly way."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
 
 
 def get_pricing_config(config: Optional[dict] = None) -> Optional[dict]:

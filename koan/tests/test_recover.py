@@ -525,6 +525,28 @@ class TestRecoveryCounterHelpers:
         result = _strip_recovery_counter("- Fix the bug")
         assert result == "- Fix the bug"
 
+    def test_get_attempts_malformed_non_integer(self):
+        """Malformed [r:abc] defaults to 0 instead of raising ValueError."""
+        assert _get_recovery_attempts("- Fix the bug [r:abc]") == 0
+
+    def test_get_attempts_malformed_float(self):
+        """Malformed [r:3.5] defaults to 0."""
+        assert _get_recovery_attempts("- Fix the bug [r:3.5]") == 0
+
+    def test_get_attempts_malformed_empty(self):
+        """Malformed [r:] defaults to 0."""
+        assert _get_recovery_attempts("- Fix the bug [r:]") == 0
+
+    def test_strip_malformed_counter(self):
+        """Malformed [r:abc] is still stripped from the line."""
+        result = _strip_recovery_counter("- Fix the bug [r:abc]")
+        assert result == "- Fix the bug"
+
+    def test_set_replaces_malformed_counter(self):
+        """Malformed [r:abc] is replaced with a valid counter."""
+        result = _set_recovery_attempts("- Fix the bug [r:abc]", 1)
+        assert result == "- Fix the bug [r:1]"
+
 
 # ---------------------------------------------------------------------------
 # State classification
@@ -589,6 +611,18 @@ class TestRecoveryCounterIntegration:
         content = missions.read_text()
         assert "[r:2]" in content
         assert "[r:1]" not in content
+
+    def test_malformed_counter_recovered_as_first_attempt(self, instance_dir):
+        """A mission with a malformed [r:abc] counter is treated as 0 attempts."""
+        missions = instance_dir / "missions.md"
+        missions.write_text(_missions(in_progress="- Fix the bug [r:abc]"))
+
+        count = recover_missions(str(instance_dir))
+        assert count == 1
+
+        content = missions.read_text()
+        assert "[r:1]" in content
+        assert "[r:abc]" not in content
 
     def test_counter_preserved_in_pending(self, instance_dir):
         """The [r:N] tag is present in Pending after recovery."""
@@ -768,6 +802,41 @@ class TestRecoveryJSONLLog:
 # ---------------------------------------------------------------------------
 # Dry-run mode
 # ---------------------------------------------------------------------------
+
+class TestRecoverPendingJournalTOCTOU:
+    """TOCTOU race: pending.md deleted between exists() and read_text()."""
+
+    def test_pending_deleted_after_exists_check(self, instance_dir):
+        """If pending.md is deleted between exists() and read_text(), recovery
+        should not raise FileNotFoundError — it should treat it as absent.
+
+        This is a benign race: the agent process deletes pending.md after
+        completing a mission, while recover.py is concurrently checking it.
+        """
+        missions = instance_dir / "missions.md"
+        missions.write_text(_missions(in_progress="- Stale task"))
+
+        pending_path = instance_dir / "journal" / "pending.md"
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text("# Mission\n---\n10:00 — started\n")
+
+        original_read_text = Path.read_text
+
+        def _disappearing_read_text(self, *args, **kwargs):
+            """Simulate the file vanishing between exists() and read_text()."""
+            if self.name == "pending.md" and "journal" in str(self):
+                # Delete the file to simulate the race, then let read_text fail
+                self.unlink(missing_ok=True)
+                return original_read_text(self, *args, **kwargs)
+            return original_read_text(self, *args, **kwargs)
+
+        with patch.object(Path, "read_text", _disappearing_read_text):
+            # This must NOT raise FileNotFoundError
+            count = recover_missions(str(instance_dir))
+
+        # Mission should still be recovered (as "dead", not "partial")
+        assert count == 1
+
 
 class TestDryRun:
     """Dry-run mode classifies without modifying missions.md."""

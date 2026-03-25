@@ -209,6 +209,15 @@ _NOTIF_CACHE_MAX = 2000
 _notif_cache: dict = {}
 _notif_cache_lock = threading.Lock()
 
+# --- Failed error reply queue ---
+# When posting an error reply to GitHub fails, store the params here for retry
+# on the next notification cycle. Each entry is a dict with keys:
+# owner, repo, issue_num, comment_id, error, comment_api_url.
+_MAX_REPLY_RETRIES = 3
+_MAX_PENDING_REPLIES = 50
+_pending_error_replies: list = []
+_pending_error_replies_lock = threading.Lock()
+
 # Lock protecting all module-level mutable GitHub state above.
 # Acquired for short state reads/writes only — never held during API calls.
 _github_state_lock = threading.Lock()
@@ -231,14 +240,28 @@ def _github_log(message: str, level: str = "info") -> None:
         log.info(message)
 
 
-def _notif_cache_key(notif: dict) -> tuple:
-    """Build a cache key from a notification's thread ID and updated_at."""
-    return (str(notif.get("id", "")), notif.get("updated_at", ""))
+def _notif_cache_key(notif: dict) -> Optional[tuple]:
+    """Build a cache key from a notification's thread ID and updated_at.
+
+    Returns None if the notification has no truthy ``id`` — callers must
+    skip caching to avoid all ID-less notifications colliding on the same
+    cache slot.
+    """
+    notif_id = notif.get("id")
+    if not notif_id:
+        log.warning(
+            "GitHub notification missing 'id', skipping cache: %s",
+            notif.get("subject", {}).get("title", "<unknown>"),
+        )
+        return None
+    return (str(notif_id), notif.get("updated_at", ""))
 
 
 def _is_notif_cached(notif: dict) -> bool:
     """Check if a notification is in the processing cache and not expired."""
     key = _notif_cache_key(notif)
+    if key is None:
+        return False  # ID-less notifications are never considered cached
     with _notif_cache_lock:
         cached_at = _notif_cache.get(key)
         if cached_at is None:
@@ -252,6 +275,8 @@ def _is_notif_cached(notif: dict) -> bool:
 def _cache_notif(notif: dict) -> None:
     """Add a notification to the processing cache."""
     key = _notif_cache_key(notif)
+    if key is None:
+        return  # Warning already emitted by _notif_cache_key
     now = time.time()
     with _notif_cache_lock:
         _notif_cache[key] = now
@@ -263,7 +288,7 @@ def _cache_notif(notif: dict) -> None:
         for k in expired:
             del _notif_cache[k]
         # If still over limit, evict oldest
-        if len(_notif_cache) > _NOTIF_CACHE_MAX:
+        if _notif_cache and len(_notif_cache) > _NOTIF_CACHE_MAX:
             oldest_key = min(_notif_cache, key=_notif_cache.get)
             del _notif_cache[oldest_key]
 
@@ -335,28 +360,51 @@ def _load_github_config(config: dict, koan_root: str, instance_dir: str) -> Opti
 
 # Module-level cache for the GitHub notification skill registry.
 # _build_skill_registry() is called every ~30s cycle; caching avoids
-# rebuilding from filesystem each time.
+# rebuilding from filesystem each time.  Invalidated when skills
+# directories change on disk (mtime check).
 _gh_cached_registry = None
 _gh_cached_extra_dirs: Optional[tuple] = None
+_gh_cached_mtime: float = 0.0
+
+
+def _skills_dir_mtime(instance_dir: str) -> float:
+    """Get the max mtime of core and instance skills directories."""
+    best = 0.0
+    core_dir = Path(__file__).resolve().parent.parent / "skills" / "core"
+    try:
+        best = max(best, core_dir.stat().st_mtime)
+    except OSError:
+        pass
+    instance_skills = Path(instance_dir) / "skills"
+    if instance_skills.is_dir():
+        try:
+            best = max(best, instance_skills.stat().st_mtime)
+        except OSError:
+            pass
+    return best
 
 
 def _build_skill_registry(instance_dir: str):
     """Build combined skill registry from core and instance skills.
 
     Uses a module-level cache to avoid rebuilding from filesystem on
-    every GitHub notification polling cycle (~30s).
+    every GitHub notification polling cycle (~30s).  Automatically
+    invalidates when skills directories change on disk (new skill added).
 
     Returns:
         Populated SkillRegistry
     """
-    global _gh_cached_registry, _gh_cached_extra_dirs
+    global _gh_cached_registry, _gh_cached_extra_dirs, _gh_cached_mtime
     from app.skills import build_registry
 
     instance_skills = Path(instance_dir) / "skills"
     extra = tuple(p for p in [instance_skills] if p.is_dir())
+    current_mtime = _skills_dir_mtime(instance_dir)
 
     with _github_state_lock:
-        if _gh_cached_registry is not None and extra == _gh_cached_extra_dirs:
+        if (_gh_cached_registry is not None
+                and extra == _gh_cached_extra_dirs
+                and current_mtime <= _gh_cached_mtime):
             return _gh_cached_registry
 
     registry = build_registry(list(extra))
@@ -364,6 +412,7 @@ def _build_skill_registry(instance_dir: str):
     with _github_state_lock:
         _gh_cached_registry = registry
         _gh_cached_extra_dirs = extra
+        _gh_cached_mtime = current_mtime
 
     return registry
 
@@ -457,6 +506,33 @@ def _get_effective_check_interval() -> int:
         return _get_effective_check_interval_locked()
 
 
+def _check_sso_failures() -> None:
+    """After a notification cycle, update consecutive counter and escalate if needed."""
+    from app.github_notifications import (
+        get_sso_failure_count,
+        update_consecutive_sso_failures,
+        check_sso_escalation,
+        get_consecutive_sso_failures,
+    )
+
+    count = get_sso_failure_count()
+    update_consecutive_sso_failures()
+
+    if count == 0:
+        return
+
+    consecutive = get_consecutive_sso_failures()
+    _github_log(
+        f"SSO auth failure: {count} call(s) this cycle, "
+        f"{consecutive} consecutive — "
+        "run: gh auth refresh -h github.com -s read:org",
+        "warning",
+    )
+
+    # Escalate to outbox after threshold (fires once per streak)
+    check_sso_escalation()
+
+
 def reset_github_backoff() -> None:
     """Reset backoff state. Useful for tests and when external events suggest activity."""
     global _last_github_check, _last_github_check_iso, _consecutive_empty_checks, _github_config_logged, _github_interval_loaded
@@ -471,6 +547,47 @@ def reset_github_backoff() -> None:
         _github_config_cache_mtime = 0
     with _notif_cache_lock:
         _notif_cache.clear()
+    with _pending_error_replies_lock:
+        _pending_error_replies.clear()
+
+
+def _retry_failed_replies() -> None:
+    """Retry previously failed GitHub error replies.
+
+    Drains the pending queue and attempts each reply once. Replies that
+    fail again are re-queued (up to _MAX_REPLY_RETRIES total attempts).
+    """
+    with _pending_error_replies_lock:
+        if not _pending_error_replies:
+            return
+        batch = list(_pending_error_replies)
+        _pending_error_replies.clear()
+
+    if not batch:
+        return
+
+    from app.github_command_handler import post_error_reply
+
+    for entry in batch:
+        try:
+            post_error_reply(
+                entry["owner"], entry["repo"], entry["issue_num"],
+                entry["comment_id"], entry["error"],
+                comment_api_url=entry.get("comment_api_url", ""),
+            )
+        except (ImportError, OSError, RuntimeError, subprocess.SubprocessError) as e:
+            attempts = entry.get("attempts", 1) + 1
+            if attempts <= _MAX_REPLY_RETRIES:
+                entry["attempts"] = attempts
+                with _pending_error_replies_lock:
+                    if len(_pending_error_replies) < _MAX_PENDING_REPLIES:
+                        _pending_error_replies.append(entry)
+            else:
+                _github_log(
+                    f"Dropping error reply after {attempts - 1} attempts "
+                    f"({entry['owner']}/{entry['repo']}#{entry['issue_num']}): {e}",
+                    "warning",
+                )
 
 
 def process_github_notifications(
@@ -516,6 +633,9 @@ def process_github_notifications(
             return 0
         _last_github_check = now
 
+    # Retry any previously failed error replies before processing new ones.
+    _retry_failed_replies()
+
     try:
         from app.utils import load_config
         from app.projects_config import load_projects_config
@@ -538,7 +658,8 @@ def process_github_notifications(
         projects_config = load_projects_config(koan_root)
 
         # Fetch and process notifications
-        from app.github_notifications import fetch_unread_notifications, mark_notification_read
+        from app.github_notifications import fetch_unread_notifications, mark_notification_read, reset_sso_failure_count
+        reset_sso_failure_count()
         from app.github_command_handler import (
             process_single_notification,
             post_error_reply,
@@ -602,6 +723,12 @@ def process_github_notifications(
                 github_config.get("max_age", 24),
             )
 
+            # Cache immediately after processing: prevents re-processing on
+            # next cycle. Must happen before the error reply attempt so that
+            # a reply failure doesn't cause the whole notification to be
+            # re-processed (which could create duplicate missions).
+            _cache_notif(notif)
+
             if success:
                 missions_created += 1
                 repo = notif.get("repository", {}).get("full_name", "?")
@@ -613,11 +740,6 @@ def process_github_notifications(
                 _github_log(f"Notification error for {repo}: {error[:100]}", "warning")
                 _post_error_for_notification(notif, error)
 
-            # Cache after processing: prevents re-checking until updated_at changes.
-            # Applies to all outcomes — successful missions are also deduplicated
-            # by reaction checks, but caching avoids the API call entirely.
-            _cache_notif(notif)
-
         # Drain non-actionable notifications (ci_activity, review_requested,
         # etc.) to prevent accumulation that blocks future @mention detection.
         # When old notifications pile up on a thread, new @mentions may update
@@ -625,6 +747,9 @@ def process_github_notifications(
         drained = _drain_notifications(result.drain)
         if drained > 0:
             log.debug("GitHub: drained %d non-actionable notification(s)", drained)
+
+        # Check for SSO failures and alert if needed
+        _check_sso_failures()
 
         # Update backoff state
         with _github_state_lock:
@@ -707,13 +832,18 @@ def _notify_mission_from_mention(notif: dict) -> None:
         )
         if thread_url:
             msg += f"\n{thread_url}"
-        send_telegram(msg)
+        from app.notify import NotificationPriority
+        send_telegram(msg, priority=NotificationPriority.ACTION)
     except (ImportError, OSError) as e:
         log.debug("Failed to send notification message: %s", e)
 
 
 def _post_error_for_notification(notif: dict, error: str) -> None:
-    """Post error reply to a notification if possible."""
+    """Post error reply to a notification if possible.
+
+    On failure, queues the reply for retry on the next notification cycle
+    rather than silently dropping it.
+    """
     from app.github_command_handler import (
         post_error_reply,
         resolve_project_from_notification,
@@ -731,14 +861,24 @@ def _post_error_for_notification(notif: dict, error: str) -> None:
 
     try:
         comment = get_comment_from_notification(notif)
-        if comment:
-            comment_id = str(comment.get("id", ""))
-            comment_api_url = comment.get("url", "")
-            if comment_id:
-                post_error_reply(owner, repo, issue_num, comment_id, error,
-                                 comment_api_url=comment_api_url)
+        if not comment:
+            return
+        comment_id = str(comment.get("id", ""))
+        comment_api_url = comment.get("url", "")
+        if not comment_id:
+            return
+        post_error_reply(owner, repo, issue_num, comment_id, error,
+                         comment_api_url=comment_api_url)
     except (ImportError, OSError, RuntimeError, subprocess.SubprocessError) as e:
-        print(f"[loop_manager] Error posting reply to GitHub: {e}", file=sys.stderr)
+        _github_log(f"Error posting reply to GitHub, queuing for retry: {e}", "warning")
+        entry = {
+            "owner": owner, "repo": repo, "issue_num": issue_num,
+            "comment_id": comment_id, "error": error,
+            "comment_api_url": comment_api_url, "attempts": 1,
+        }
+        with _pending_error_replies_lock:
+            if len(_pending_error_replies) < _MAX_PENDING_REPLIES:
+                _pending_error_replies.append(entry)
 
 
 # --- Interruptible sleep ---

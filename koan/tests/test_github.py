@@ -7,9 +7,11 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from app.github import (
+    SSOAuthRequired, _is_sso_error,
     run_gh, pr_create, issue_create, api,
     get_gh_username, count_open_prs, cached_count_open_prs,
     batch_count_open_prs, fetch_issue_with_comments, detect_parent_repo,
+    resolve_target_repo, _upstream_remote_repo, _parse_remote_url,
 )
 import app.github as github_module
 
@@ -93,6 +95,103 @@ class TestRunGh:
             run_gh("api", "repos/o/r")
         assert mock_run.call_count == 3
         assert mock_sleep.call_count == 2
+
+    @patch("app.github.subprocess.run")
+    def test_raises_sso_auth_required_on_sso_error(self, mock_run):
+        """SSO/SAML errors raise SSOAuthRequired instead of RuntimeError."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stderr="Resource protected by organization SAML enforcement. "
+                   "You must grant your OAuth token access to this organization.",
+        )
+        with pytest.raises(SSOAuthRequired, match="SSO/SAML authorization required"):
+            run_gh("api", "repos/enterprise-org/repo")
+
+    @patch("app.retry.time.sleep")
+    @patch("app.github.subprocess.run")
+    def test_sso_error_not_retried(self, mock_run, mock_sleep):
+        """SSO errors are not transient — should not be retried."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stderr="SSO authorization required for this resource",
+        )
+        with pytest.raises(SSOAuthRequired):
+            run_gh("api", "repos/org/repo")
+        assert mock_run.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @patch("app.retry.time.sleep")
+    @patch("app.github.subprocess.run")
+    def test_retries_secondary_rate_limit_when_idempotent(self, mock_run, mock_sleep):
+        """Secondary rate limits are retried when idempotent=True (default)."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stderr="You have exceeded a secondary rate limit"),
+            MagicMock(returncode=0, stdout="ok\n"),
+        ]
+        assert run_gh("api", "repos/o/r", idempotent=True) == "ok"
+        assert mock_run.call_count == 2
+
+    @patch("app.retry.time.sleep")
+    @patch("app.github.subprocess.run")
+    def test_no_retry_on_secondary_rate_limit_when_not_idempotent(self, mock_run, mock_sleep):
+        """Secondary rate limits are NOT retried when idempotent=False."""
+        mock_run.return_value = MagicMock(
+            returncode=1, stderr="You have exceeded a secondary rate limit"
+        )
+        with pytest.raises(RuntimeError, match="secondary rate limit"):
+            run_gh("pr", "create", "--title", "T", "--body", "B", idempotent=False)
+        assert mock_run.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @patch("app.retry.time.sleep")
+    @patch("app.github.subprocess.run")
+    def test_retry_after_header_respected(self, mock_run, mock_sleep):
+        """When gh reports a Retry-After value, that delay is used instead of backoff."""
+        # 429 matches transient keywords; Retry-After: 30 provides the delay
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stderr="429 too many requests — Retry-After: 30"),
+            MagicMock(returncode=0, stdout="ok\n"),
+        ]
+        assert run_gh("api", "repos/o/r") == "ok"
+        mock_sleep.assert_called_once_with(30.0)
+
+
+# ---------------------------------------------------------------------------
+# _is_sso_error
+# ---------------------------------------------------------------------------
+
+class TestIsSsoError:
+    def test_detects_sso_keyword(self):
+        assert _is_sso_error("You must grant your SSO token access") is True
+
+    def test_detects_saml_keyword(self):
+        assert _is_sso_error("Resource protected by organization SAML enforcement") is True
+
+    def test_case_insensitive(self):
+        assert _is_sso_error("sso authorization required") is True
+        assert _is_sso_error("saml enforcement") is True
+
+    def test_non_sso_error(self):
+        assert _is_sso_error("not found") is False
+        assert _is_sso_error("auth required") is False
+
+
+# ---------------------------------------------------------------------------
+# SSOAuthRequired
+# ---------------------------------------------------------------------------
+
+class TestSSOAuthRequired:
+    def test_is_runtime_error_subclass(self):
+        exc = SSOAuthRequired("test stderr")
+        assert isinstance(exc, RuntimeError)
+
+    def test_includes_remediation(self):
+        exc = SSOAuthRequired("SAML enforcement error")
+        assert "gh auth refresh" in str(exc)
+
+    def test_stores_stderr(self):
+        exc = SSOAuthRequired("original stderr")
+        assert exc.stderr_text == "original stderr"
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +723,100 @@ class TestDetectParentRepo:
     @patch("app.github.run_gh", return_value="  owner/repo  ")
     def test_strips_whitespace(self, mock_gh):
         assert detect_parent_repo("/my/fork") == "owner/repo"
+
+
+# ---------------------------------------------------------------------------
+# resolve_target_repo — fork detection with upstream remote fallback
+# ---------------------------------------------------------------------------
+
+
+class TestResolveTargetRepo:
+
+    @patch("app.github.detect_parent_repo", return_value="upstream/repo")
+    def test_prefers_github_parent(self, mock_detect):
+        assert resolve_target_repo("/proj") == "upstream/repo"
+
+    @patch("app.github.detect_parent_repo", return_value=None)
+    @patch("app.github._upstream_remote_repo", return_value="org/repo")
+    def test_falls_back_to_upstream_remote(self, mock_remote, mock_detect):
+        assert resolve_target_repo("/proj") == "org/repo"
+
+    @patch("app.github.detect_parent_repo", return_value=None)
+    @patch("app.github._upstream_remote_repo", return_value=None)
+    def test_returns_none_when_no_upstream(self, mock_remote, mock_detect):
+        assert resolve_target_repo("/proj") is None
+
+
+class TestUpstreamRemoteRepo:
+
+    @patch("app.github._get_remote_url")
+    def test_returns_upstream_when_different_from_origin(self, mock_url):
+        mock_url.side_effect = lambda path, remote: {
+            "upstream": "git@github.com:Anantys-oss/koan.git",
+            "origin": "https://github.com/Koan-Bot/koan.git",
+        }.get(remote)
+        assert _upstream_remote_repo("/proj") == "Anantys-oss/koan"
+
+    @patch("app.github._get_remote_url")
+    def test_returns_none_when_same_as_origin(self, mock_url):
+        mock_url.side_effect = lambda path, remote: {
+            "upstream": "git@github.com:owner/repo.git",
+            "origin": "https://github.com/owner/repo.git",
+        }.get(remote)
+        assert _upstream_remote_repo("/proj") is None
+
+    @patch("app.github._get_remote_url")
+    def test_returns_none_when_no_upstream(self, mock_url):
+        mock_url.side_effect = lambda path, remote: {
+            "origin": "https://github.com/owner/repo.git",
+        }.get(remote)
+        assert _upstream_remote_repo("/proj") is None
+
+    @patch("app.github._get_remote_url")
+    def test_returns_upstream_when_no_origin(self, mock_url):
+        mock_url.side_effect = lambda path, remote: {
+            "upstream": "git@github.com:org/repo.git",
+        }.get(remote)
+        assert _upstream_remote_repo("/proj") == "org/repo"
+
+
+class TestParseRemoteUrl:
+
+    def test_https_url(self):
+        assert _parse_remote_url("https://github.com/owner/repo.git") == "owner/repo"
+
+    def test_ssh_url(self):
+        assert _parse_remote_url("git@github.com:owner/repo.git") == "owner/repo"
+
+    def test_https_without_git_suffix(self):
+        assert _parse_remote_url("https://github.com/owner/repo") == "owner/repo"
+
+    def test_non_github_url(self):
+        assert _parse_remote_url("https://gitlab.com/owner/repo.git") is None
+
+
+# ---------------------------------------------------------------------------
+# issue_create — repo parameter
+# ---------------------------------------------------------------------------
+
+
+class TestIssueCreateRepo:
+
+    @patch("app.github.run_gh", return_value="https://github.com/org/repo/issues/1")
+    @patch("app.leak_detector.scan_and_redact", side_effect=lambda x, **kw: x)
+    def test_passes_repo_flag(self, mock_redact, mock_gh):
+        issue_create("title", "body", repo="upstream/repo")
+        args = mock_gh.call_args[0]
+        assert "--repo" in args
+        idx = args.index("--repo")
+        assert args[idx + 1] == "upstream/repo"
+
+    @patch("app.github.run_gh", return_value="https://github.com/org/repo/issues/1")
+    @patch("app.leak_detector.scan_and_redact", side_effect=lambda x, **kw: x)
+    def test_omits_repo_when_none(self, mock_redact, mock_gh):
+        issue_create("title", "body")
+        args = mock_gh.call_args[0]
+        assert "--repo" not in args
 
 
 # ---------------------------------------------------------------------------

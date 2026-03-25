@@ -32,7 +32,14 @@ from typing import Callable, Dict, List, Optional
 # verification: 10s), but without an overall ceiling, accumulated steps
 # can block the agent loop for too long.  5 minutes is generous — typical
 # runs finish in 30-60s.
-POST_MISSION_TIMEOUT = 300
+# Configurable via post_mission_timeout in config.yaml.
+POST_MISSION_TIMEOUT = 300  # default; overridden by config at runtime
+
+
+def _resolve_post_mission_timeout() -> int:
+    """Read post_mission_timeout from config, falling back to module constant."""
+    from app.config import get_post_mission_timeout
+    return get_post_mission_timeout()
 
 # Status icons shared by _PipelineTracker.summary_lines() and
 # _notify_pipeline_failures() — single source of truth.
@@ -111,6 +118,7 @@ def _write_pipeline_summary(
     project_name: str,
     tracker: _PipelineTracker,
     mission_title: str = "",
+    stdout_file: str = "",
 ) -> None:
     """Append a pipeline outcome summary to today's journal."""
     try:
@@ -120,6 +128,12 @@ def _write_pipeline_summary(
         if not lines:
             return
 
+        # Append cache metrics from this mission's output
+        if stdout_file:
+            cache_line = _extract_cache_line(stdout_file)
+            if cache_line:
+                lines.append(f"  📊 {cache_line}")
+
         now = datetime.now().strftime("%H:%M")
         header = f"\n### Pipeline summary — {now}"
         if mission_title:
@@ -128,6 +142,25 @@ def _write_pipeline_summary(
         append_to_journal(Path(instance_dir), project_name, entry)
     except Exception as e:
         print(f"[mission_runner] Pipeline summary write failed: {e}", file=sys.stderr)
+
+
+def _extract_cache_line(stdout_file: str) -> str:
+    """Extract a compact cache performance line from Claude JSON output."""
+    try:
+        from app.usage_estimator import extract_tokens_detailed
+        from app.cost_tracker import format_mission_cache_line
+
+        detailed = extract_tokens_detailed(Path(stdout_file))
+        if detailed is None:
+            return ""
+        return format_mission_cache_line(
+            cache_read=detailed.get("cache_read_input_tokens", 0),
+            cache_create=detailed.get("cache_creation_input_tokens", 0),
+            input_tokens=detailed.get("input_tokens", 0),
+        )
+    except Exception as e:
+        print(f"[mission_runner] cache line extraction failed: {e}", file=sys.stderr)
+        return ""
 
 
 def build_mission_command(
@@ -590,16 +623,20 @@ def check_auto_merge(
 def _notify_pipeline_failures(
     tracker: _PipelineTracker,
     mission_title: str = "",
+    instance_dir: str = "",
 ) -> None:
-    """Send a Telegram warning if the post-mission pipeline had issues.
+    """Write a warning to outbox.md if the post-mission pipeline had issues.
 
     Reports failed, timed-out, and skipped steps so users can see when
     steps like reflection or auto_merge silently fail to complete.
+
+    Writing to outbox.md instead of calling Telegram directly ensures the
+    bridge retries delivery on transient network errors.
     """
     if not tracker.has_issues():
         return
     try:
-        from app.notify import send_telegram
+        from app.utils import append_to_outbox
 
         _ISSUE_ICONS = {"fail": "✗", "timeout": "⏱", "skipped": "–"}
         issues = []
@@ -616,7 +653,9 @@ def _notify_pipeline_failures(
 
         prefix = f"[{mission_title}] " if mission_title else ""
         msg = f"⚠️ {prefix}Pipeline issues: {', '.join(issues)}"
-        send_telegram(msg)
+        from app.notify import NotificationPriority
+        outbox_path = Path(instance_dir) / "outbox.md"
+        append_to_outbox(outbox_path, msg + "\n", priority=NotificationPriority.WARNING)
     except Exception as e:
         print(f"[mission_runner] Pipeline failure notification failed: {e}", file=sys.stderr)
 
@@ -707,13 +746,14 @@ def run_post_mission(
 
     # Overall pipeline deadline — prevents accumulated steps from blocking
     # the agent loop indefinitely.
+    _pm_timeout = _resolve_post_mission_timeout()
     _pipeline_expired = threading.Event()
     _deadline_timer = threading.Timer(
-        POST_MISSION_TIMEOUT,
+        _pm_timeout,
         lambda: (
             _pipeline_expired.set(),
             print(
-                f"[mission_runner] Post-mission pipeline exceeded {POST_MISSION_TIMEOUT}s — "
+                f"[mission_runner] Post-mission pipeline exceeded {_pm_timeout}s — "
                 "skipping remaining steps",
                 file=sys.stderr,
             ),
@@ -748,7 +788,7 @@ def run_post_mission(
 
         # 3. Check for quota exhaustion
         _report("checking quota")
-        from app.quota_handler import handle_quota_exhaustion
+        from app.quota_handler import handle_quota_exhaustion, QUOTA_CHECK_UNRELIABLE
 
         koan_root = _get_koan_root(instance_dir)
         quota_result = handle_quota_exhaustion(
@@ -759,7 +799,11 @@ def run_post_mission(
             stdout_file=stdout_file,
             stderr_file=stderr_file,
         )
-        if quota_result is not None:
+        if quota_result is QUOTA_CHECK_UNRELIABLE:
+            log(f"⚠️  Quota check unreliable for {project_name} — "
+                "could not read log files, skipping quota detection")
+            tracker.record("quota_check", "warning", "unreliable — log files unreadable")
+        elif quota_result is not None:
             result["quota_exhausted"] = True
             result["quota_info"] = quota_result
             tracker.record("quota_check", "success", "quota exhausted — early return")
@@ -903,10 +947,13 @@ def run_post_mission(
 
         # Write pipeline summary to journal and include in result
         result["pipeline_steps"] = tracker.to_dict()
-        _write_pipeline_summary(instance_dir, project_name, tracker, mission_title)
+        _write_pipeline_summary(
+            instance_dir, project_name, tracker, mission_title,
+            stdout_file=stdout_file,
+        )
 
-        # Notify user of pipeline failures via Telegram
-        _notify_pipeline_failures(tracker, mission_title)
+        # Notify user of pipeline failures via outbox (retried by bridge)
+        _notify_pipeline_failures(tracker, mission_title, instance_dir)
 
         return result
     finally:

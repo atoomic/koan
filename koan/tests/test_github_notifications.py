@@ -1,28 +1,41 @@
 """Tests for github_notifications.py — notification fetching, parsing, reactions."""
 
 import json
+import logging
+import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.github import SSOAuthRequired
 from app.github_notifications import (
+    SSO_ESCALATION_THRESHOLD,
     FetchResult,
+    _FETCH_FAILURE_THRESHOLD,
     _processed_comments,
     _reactions_endpoint,
     _search_comments_for_mention,
     add_reaction,
     api_url_to_web_url,
     check_already_processed,
+    check_sso_escalation,
     check_user_permission,
+    reset_consecutive_sso_state,
     extract_comment_metadata,
     fetch_unread_notifications,
     find_mention_in_thread,
     get_comment_from_notification,
+    get_consecutive_sso_failures,
+    get_fetch_failure_count,
+    get_sso_failure_count,
     is_notification_stale,
     is_self_mention,
     parse_mention_command,
+    reset_fetch_failure_count,
+    reset_sso_failure_count,
+    update_consecutive_sso_failures,
 )
 
 
@@ -76,6 +89,21 @@ class TestParseMentionCommand:
         result = parse_mention_command(body, "bot")
         assert result == ("rebase", "")
 
+    def test_command_with_slash_prefix(self):
+        """Users often type @bot /command (Telegram habit) — slash must be stripped."""
+        result = parse_mention_command("@bot /squash", "bot")
+        assert result == ("squash", "")
+
+    def test_command_with_slash_prefix_and_url(self):
+        result = parse_mention_command(
+            "@koan /squash https://github.com/owner/repo/pull/42", "koan"
+        )
+        assert result == ("squash", "https://github.com/owner/repo/pull/42")
+
+    def test_command_with_slash_prefix_and_context(self):
+        result = parse_mention_command("@bot /plan fix the login page", "bot")
+        assert result == ("plan", "fix the login page")
+
 
 class TestApiUrlToWebUrl:
     def test_pr_url(self):
@@ -112,15 +140,29 @@ class TestFetchUnreadNotifications:
 
     @patch("app.github_notifications.api")
     def test_filters_by_known_repos(self, mock_api):
+        """Non-mention reasons are filtered by known_repos; mentions bypass."""
         notifications = [
-            {"reason": "mention", "repository": {"full_name": "owner/repo"}},
-            {"reason": "mention", "repository": {"full_name": "other/repo"}},
+            {"reason": "comment", "repository": {"full_name": "owner/repo"}},
+            {"reason": "comment", "repository": {"full_name": "other/repo"}},
         ]
         mock_api.return_value = json.dumps(notifications)
 
         result = fetch_unread_notifications(known_repos={"owner/repo"})
         assert len(result.actionable) == 1
         assert result.actionable[0]["repository"]["full_name"] == "owner/repo"
+
+    @patch("app.github_notifications.api")
+    def test_mention_bypasses_known_repos_filter(self, mock_api):
+        """Direct @mentions pass through even when repo is not in known_repos."""
+        notifications = [
+            {"reason": "mention", "repository": {"full_name": "unknown/repo"}},
+            {"reason": "comment", "repository": {"full_name": "unknown/repo"}},
+        ]
+        mock_api.return_value = json.dumps(notifications)
+
+        result = fetch_unread_notifications(known_repos={"owner/repo"})
+        assert len(result.actionable) == 1
+        assert result.actionable[0]["reason"] == "mention"
 
     @patch("app.github_notifications.api")
     def test_handles_api_error(self, mock_api):
@@ -249,8 +291,21 @@ class TestFetchUnreadNotifications:
         }
 
     @patch("app.github_notifications.api")
-    def test_unknown_repo_skipped_entirely(self, mock_api):
-        """Notifications from unknown repos appear in neither actionable nor drain."""
+    def test_unknown_repo_non_mention_skipped(self, mock_api):
+        """Non-mention notifications from unknown repos are skipped entirely."""
+        notifications = [
+            {"reason": "ci_activity", "repository": {"full_name": "unknown/repo"}},
+            {"reason": "author", "repository": {"full_name": "unknown/repo"}},
+        ]
+        mock_api.return_value = json.dumps(notifications)
+
+        result = fetch_unread_notifications(known_repos={"owner/repo"})
+        assert result.actionable == []
+        assert result.drain == []
+
+    @patch("app.github_notifications.api")
+    def test_unknown_repo_mention_passes(self, mock_api):
+        """Mention notifications from unknown repos still pass through."""
         notifications = [
             {"reason": "mention", "repository": {"full_name": "unknown/repo"}},
             {"reason": "ci_activity", "repository": {"full_name": "unknown/repo"}},
@@ -258,8 +313,8 @@ class TestFetchUnreadNotifications:
         mock_api.return_value = json.dumps(notifications)
 
         result = fetch_unread_notifications(known_repos={"owner/repo"})
-        assert result.actionable == []
-        assert result.drain == []
+        assert len(result.actionable) == 1
+        assert result.actionable[0]["reason"] == "mention"
 
     @patch("app.github_notifications.api")
     def test_since_parameter_passes_all_true(self, mock_api):
@@ -901,3 +956,312 @@ class TestSearchCommentsForMention:
         ]
         result = _search_comments_for_mention(comments, "bot", "owner", "repo")
         assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# SSO failure tracking
+# ---------------------------------------------------------------------------
+
+class TestSSOFailureTracking:
+    def setup_method(self):
+        reset_sso_failure_count()
+        reset_consecutive_sso_state()
+
+    def teardown_method(self):
+        reset_sso_failure_count()
+        reset_consecutive_sso_state()
+
+    @patch("app.github_notifications.api")
+    def test_get_comment_sso_failure_records_count(self, mock_api):
+        mock_api.side_effect = SSOAuthRequired("SAML enforcement")
+        notif = {
+            "subject": {
+                "latest_comment_url": "https://api.github.com/repos/org/repo/issues/comments/1"
+            }
+        }
+        result = get_comment_from_notification(notif)
+        assert result is None
+        assert get_sso_failure_count() == 1
+
+    @patch("app.github_notifications.api")
+    def test_find_mention_sso_failure_records_count(self, mock_api):
+        mock_api.side_effect = SSOAuthRequired("SSO required")
+        notif = {
+            "subject": {
+                "url": "https://api.github.com/repos/org/repo/issues/42"
+            }
+        }
+        result = find_mention_in_thread(notif, "bot")
+        assert result is None
+        assert get_sso_failure_count() >= 1
+
+    @patch("app.github_notifications.api")
+    def test_check_already_processed_sso_failure(self, mock_api):
+        mock_api.side_effect = SSOAuthRequired("SAML enforcement")
+        result = check_already_processed("123", "bot", "org", "repo")
+        assert result is False
+        assert get_sso_failure_count() == 1
+
+    @patch("app.github_notifications.api")
+    def test_check_user_permission_sso_failure(self, mock_api):
+        mock_api.side_effect = SSOAuthRequired("SSO required")
+        result = check_user_permission("org", "repo", "alice", ["*"])
+        assert result is False
+        assert get_sso_failure_count() == 1
+
+    def test_reset_clears_count(self):
+        # Manually bump the count
+        from app.github_notifications import _record_sso_failure
+        _record_sso_failure("test")
+        assert get_sso_failure_count() > 0
+        reset_sso_failure_count()
+        assert get_sso_failure_count() == 0
+
+    @patch("app.github_notifications.api")
+    def test_multiple_sso_failures_aggregate(self, mock_api):
+        mock_api.side_effect = SSOAuthRequired("SAML enforcement")
+        # Call multiple functions that each record SSO failures
+        get_comment_from_notification({
+            "subject": {"latest_comment_url": "https://api.github.com/repos/o/r/issues/comments/1"}
+        })
+        check_already_processed("123", "bot", "org", "repo")
+        assert get_sso_failure_count() == 2
+
+
+class TestConsecutiveFetchFailures:
+    """Tests for fetch failure escalation: debug → warning after threshold."""
+
+    def setup_method(self):
+        reset_fetch_failure_count()
+
+    def teardown_method(self):
+        reset_fetch_failure_count()
+
+    @patch("app.github_notifications.api")
+    def test_single_failure_stays_debug(self, mock_api, caplog):
+        """Below threshold, failures log at debug only."""
+        mock_api.side_effect = RuntimeError("timeout")
+        with caplog.at_level(logging.DEBUG, logger="app.github_notifications"):
+            fetch_unread_notifications()
+
+        assert get_fetch_failure_count() == 1
+        assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+
+    @patch("app.github_notifications.api")
+    def test_threshold_triggers_warning(self, mock_api, caplog):
+        """After _FETCH_FAILURE_THRESHOLD consecutive failures, log at WARNING."""
+        mock_api.side_effect = RuntimeError("network error")
+        with caplog.at_level(logging.DEBUG, logger="app.github_notifications"):
+            for _ in range(_FETCH_FAILURE_THRESHOLD):
+                fetch_unread_notifications()
+
+        assert get_fetch_failure_count() == _FETCH_FAILURE_THRESHOLD
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "consecutive fetch failures" in warnings[0].message
+
+    @patch("app.github_notifications._send_fetch_failure_alert")
+    @patch("app.github_notifications.api")
+    def test_outbox_alert_sent_once(self, mock_api, mock_alert):
+        """Outbox alert fires once at threshold, not on subsequent failures."""
+        mock_api.side_effect = RuntimeError("down")
+        for _ in range(_FETCH_FAILURE_THRESHOLD + 2):
+            fetch_unread_notifications()
+
+        assert mock_alert.call_count == 1
+
+    @patch("app.github_notifications._send_fetch_failure_alert")
+    @patch("app.github_notifications.api")
+    def test_success_resets_counter(self, mock_api, mock_alert):
+        """A successful fetch resets the failure counter."""
+        # Accumulate failures just below threshold
+        mock_api.side_effect = RuntimeError("err")
+        for _ in range(_FETCH_FAILURE_THRESHOLD - 1):
+            fetch_unread_notifications()
+        assert get_fetch_failure_count() == _FETCH_FAILURE_THRESHOLD - 1
+
+        # Successful fetch resets
+        mock_api.side_effect = None
+        mock_api.return_value = json.dumps([])
+        fetch_unread_notifications()
+        assert get_fetch_failure_count() == 0
+        mock_alert.assert_not_called()
+
+    @patch("app.github_notifications._send_fetch_failure_alert")
+    @patch("app.github_notifications.api")
+    def test_recovery_after_alert_allows_new_alert(self, mock_api, mock_alert):
+        """After recovery and new failure streak, a new alert can fire."""
+        # First streak: hit threshold
+        mock_api.side_effect = RuntimeError("err")
+        for _ in range(_FETCH_FAILURE_THRESHOLD):
+            fetch_unread_notifications()
+        assert mock_alert.call_count == 1
+
+        # Recover
+        mock_api.side_effect = None
+        mock_api.return_value = json.dumps([])
+        fetch_unread_notifications()
+
+        # Second streak
+        mock_api.side_effect = RuntimeError("err again")
+        for _ in range(_FETCH_FAILURE_THRESHOLD):
+            fetch_unread_notifications()
+        assert mock_alert.call_count == 2
+
+    @patch("app.github_notifications.api")
+    def test_empty_response_counts_as_failure(self, mock_api):
+        """Empty API response increments the failure counter."""
+        mock_api.return_value = ""
+        fetch_unread_notifications()
+        assert get_fetch_failure_count() == 1
+
+    @patch("app.github_notifications.api")
+    def test_invalid_json_counts_as_failure(self, mock_api):
+        """Invalid JSON increments the failure counter."""
+        mock_api.return_value = "not json"
+        fetch_unread_notifications()
+        assert get_fetch_failure_count() == 1
+
+    @patch("app.github_notifications.api")
+    def test_unexpected_type_counts_as_failure(self, mock_api):
+        """Non-list JSON response increments the failure counter."""
+        mock_api.return_value = json.dumps({"error": "bad"})
+        fetch_unread_notifications()
+        assert get_fetch_failure_count() == 1
+
+    @patch("app.github_notifications.api")
+    def test_send_fetch_failure_alert_writes_outbox(self, mock_api, tmp_path):
+        """_send_fetch_failure_alert writes to outbox.md."""
+        instance_dir = tmp_path / "instance"
+        instance_dir.mkdir()
+        outbox = instance_dir / "outbox.md"
+        outbox.write_text("")
+
+        with patch.dict(os.environ, {"KOAN_ROOT": str(tmp_path)}):
+            from app.github_notifications import _send_fetch_failure_alert
+            _send_fetch_failure_alert(3, "network error")
+
+        content = outbox.read_text()
+        assert "failed 3 times" in content
+        assert "network error" in content
+
+
+# ---------------------------------------------------------------------------
+# Consecutive SSO failure tracking and escalation
+# ---------------------------------------------------------------------------
+
+class TestConsecutiveSSOFailures:
+    def setup_method(self):
+        reset_sso_failure_count()
+        reset_consecutive_sso_state()
+
+    def teardown_method(self):
+        reset_sso_failure_count()
+        reset_consecutive_sso_state()
+
+    def test_consecutive_counter_accumulates_across_cycles(self):
+        from app.github_notifications import _record_sso_failure
+
+        # Cycle 1: 2 failures
+        _record_sso_failure("a")
+        _record_sso_failure("b")
+        update_consecutive_sso_failures()
+        assert get_consecutive_sso_failures() == 2
+
+        # Cycle 2: reset per-cycle, add 1 more failure
+        reset_sso_failure_count()
+        _record_sso_failure("c")
+        update_consecutive_sso_failures()
+        assert get_consecutive_sso_failures() == 3
+
+    def test_clean_cycle_resets_consecutive_counter(self):
+        from app.github_notifications import _record_sso_failure
+
+        # Build up failures
+        _record_sso_failure("a")
+        _record_sso_failure("b")
+        update_consecutive_sso_failures()
+        assert get_consecutive_sso_failures() == 2
+
+        # Clean cycle
+        reset_sso_failure_count()
+        update_consecutive_sso_failures()
+        assert get_consecutive_sso_failures() == 0
+
+    def test_escalation_below_threshold_returns_false(self, monkeypatch):
+        from app.github_notifications import _record_sso_failure
+        monkeypatch.setenv("KOAN_ROOT", "/tmp/test-koan")
+
+        # Only 2 failures, below threshold of 5
+        _record_sso_failure("a")
+        _record_sso_failure("b")
+        update_consecutive_sso_failures()
+        assert check_sso_escalation() is False
+
+    def test_escalation_at_threshold_writes_outbox(self, monkeypatch):
+        from app.github_notifications import _record_sso_failure
+        monkeypatch.setenv("KOAN_ROOT", "/tmp/test-koan")
+
+        # Accumulate SSO_ESCALATION_THRESHOLD failures
+        for i in range(SSO_ESCALATION_THRESHOLD):
+            _record_sso_failure(f"fail-{i}")
+        update_consecutive_sso_failures()
+
+        with patch("app.utils.append_to_outbox") as mock_outbox:
+            result = check_sso_escalation()
+            assert result is True
+            mock_outbox.assert_called_once()
+            msg = mock_outbox.call_args[0][1]
+            assert "SSO" in msg
+            assert "gh auth refresh" in msg
+            assert str(SSO_ESCALATION_THRESHOLD) in msg
+
+    def test_escalation_fires_only_once_per_streak(self, monkeypatch):
+        from app.github_notifications import _record_sso_failure
+        monkeypatch.setenv("KOAN_ROOT", "/tmp/test-koan")
+
+        for i in range(SSO_ESCALATION_THRESHOLD):
+            _record_sso_failure(f"fail-{i}")
+        update_consecutive_sso_failures()
+
+        with patch("app.utils.append_to_outbox") as mock_outbox:
+            assert check_sso_escalation() is True
+            assert check_sso_escalation() is False  # second call suppressed
+            assert mock_outbox.call_count == 1
+
+    def test_escalation_rearms_after_clean_cycle(self, monkeypatch):
+        from app.github_notifications import _record_sso_failure
+        monkeypatch.setenv("KOAN_ROOT", "/tmp/test-koan")
+
+        # First streak
+        for i in range(SSO_ESCALATION_THRESHOLD):
+            _record_sso_failure(f"fail-{i}")
+        update_consecutive_sso_failures()
+
+        with patch("app.utils.append_to_outbox"):
+            check_sso_escalation()
+
+        # Clean cycle resets everything
+        reset_sso_failure_count()
+        update_consecutive_sso_failures()
+
+        # New streak
+        for i in range(SSO_ESCALATION_THRESHOLD):
+            reset_sso_failure_count()
+            _record_sso_failure(f"fail2-{i}")
+            update_consecutive_sso_failures()
+
+        with patch("app.utils.append_to_outbox") as mock_outbox:
+            assert check_sso_escalation() is True
+            mock_outbox.assert_called_once()
+
+    def test_no_escalation_without_koan_root(self, monkeypatch):
+        from app.github_notifications import _record_sso_failure
+        monkeypatch.delenv("KOAN_ROOT", raising=False)
+
+        for i in range(SSO_ESCALATION_THRESHOLD):
+            _record_sso_failure(f"fail-{i}")
+        update_consecutive_sso_failures()
+
+        # KOAN_ROOT not set — should return False gracefully
+        assert check_sso_escalation() is False

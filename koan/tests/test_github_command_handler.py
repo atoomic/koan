@@ -443,21 +443,57 @@ class TestProcessSingleNotification:
     @patch("app.github_command_handler.is_notification_stale", return_value=False)
     @patch("app.github_command_handler.get_comment_from_notification")
     @patch("app.github_command_handler.resolve_project_from_notification", return_value=None)
-    def test_unknown_repo_error(
+    def test_unknown_repo_falls_back_to_repo_name(
         self, mock_resolve, mock_comment, mock_stale, mock_self,
         mock_processed, mock_read, registry, sample_notification,
     ):
+        """When repo is not in projects.yaml, use repo name as project fallback."""
+        mock_comment.return_value = {
+            "id": 99999, "body": "@bot rebase", "user": {"login": "alice"},
+        }
+        config = {"github": {"nickname": "bot", "authorized_users": ["alice"]}}
+
+        with patch("app.utils.insert_pending_mission") as mock_insert:
+            with patch("app.github_command_handler.add_reaction"):
+                success, error = process_single_notification(
+                    sample_notification, registry, config, None, "bot",
+                )
+        assert success is True
+        # Mission was queued using repo name as project
+        mock_insert.assert_called_once()
+        mission_text = mock_insert.call_args[0][1]
+        assert "[project:koan]" in mission_text
+
+    @patch("app.github_command_handler.mark_notification_read")
+    @patch("app.github_command_handler.check_already_processed", return_value=False)
+    @patch("app.github_command_handler.is_self_mention", return_value=False)
+    @patch("app.github_command_handler.is_notification_stale", return_value=False)
+    @patch("app.github_command_handler.get_comment_from_notification")
+    @patch("app.github_command_handler.resolve_project_from_notification", return_value=None)
+    def test_unknown_repo_bad_fullname_skips(
+        self, mock_resolve, mock_comment, mock_stale, mock_self,
+        mock_processed, mock_read, registry,
+    ):
+        """Notification with no valid full_name is silently skipped."""
+        notif = {
+            "id": "12345", "reason": "mention",
+            "updated_at": "2026-02-11T20:00:00Z",
+            "repository": {"full_name": ""},
+            "subject": {
+                "url": "https://api.github.com/repos/x/y/pulls/1",
+                "latest_comment_url": "https://api.github.com/repos/x/y/issues/comments/1",
+            },
+        }
         mock_comment.return_value = {
             "id": 99999, "body": "@bot rebase", "user": {"login": "alice"},
         }
         config = {"github": {"nickname": "bot"}}
 
         success, error = process_single_notification(
-            sample_notification, registry, config, None, "bot",
+            notif, registry, config, None, "bot",
         )
         assert success is False
-        assert "Unknown repository" in error
-        # Notification must be marked as read to prevent re-processing loop
+        assert error is None
         mock_read.assert_called_once_with("12345")
 
     @patch("app.github_command_handler.mark_notification_read")
@@ -926,6 +962,273 @@ class TestProcessNotificationWithReply:
         assert success is False
         assert error is not None
         assert "`what`" in error
+
+
+class TestTryReplyAuthorizedUsers:
+    """Tests for separate reply_authorized_users permission in _try_reply."""
+
+    @pytest.fixture
+    def reply_notification(self):
+        return {
+            "id": "77777",
+            "subject": {
+                "url": "https://api.github.com/repos/sukria/koan/issues/42",
+            },
+            "repository": {"full_name": "sukria/koan"},
+        }
+
+    @pytest.fixture
+    def reply_comment(self):
+        return {
+            "id": 55555,
+            "body": "@bot what do you think about this?",
+            "user": {"login": "unprivileged_user"},
+        }
+
+    @pytest.fixture
+    def base_config(self):
+        return {
+            "github": {
+                "nickname": "bot",
+                "reply_enabled": True,
+                "authorized_users": ["admin_only"],
+            }
+        }
+
+    @patch("app.github_command_handler._notify_github_reply")
+    @patch("app.github_command_handler._notify_github_question")
+    @patch("app.github_command_handler.mark_notification_read")
+    @patch("app.github_command_handler.add_reaction", return_value=True)
+    @patch("app.github_command_handler.check_user_permission", return_value=True)
+    @patch("app.github_reply.post_reply", return_value=True)
+    @patch("app.github_reply.generate_reply", return_value="Here is my reply")
+    @patch("app.github_reply.fetch_thread_context", return_value={
+        "title": "T", "body": "B", "comments": [], "is_pr": False, "diff_summary": "",
+    })
+    @patch("app.utils.resolve_project_path", return_value="/tmp/koan")
+    def test_reply_authorized_users_wildcard_allows_anyone(
+        self, mock_resolve, mock_ctx, mock_gen, mock_post,
+        mock_perm, mock_react, mock_read,
+        mock_notify_q, mock_notify_r,
+        reply_notification, reply_comment,
+    ):
+        """When reply_authorized_users: ["*"], any user can get a reply
+        without check_user_permission being called."""
+        config = {
+            "github": {
+                "nickname": "bot",
+                "reply_enabled": True,
+                "authorized_users": ["admin_only"],
+                "reply_authorized_users": ["*"],
+            }
+        }
+        result = _try_reply(
+            reply_notification, reply_comment, config, None,
+            "bot", "sukria", "koan", "koan", "what do you think?",
+        )
+        assert result is True
+        # check_user_permission should NOT be called when reply_authorized_users is ["*"]
+        mock_perm.assert_not_called()
+        mock_gen.assert_called_once()
+
+    @patch("app.github_command_handler.check_user_permission", return_value=False)
+    def test_fallback_to_authorized_users_when_not_configured(
+        self, mock_perm, reply_notification, reply_comment, base_config,
+    ):
+        """When reply_authorized_users is not set, falls back to authorized_users."""
+        result = _try_reply(
+            reply_notification, reply_comment, base_config, None,
+            "bot", "sukria", "koan", "koan", "what?",
+        )
+        assert result is False
+        # Should have called check_user_permission with the authorized_users list
+        mock_perm.assert_called_once()
+        call_args = mock_perm.call_args
+        assert call_args[0][3] == ["admin_only"]
+
+    @patch("app.github_command_handler._notify_github_reply")
+    @patch("app.github_command_handler._notify_github_question")
+    @patch("app.github_command_handler.mark_notification_read")
+    @patch("app.github_command_handler.add_reaction", return_value=True)
+    @patch("app.github_command_handler.check_user_permission", return_value=True)
+    @patch("app.github_reply.post_reply", return_value=True)
+    @patch("app.github_reply.generate_reply", return_value="reply")
+    @patch("app.github_reply.fetch_thread_context", return_value={
+        "title": "T", "body": "B", "comments": [], "is_pr": False, "diff_summary": "",
+    })
+    @patch("app.utils.resolve_project_path", return_value="/tmp/koan")
+    def test_explicit_reply_authorized_users_list(
+        self, mock_resolve, mock_ctx, mock_gen, mock_post,
+        mock_perm, mock_react, mock_read,
+        mock_notify_q, mock_notify_r,
+        reply_notification, reply_comment,
+    ):
+        """When reply_authorized_users is an explicit list, use it for permission check."""
+        config = {
+            "github": {
+                "nickname": "bot",
+                "reply_enabled": True,
+                "authorized_users": ["admin_only"],
+                "reply_authorized_users": ["unprivileged_user", "another"],
+            }
+        }
+        result = _try_reply(
+            reply_notification, reply_comment, config, None,
+            "bot", "sukria", "koan", "koan", "what?",
+        )
+        assert result is True
+        # check_user_permission called with the reply_authorized_users list
+        mock_perm.assert_called_once()
+        call_args = mock_perm.call_args
+        assert call_args[0][3] == ["unprivileged_user", "another"]
+
+    def test_empty_reply_authorized_users_denies_all(
+        self, reply_notification, reply_comment,
+    ):
+        """Explicit empty list means no one can get replies."""
+        config = {
+            "github": {
+                "nickname": "bot",
+                "reply_enabled": True,
+                "authorized_users": ["*"],
+                "reply_authorized_users": [],
+            }
+        }
+        with patch("app.github_command_handler.check_user_permission", return_value=False) as mock_perm:
+            result = _try_reply(
+                reply_notification, reply_comment, config, None,
+                "bot", "sukria", "koan", "koan", "what?",
+            )
+        assert result is False
+        # Should call check_user_permission with empty list, which returns False
+        mock_perm.assert_called_once()
+
+
+class TestTryReplyRateLimit:
+    """Tests for per-user rate limiting in _try_reply."""
+
+    @pytest.fixture
+    def reply_notification(self):
+        return {
+            "id": "77777",
+            "subject": {
+                "url": "https://api.github.com/repos/sukria/koan/issues/42",
+            },
+            "repository": {"full_name": "sukria/koan"},
+        }
+
+    @pytest.fixture
+    def reply_comment(self):
+        return {
+            "id": 55555,
+            "body": "@bot question?",
+            "user": {"login": "alice"},
+        }
+
+    @pytest.fixture
+    def rate_config(self):
+        return {
+            "github": {
+                "nickname": "bot",
+                "reply_enabled": True,
+                "reply_authorized_users": ["*"],
+                "reply_rate_limit": 2,
+            }
+        }
+
+    @pytest.fixture(autouse=True)
+    def clear_rate_state(self):
+        """Clear the module-level rate tracking dict between tests."""
+        from app import github_command_handler
+        github_command_handler._reply_timestamps.clear()
+        yield
+        github_command_handler._reply_timestamps.clear()
+
+    @patch("app.github_command_handler._notify_github_reply")
+    @patch("app.github_command_handler._notify_github_question")
+    @patch("app.github_command_handler.mark_notification_read")
+    @patch("app.github_command_handler.add_reaction", return_value=True)
+    @patch("app.github_reply.post_reply", return_value=True)
+    @patch("app.github_reply.generate_reply", return_value="reply")
+    @patch("app.github_reply.fetch_thread_context", return_value={
+        "title": "T", "body": "B", "comments": [], "is_pr": False, "diff_summary": "",
+    })
+    @patch("app.utils.resolve_project_path", return_value="/tmp/koan")
+    def test_rate_limit_allows_under_limit(
+        self, mock_resolve, mock_ctx, mock_gen, mock_post,
+        mock_react, mock_read,
+        mock_notify_q, mock_notify_r,
+        reply_notification, reply_comment, rate_config,
+    ):
+        """Replies succeed when user is under the rate limit."""
+        result = _try_reply(
+            reply_notification, reply_comment, rate_config, None,
+            "bot", "sukria", "koan", "koan", "question?",
+        )
+        assert result is True
+
+    @patch("app.github_command_handler._notify_github_reply")
+    @patch("app.github_command_handler._notify_github_question")
+    @patch("app.github_command_handler.mark_notification_read")
+    @patch("app.github_command_handler.add_reaction", return_value=True)
+    @patch("app.github_reply.post_reply", return_value=True)
+    @patch("app.github_reply.generate_reply", return_value="reply")
+    @patch("app.github_reply.fetch_thread_context", return_value={
+        "title": "T", "body": "B", "comments": [], "is_pr": False, "diff_summary": "",
+    })
+    @patch("app.utils.resolve_project_path", return_value="/tmp/koan")
+    def test_rate_limit_blocks_when_exceeded(
+        self, mock_resolve, mock_ctx, mock_gen, mock_post,
+        mock_react, mock_read,
+        mock_notify_q, mock_notify_r,
+        reply_notification, reply_comment, rate_config,
+    ):
+        """Reply is denied when user exceeds rate limit."""
+        import time
+        from app import github_command_handler
+        now = time.time()
+        # Pre-fill 2 timestamps (the limit) within the last hour
+        github_command_handler._reply_timestamps["alice"] = [now - 60, now - 30]
+
+        result = _try_reply(
+            reply_notification, reply_comment, rate_config, None,
+            "bot", "sukria", "koan", "koan", "question?",
+        )
+        assert result is False
+        # generate_reply should NOT be called when rate limited
+        mock_gen.assert_not_called()
+
+    @patch("app.github_command_handler._notify_github_reply")
+    @patch("app.github_command_handler._notify_github_question")
+    @patch("app.github_command_handler.mark_notification_read")
+    @patch("app.github_command_handler.add_reaction", return_value=True)
+    @patch("app.github_reply.post_reply", return_value=True)
+    @patch("app.github_reply.generate_reply", return_value="reply")
+    @patch("app.github_reply.fetch_thread_context", return_value={
+        "title": "T", "body": "B", "comments": [], "is_pr": False, "diff_summary": "",
+    })
+    @patch("app.utils.resolve_project_path", return_value="/tmp/koan")
+    def test_rate_limit_stale_timestamps_cleaned(
+        self, mock_resolve, mock_ctx, mock_gen, mock_post,
+        mock_react, mock_read,
+        mock_notify_q, mock_notify_r,
+        reply_notification, reply_comment, rate_config,
+    ):
+        """Old timestamps (>1h) are cleaned up and don't count toward limit."""
+        import time
+        from app import github_command_handler
+        now = time.time()
+        # Pre-fill with old timestamps (>1 hour ago) — should not count
+        github_command_handler._reply_timestamps["alice"] = [
+            now - 7200, now - 3700, now - 3601,
+        ]
+
+        result = _try_reply(
+            reply_notification, reply_comment, rate_config, None,
+            "bot", "sukria", "koan", "koan", "question?",
+        )
+        assert result is True
+        mock_gen.assert_called_once()
 
 
 class TestGitHubTelegramNotifications:
@@ -2572,7 +2875,7 @@ class TestContextAwareCoreSkills:
         skills_dir = Path(__file__).parent.parent / "skills" / "core"
         return SkillRegistry(skills_dir)
 
-    @pytest.mark.parametrize("command_name", ["rebase", "recreate", "refactor"])
+    @pytest.mark.parametrize("command_name", ["rebase", "recreate", "refactor", "squash"])
     def test_skill_is_context_aware(self, core_registry, command_name):
         """Each PR-manipulation skill must have github_context_aware=True."""
         skill = core_registry.find_by_command(command_name)
@@ -2581,7 +2884,7 @@ class TestContextAwareCoreSkills:
             f"Skill '{command_name}' must have github_context_aware: true in SKILL.md"
         )
 
-    @pytest.mark.parametrize("command_name", ["rebase", "recreate", "refactor"])
+    @pytest.mark.parametrize("command_name", ["rebase", "recreate", "refactor", "squash"])
     def test_context_included_in_mission(self, core_registry, command_name):
         """When context is provided, it should appear in the built mission."""
         skill = core_registry.find_by_command(command_name)
@@ -2596,7 +2899,7 @@ class TestContextAwareCoreSkills:
         )
         assert f"/{command_name}" in mission
 
-    @pytest.mark.parametrize("command_name", ["rebase", "recreate", "refactor"])
+    @pytest.mark.parametrize("command_name", ["rebase", "recreate", "refactor", "squash"])
     def test_no_context_mission_unchanged(self, core_registry, command_name):
         """Without extra context, mission format should be unchanged."""
         skill = core_registry.find_by_command(command_name)

@@ -9,6 +9,16 @@
 # project_path: "/path/to/your/project"
 # pilot_repo: "/path/to/koan"
 
+# Start on pause — boot directly into pause mode
+# When true, Kōan starts paused and waits for an explicit /resume before
+# picking up missions. Useful for scheduled launches (cron, launchd) where
+# you want the stack running but idle until you're ready.
+# Manual pauses (/pause) are preserved; stale system pauses (quota, max_runs)
+# are replaced with a clean start_on_pause reason.
+# The /resume command sets KOAN_SKIP_START_PAUSE=1 internally so auto-restart
+# after resume doesn't immediately re-pause.
+# start_on_pause: false
+
 # Budget & Scheduling
 # These are the primary source of truth for run loop configuration.
 # max_runs_per_day: Maximum runs before auto-pause (resets on /resume or quota reset)
@@ -20,6 +30,14 @@ interval_seconds: 300
 # When false, Kōan keeps running indefinitely (quota and error pauses still apply).
 # Useful when you have scheduled recurring tasks that must fire reliably.
 # auto_pause: true
+
+# Prompt caching behavior
+# Keep consecutive autonomous runs on the same project to preserve
+# prompt-prefix cache warmth across iterations.
+# 0 = disabled (always avoid repeating last project, legacy behavior)
+# 100 = always stay on the previous project when still eligible
+# prompt_caching:
+#   same_project_stickiness_percent: 30
 
 # Fast reply mode — use lightweight model (Haiku) for command handlers
 # When true, /usage, /sparring, and similar commands use Haiku instead of default model
@@ -48,12 +66,39 @@ fast_reply: false
 # Default: 3600 (60 minutes). Previous default was 900 (15 minutes).
 skill_timeout: 3600
 
+# Skill max turns — maximum agentic turns for heavy skill execution
+# Controls how many back-and-forth turns Claude CLI is allowed during
+# /implement, /fix, and /incident invocations. Complex multi-step plans
+# may need more turns to complete. If you see "Reached max turns (N)"
+# errors, increase this value.
+# Default: 200.
+# skill_max_turns: 200
+
+# Post-mission pipeline timeout — maximum seconds for the steps that run after
+# a mission completes: verification, reflection, PR review learning, auto-merge.
+# Increase if post-mission steps are being cut short; decrease to keep the loop snappy.
+# Default: 300 (5 minutes).
+# post_mission_timeout: 300
+
 # Contemplative mode trigger chance (0-100%)
 # When no mission is pending, this is the probability of running a reflective
 # session instead of autonomous work. Allows regular moments of introspection
 # without waiting for budget exhaustion.
 # 0 = never contemplative, 10 = ~1 in 10 runs, 20 = ~1 in 5 runs
 contemplative_chance: 10
+
+# Notification priority filtering
+# Controls which priority levels are sent to Telegram vs written to the daily journal.
+# Priority levels (highest to lowest): urgent, action, warning, info
+#   urgent  — critical failures, quota exhausted (always sent)
+#   action  — mission complete, command responses (default threshold)
+#   warning — quota low, focus validation warnings
+#   info    — progress updates, reflections
+# Messages below min_priority are suppressed from Telegram and written to the daily
+# journal instead (under a "notifications" project entry), so nothing is lost.
+# Default: "action" (sends urgent + action; suppresses warning + info)
+# notifications:
+#   min_priority: action
 
 # Telegram
 # NOTE: Prefer setting these in .env (KOAN_TELEGRAM_TOKEN, KOAN_TELEGRAM_CHAT_ID)
@@ -90,7 +135,7 @@ tools:
     - Shell: Bash (run git, gh, make, and other commands)
 
 # CLI provider — which AI CLI to use as the backend
-# Options: "claude" (default), "copilot" (GitHub Copilot CLI), "local" (local LLM)
+# Options: "claude" (default), "codex" (OpenAI Codex CLI), "copilot" (GitHub Copilot CLI), "local" (local LLM)
 # Can also be set via KOAN_CLI_PROVIDER env var (overrides this)
 cli_provider: "claude"
 
@@ -164,7 +209,7 @@ usage:
 # Per-project overrides are now configured in projects.yaml.
 # Supported per-project settings:
 #   - git_auto_merge: per-project merge rules
-#   - cli_provider: override AI provider ("claude", "copilot", "local")
+#   - cli_provider: override AI provider ("claude", "codex", "copilot", "local")
 #   - models: override model selection (mission, chat, lightweight, etc.)
 #   - tools: restrict available tools (mission, chat tool lists)
 #   - github: override authorized_users for GitHub @mention commands
@@ -217,6 +262,13 @@ usage:
 #   reply_enabled: false             # AI replies to non-command @mentions (default: false)
 #                                    # When enabled, the bot replies to questions/requests
 #                                    # from authorized users with contextual AI-generated answers.
+#   reply_authorized_users: ["*"]    # Who can trigger AI replies (default: uses authorized_users)
+#                                    # Separate from command permissions — allows broader audience
+#                                    # for read-only replies. ["*"] = anyone (no permission check).
+#                                    # Omit to fall back to authorized_users. Set [] to disable.
+#                                    # Per-project override available in projects.yaml.
+#   reply_rate_limit: 5              # Max AI replies per user per hour (default: 5, min: 1)
+#                                    # Prevents API quota abuse when replies are open broadly.
 #   natural_language: false           # NLP intent parsing for @mentions (default: false)
 #                                    # When enabled, unrecognized commands are sent to Claude
 #                                    # for intent classification before falling back to error.

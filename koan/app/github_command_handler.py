@@ -21,14 +21,17 @@ Reply flow (when reply_enabled=true and command not recognized):
 
 import logging
 import re
-from typing import List, Optional, Tuple
+import time
+from typing import Dict, List, Optional, Tuple
 
 from app.bounded_set import BoundedSet
 from app.github_config import (
     get_github_authorized_users,
     get_github_natural_language,
     get_github_nickname,
+    get_github_reply_authorized_users,
     get_github_reply_enabled,
+    get_github_reply_rate_limit,
     get_github_subscribe_enabled,
     get_github_subscribe_max_per_cycle,
 )
@@ -52,6 +55,9 @@ log = logging.getLogger(__name__)
 # Bounded: FIFO eviction when limit is reached (oldest entries removed first).
 _MAX_TRACKED_ENTRIES = 10000
 _error_replies: BoundedSet = BoundedSet(maxlen=_MAX_TRACKED_ENTRIES)
+
+# Per-user rate tracking for AI replies: {username: [timestamp, ...]}
+_reply_timestamps: Dict[str, List[float]] = {}
 
 
 def _quarantine_github_mission(text: str, reason: str, author: str):
@@ -623,12 +629,35 @@ def _try_reply(
     comment_author = comment.get("user", {}).get("login", "")
     comment_id = str(comment.get("id", ""))
 
-    # Check permissions — same authorized_users as commands
-    allowed_users = get_github_authorized_users(config, project_name, projects_config)
-    if not check_user_permission(owner, repo, comment_author, allowed_users):
+    # Check permissions — use reply_authorized_users if configured, else authorized_users
+    reply_users = get_github_reply_authorized_users(config, project_name, projects_config)
+    if reply_users is None:
+        reply_users = get_github_authorized_users(config, project_name, projects_config)
+
+    # Wildcard for replies means "anyone" — skip permission check entirely
+    # (unlike command wildcard which checks GitHub write access)
+    if reply_users != ["*"] and not check_user_permission(owner, repo, comment_author, reply_users):
         log.debug(
             "GitHub reply: permission denied for @%s on %s/%s",
             comment_author, owner, repo,
+        )
+        return False
+
+    # Rate limit: prevent API quota abuse from broad reply permissions
+    rate_limit = get_github_reply_rate_limit(config)
+    now = time.time()
+    one_hour_ago = now - 3600
+    user_timestamps = _reply_timestamps.get(comment_author, [])
+    # Clean up stale entries (and remove key entirely if empty)
+    user_timestamps = [t for t in user_timestamps if t > one_hour_ago]
+    if user_timestamps:
+        _reply_timestamps[comment_author] = user_timestamps
+    else:
+        _reply_timestamps.pop(comment_author, None)
+    if len(user_timestamps) >= rate_limit:
+        log.warning(
+            "GitHub reply: rate limit (%d/h) exceeded for @%s on %s/%s",
+            rate_limit, comment_author, owner, repo,
         )
         return False
 
@@ -693,6 +722,9 @@ def _try_reply(
         owner, repo, issue_number, reply_text,
     )
 
+    # Record successful reply for rate limiting
+    _reply_timestamps.setdefault(comment_author, []).append(time.time())
+
     log.info("GitHub reply: posted reply to @%s on %s/%s#%s", comment_author, owner, repo, issue_number)
     return True
 
@@ -733,15 +765,23 @@ def process_single_notification(
 
     comment_author = comment.get("user", {}).get("login", "")
 
-    # Resolve project
+    # Resolve project — fall back to repo name when not in projects.yaml.
+    # This lets @mentions work on repos the bot has PRs on but aren't configured.
+    # NOTE: the fallback only works when the repo is already cloned locally
+    # (e.g., in workspace/). If it isn't, the mission will fail at execution
+    # with "Unknown project". Auto-cloning unknown repos is a future enhancement.
     project_info = resolve_project_from_notification(notification)
-    if not project_info:
-        repo_name = notification.get("repository", {}).get("full_name", "?")
-        log.debug("GitHub: repo %s not found in projects.yaml", repo_name)
-        mark_notification_read(str(notification.get("id", "")))
-        return False, "Unknown repository — not configured in projects.yaml"
-
-    project_name, owner, repo = project_info
+    if project_info:
+        project_name, owner, repo = project_info
+    else:
+        repo_data = notification.get("repository", {})
+        full_name = repo_data.get("full_name", "")
+        if not full_name or "/" not in full_name:
+            mark_notification_read(str(notification.get("id", "")))
+            return False, None
+        owner, repo = full_name.split("/", 1)
+        project_name = repo.lower()
+        log.info("GitHub: repo %s/%s not in projects.yaml — using '%s' as project name", owner, repo, project_name)
     log.debug("GitHub: resolved project=%s from %s/%s", project_name, owner, repo)
 
     # Validate and parse command
@@ -1067,12 +1107,13 @@ def _notify_github_question(
 ) -> None:
     """Send ❓ Telegram notification when a question is received from GitHub."""
     try:
-        from app.notify import send_telegram
+        from app.notify import send_telegram, NotificationPriority
         # Truncate question for Telegram readability
         short = question[:200] + "…" if len(question) > 200 else question
         send_telegram(
             f"❓ GitHub question from @{author}\n"
-            f"{owner}/{repo}#{issue_number}: {short}"
+            f"{owner}/{repo}#{issue_number}: {short}",
+            priority=NotificationPriority.ACTION,
         )
     except Exception as e:
         log.warning("Failed to send GitHub question notification: %s", e)
@@ -1083,11 +1124,12 @@ def _notify_github_reply(
 ) -> None:
     """Send 💬 Telegram notification when Kōan posts a reply on GitHub."""
     try:
-        from app.notify import send_telegram
+        from app.notify import send_telegram, NotificationPriority
         short = reply_text[:200] + "…" if len(reply_text) > 200 else reply_text
         send_telegram(
             f"💬 Replied on GitHub\n"
-            f"{owner}/{repo}#{issue_number}: {short}"
+            f"{owner}/{repo}#{issue_number}: {short}",
+            priority=NotificationPriority.ACTION,
         )
     except Exception as e:
         log.warning("Failed to send GitHub reply notification: %s", e)

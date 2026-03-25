@@ -1525,8 +1525,9 @@ class TestFetchNotificationsLogging:
         import logging
         from app.github_notifications import fetch_unread_notifications
 
+        # Use a non-mention reason — mentions bypass the repo filter
         mock_api.return_value = json.dumps([
-            {"reason": "mention", "repository": {"full_name": "unknown/repo"}},
+            {"reason": "comment", "repository": {"full_name": "unknown/repo"}},
         ])
 
         known = {"sukria/koan"}
@@ -1905,12 +1906,14 @@ class TestBuildSkillRegistryCache:
         import app.loop_manager as lm
         lm._gh_cached_registry = None
         lm._gh_cached_extra_dirs = None
+        lm._gh_cached_mtime = 0.0
 
     def teardown_method(self):
         """Reset cache after each test."""
         import app.loop_manager as lm
         lm._gh_cached_registry = None
         lm._gh_cached_extra_dirs = None
+        lm._gh_cached_mtime = 0.0
 
     @patch("app.skills.build_registry")
     def test_caches_registry_across_calls(self, mock_build, tmp_path):
@@ -1958,6 +1961,33 @@ class TestBuildSkillRegistryCache:
         args = mock_build.call_args[0][0]
         assert len(args) == 1
         assert args[0] == skills_dir
+
+    @patch("app.skills.build_registry")
+    def test_rebuilds_when_mtime_changes(self, mock_build, tmp_path):
+        """Cache invalidates when skills directory mtime increases."""
+        import app.loop_manager as lm
+        from app.loop_manager import _build_skill_registry
+
+        mock_registry_1 = MagicMock()
+        mock_registry_2 = MagicMock()
+        mock_build.side_effect = [mock_registry_1, mock_registry_2]
+
+        # First call builds
+        r1 = _build_skill_registry(str(tmp_path))
+        assert r1 is mock_registry_1
+
+        # Second call returns cached
+        r2 = _build_skill_registry(str(tmp_path))
+        assert r2 is mock_registry_1
+        assert mock_build.call_count == 1
+
+        # Simulate mtime change by decrementing cached mtime
+        lm._gh_cached_mtime -= 1.0
+
+        # Third call detects change and rebuilds
+        r3 = _build_skill_registry(str(tmp_path))
+        assert r3 is mock_registry_2
+        assert mock_build.call_count == 2
 
 
 # --- Test notification processing cache ---
@@ -2080,6 +2110,249 @@ class TestNotificationCache:
         assert mock_process.call_args[0][0]["id"] == "2"
 
 
+class TestNotificationCacheIdValidation:
+    """Verify that notifications with missing/falsy IDs are not cached."""
+
+    def setup_method(self):
+        from app.loop_manager import reset_github_backoff
+        reset_github_backoff()
+
+    def test_missing_id_returns_none_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"updated_at": "2026-03-20T10:00:00Z"}
+        assert _notif_cache_key(notif) is None
+
+    def test_none_id_returns_none_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"id": None, "updated_at": "2026-03-20T10:00:00Z"}
+        assert _notif_cache_key(notif) is None
+
+    def test_empty_string_id_returns_none_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"id": "", "updated_at": "2026-03-20T10:00:00Z"}
+        assert _notif_cache_key(notif) is None
+
+    def test_falsy_zero_id_returns_none_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"id": 0, "updated_at": "2026-03-20T10:00:00Z"}
+        assert _notif_cache_key(notif) is None
+
+    def test_truthy_id_returns_valid_key(self):
+        from app.loop_manager import _notif_cache_key
+        notif = {"id": "42", "updated_at": "2026-03-20T10:00:00Z"}
+        key = _notif_cache_key(notif)
+        assert key == ("42", "2026-03-20T10:00:00Z")
+
+    def test_idless_notif_is_never_cached(self):
+        from app.loop_manager import _is_notif_cached, _cache_notif
+        notif = {"updated_at": "2026-03-20T10:00:00Z"}
+        _cache_notif(notif)
+        assert not _is_notif_cached(notif)
+
+    def test_idless_notifs_dont_collide(self):
+        """Two ID-less notifications with different updated_at must not
+        deduplicate against each other."""
+        from app.loop_manager import _is_notif_cached, _cache_notif
+        notif_a = {"updated_at": "2026-03-20T10:00:00Z",
+                   "subject": {"title": "A"}}
+        notif_b = {"updated_at": "2026-03-20T11:00:00Z",
+                   "subject": {"title": "B"}}
+        _cache_notif(notif_a)
+        _cache_notif(notif_b)
+        # Neither should be considered cached — both pass through
+        assert not _is_notif_cached(notif_a)
+        assert not _is_notif_cached(notif_b)
+
+    def test_warning_logged_for_missing_id(self, caplog):
+        import logging
+        from app.loop_manager import _notif_cache_key
+        notif = {"subject": {"title": "Test PR"},
+                 "updated_at": "2026-03-20T10:00:00Z"}
+        with caplog.at_level(logging.WARNING, logger="app.loop_manager"):
+            result = _notif_cache_key(notif)
+        assert result is None
+        assert "missing 'id'" in caplog.text
+        assert "Test PR" in caplog.text
+
+    def test_cache_notif_survives_full_ttl_eviction(self):
+        """min() on an empty _notif_cache must not raise ValueError.
+
+        If _NOTIF_CACHE_TTL is pathologically low (or all entries are
+        somehow aged past TTL), the sweep can empty the cache entirely.
+        Without a guard, the subsequent min(_notif_cache, ...) crashes.
+        """
+        import app.loop_manager as lm
+        from app.loop_manager import _cache_notif, _notif_cache_lock
+
+        original_max = lm._NOTIF_CACHE_MAX
+        original_ttl = lm._NOTIF_CACHE_TTL
+        # TTL of -1 means every entry (including just-added) is "expired"
+        lm._NOTIF_CACHE_TTL = -1
+        # Max of -1 means len(cache) > max is True even when cache is empty (0 > -1)
+        lm._NOTIF_CACHE_MAX = -1
+        try:
+            # Without the guard, this raises ValueError: min() arg is empty sequence
+            _cache_notif({"id": "901", "updated_at": "2026-03-20T11:00:00Z"})
+            # Cache should be empty — everything was evicted by TTL sweep
+            with _notif_cache_lock:
+                assert len(lm._notif_cache) == 0
+        finally:
+            lm._NOTIF_CACHE_MAX = original_max
+            lm._NOTIF_CACHE_TTL = original_ttl
+
+
+class TestErrorReplyRetryQueue:
+    """Test the failed error reply queue and retry logic."""
+
+    def setup_method(self):
+        from app.loop_manager import reset_github_backoff
+        reset_github_backoff()
+
+    def test_failed_reply_queued_for_retry(self):
+        """When post_error_reply fails, the reply is queued for retry."""
+        import app.loop_manager as lm
+
+        notif = {
+            "id": "1",
+            "updated_at": "2026-03-20T10:00:00Z",
+            "subject": {"url": "https://api.github.com/repos/o/r/issues/1"},
+            "repository": {"full_name": "o/r"},
+        }
+
+        with patch("app.github_command_handler.resolve_project_from_notification",
+                    return_value=("proj", "o", "r")), \
+             patch("app.github_command_handler.extract_issue_number_from_notification",
+                    return_value=42), \
+             patch("app.github_notifications.get_comment_from_notification",
+                    return_value={"id": 999, "url": "https://api.github.com/comment/999"}), \
+             patch("app.github_command_handler.post_error_reply",
+                    side_effect=OSError("network error")):
+            lm._post_error_for_notification(notif, "some error")
+
+        with lm._pending_error_replies_lock:
+            assert len(lm._pending_error_replies) == 1
+            entry = lm._pending_error_replies[0]
+            assert entry["owner"] == "o"
+            assert entry["repo"] == "r"
+            assert entry["issue_num"] == 42
+            assert entry["comment_id"] == "999"
+            assert entry["attempts"] == 1
+
+    def test_retry_succeeds_clears_queue(self):
+        """Successful retry removes entry from the queue."""
+        import app.loop_manager as lm
+
+        entry = {
+            "owner": "o", "repo": "r", "issue_num": 42,
+            "comment_id": "999", "error": "some error",
+            "comment_api_url": "", "attempts": 1,
+        }
+        with lm._pending_error_replies_lock:
+            lm._pending_error_replies.append(entry)
+
+        with patch("app.github_command_handler.post_error_reply") as mock_reply:
+            lm._retry_failed_replies()
+            mock_reply.assert_called_once()
+
+        with lm._pending_error_replies_lock:
+            assert len(lm._pending_error_replies) == 0
+
+    def test_retry_failure_requeues_with_incremented_attempts(self):
+        """Failed retry re-queues with attempts incremented."""
+        import app.loop_manager as lm
+
+        entry = {
+            "owner": "o", "repo": "r", "issue_num": 42,
+            "comment_id": "999", "error": "some error",
+            "comment_api_url": "", "attempts": 1,
+        }
+        with lm._pending_error_replies_lock:
+            lm._pending_error_replies.append(entry)
+
+        with patch("app.github_command_handler.post_error_reply",
+                    side_effect=OSError("still broken")):
+            lm._retry_failed_replies()
+
+        with lm._pending_error_replies_lock:
+            assert len(lm._pending_error_replies) == 1
+            assert lm._pending_error_replies[0]["attempts"] == 2
+
+    def test_max_retries_drops_entry(self):
+        """After _MAX_REPLY_RETRIES attempts, the entry is dropped."""
+        import app.loop_manager as lm
+
+        entry = {
+            "owner": "o", "repo": "r", "issue_num": 42,
+            "comment_id": "999", "error": "some error",
+            "comment_api_url": "", "attempts": lm._MAX_REPLY_RETRIES,
+        }
+        with lm._pending_error_replies_lock:
+            lm._pending_error_replies.append(entry)
+
+        with patch("app.github_command_handler.post_error_reply",
+                    side_effect=OSError("permanent failure")):
+            lm._retry_failed_replies()
+
+        with lm._pending_error_replies_lock:
+            assert len(lm._pending_error_replies) == 0
+
+    def test_reset_clears_retry_queue(self):
+        """reset_github_backoff clears the retry queue."""
+        import app.loop_manager as lm
+
+        with lm._pending_error_replies_lock:
+            lm._pending_error_replies.append({"owner": "o", "repo": "r"})
+
+        lm.reset_github_backoff()
+
+        with lm._pending_error_replies_lock:
+            assert len(lm._pending_error_replies) == 0
+
+    @patch("app.loop_manager._load_github_config")
+    @patch("app.loop_manager._build_skill_registry")
+    @patch("app.loop_manager._get_known_repos_from_projects")
+    @patch("app.utils.load_config")
+    def test_cache_written_before_error_reply(
+        self, mock_config, mock_repos, mock_registry, mock_gh_config, tmp_path
+    ):
+        """Cache must be written before the error reply attempt so that a
+        reply failure doesn't cause re-processing of the whole notification."""
+        from app.github_notifications import FetchResult
+        from app.loop_manager import process_github_notifications, _is_notif_cached
+
+        mock_config.return_value = {}
+        mock_gh_config.return_value = {"bot_username": "bot", "max_age": 300}
+        mock_registry.return_value = MagicMock()
+        mock_repos.return_value = set()
+
+        notif = {
+            "id": "1", "updated_at": "2026-03-20T10:00:00Z",
+            "subject": {"url": "https://api.github.com/repos/o/r/issues/1"},
+            "repository": {"full_name": "o/r"},
+        }
+
+        call_order = []
+
+        def mock_process(*a, **kw):
+            return (False, "some error")
+
+        def mock_post_error(n, e):
+            # At the point when error reply is attempted, cache should exist
+            call_order.append(("post_error", _is_notif_cached(notif)))
+
+        with patch("app.projects_config.load_projects_config", return_value={}), \
+             patch("app.github_notifications.fetch_unread_notifications",
+                   return_value=FetchResult([notif], [])), \
+             patch("app.github_command_handler.process_single_notification",
+                   side_effect=mock_process), \
+             patch("app.loop_manager._post_error_for_notification",
+                   side_effect=mock_post_error):
+            process_github_notifications(str(tmp_path), str(tmp_path))
+
+        assert call_order == [("post_error", True)], \
+            "Notification should be cached before error reply attempt"
+
+
 # --- Thread-safety tests ---
 
 
@@ -2149,3 +2422,75 @@ class TestThreadSafety:
             t.join(timeout=5)
 
         assert not errors, f"Thread-safety errors: {errors}"
+
+
+# ---------------------------------------------------------------------------
+# SSO alert detection (_check_sso_failures)
+# ---------------------------------------------------------------------------
+
+class TestCheckSSOFailures:
+    def setup_method(self):
+        from app.loop_manager import reset_github_backoff
+        from app.github_notifications import reset_sso_failure_count, reset_consecutive_sso_state
+        reset_github_backoff()
+        reset_sso_failure_count()
+        reset_consecutive_sso_state()
+
+    def teardown_method(self):
+        from app.loop_manager import reset_github_backoff
+        from app.github_notifications import reset_sso_failure_count, reset_consecutive_sso_state
+        reset_github_backoff()
+        reset_sso_failure_count()
+        reset_consecutive_sso_state()
+
+    @patch("app.loop_manager._github_log")
+    def test_no_alert_when_no_sso_failures(self, mock_log):
+        from app.loop_manager import _check_sso_failures
+        _check_sso_failures()
+        # Should not log any warning
+        mock_log.assert_not_called()
+
+    def test_logs_warning_on_sso_failure(self):
+        from app.loop_manager import _check_sso_failures
+        from app.github_notifications import _record_sso_failure
+        _record_sso_failure("test")
+
+        with patch("app.loop_manager._github_log") as mock_log:
+            _check_sso_failures()
+            mock_log.assert_called_once()
+            msg = mock_log.call_args[0][0]
+            assert "SSO" in msg
+
+    def test_escalation_after_threshold(self, monkeypatch):
+        """After enough consecutive failures, check_sso_escalation fires."""
+        from app.loop_manager import _check_sso_failures
+        from app.github_notifications import (
+            _record_sso_failure, reset_sso_failure_count,
+            SSO_ESCALATION_THRESHOLD,
+        )
+        monkeypatch.setenv("KOAN_ROOT", "/tmp/test-koan")
+
+        with patch("app.utils.append_to_outbox") as mock_outbox:
+            # Run enough cycles with failures to reach threshold
+            for i in range(SSO_ESCALATION_THRESHOLD):
+                reset_sso_failure_count()
+                _record_sso_failure(f"test-{i}")
+                _check_sso_failures()
+
+            assert mock_outbox.call_count == 1
+            msg = mock_outbox.call_args[0][1]
+            assert "SSO" in msg
+
+    def test_no_escalation_below_threshold(self, monkeypatch):
+        from app.loop_manager import _check_sso_failures
+        from app.github_notifications import _record_sso_failure, reset_sso_failure_count
+        monkeypatch.setenv("KOAN_ROOT", "/tmp/test-koan")
+
+        with patch("app.utils.append_to_outbox") as mock_outbox:
+            # Only 2 cycles with failures — below threshold
+            for i in range(2):
+                reset_sso_failure_count()
+                _record_sso_failure(f"test-{i}")
+                _check_sso_failures()
+
+            mock_outbox.assert_not_called()

@@ -920,6 +920,27 @@ class TestHandlePause:
             # Should break much earlier than 60 sleeps
             assert mock_sleep.call_count < 10
 
+    @patch("app.run.time.sleep")
+    def test_pause_breaks_on_cycle_signal(self, mock_sleep, koan_root):
+        """Pause breaks out when .koan-cycle appears, returns None."""
+        from app.run import handle_pause
+
+        instance = str(koan_root / "instance")
+        (koan_root / ".koan-pause").touch()
+
+        sleep_count = [0]
+        def create_cycle_after_2(duration):
+            sleep_count[0] += 1
+            if sleep_count[0] >= 2:
+                (koan_root / ".koan-cycle").write_text("CYCLE")
+
+        mock_sleep.side_effect = create_cycle_after_2
+
+        with patch("app.pause_manager.check_and_resume", return_value=None):
+            result = handle_pause(str(koan_root), instance, 5)
+            assert result is None
+            assert mock_sleep.call_count < 10
+
 
 # ---------------------------------------------------------------------------
 # Test: run_claude_task
@@ -1165,7 +1186,7 @@ class TestPostMissionDeadline:
 
     def test_deadline_skips_slow_steps(self, tmp_path, monkeypatch):
         """Steps are skipped when the pipeline deadline expires."""
-        from app.mission_runner import run_post_mission, POST_MISSION_TIMEOUT
+        from app.mission_runner import run_post_mission
 
         # Create required files
         stdout_f = str(tmp_path / "stdout.txt")
@@ -1182,7 +1203,7 @@ class TestPostMissionDeadline:
             return None
 
         monkeypatch.setattr(
-            "app.mission_runner.POST_MISSION_TIMEOUT", 0.2
+            "app.mission_runner._resolve_post_mission_timeout", lambda: 0.2
         )
         monkeypatch.setattr(
             "app.mission_runner._run_mission_verification", slow_verification
@@ -1251,7 +1272,7 @@ class TestPostMissionDeadline:
 
         outcome_recorded = []
 
-        monkeypatch.setattr("app.mission_runner.POST_MISSION_TIMEOUT", 0.01)
+        monkeypatch.setattr("app.mission_runner._resolve_post_mission_timeout", lambda: 0.01)
         monkeypatch.setattr(
             "app.mission_runner.update_usage", lambda *a: True,
         )
@@ -1538,6 +1559,135 @@ class TestMainLoop:
         mock_startup.assert_called_once()
         # The restart file was cleared
         assert not (koan_root / ".koan-restart").exists()
+
+    @patch("app.run.subprocess.run")
+    @patch("app.run.run_startup", return_value=(5, 10, "koan/"))
+    @patch("app.run.acquire_pidfile")
+    @patch("app.run.release_pidfile")
+    def test_update_signal_triggers_update_and_restart(self, mock_release, mock_acquire, mock_startup, mock_subproc, koan_root):
+        """Update signal file triggers _handle_update and exits with RESTART_EXIT_CODE."""
+        from app.run import main_loop
+        from app.restart_manager import RESTART_EXIT_CODE
+
+        os.environ["KOAN_ROOT"] = str(koan_root)
+        os.environ["KOAN_PROJECTS"] = f"test:{koan_root}"
+        (koan_root / ".koan-project").write_text("test")
+
+        def startup_creates_cycle(*args, **kwargs):
+            (koan_root / ".koan-cycle").write_text("CYCLE")
+            return (5, 10, "koan/")
+
+        mock_startup.side_effect = startup_creates_cycle
+
+        with pytest.raises(SystemExit) as exc:
+            with patch("app.run._notify"):
+                with patch("app.run._handle_update") as mock_update:
+                    main_loop()
+        assert exc.value.code == RESTART_EXIT_CODE
+        mock_update.assert_called_once()
+        # Signal file should be cleaned up
+        assert not (koan_root / ".koan-cycle").exists()
+
+    @patch("app.run.subprocess.run")
+    @patch("app.run.run_startup", return_value=(5, 10, "koan/"))
+    @patch("app.run.acquire_pidfile")
+    @patch("app.run.release_pidfile")
+    def test_stale_update_signal_cleared_on_startup(self, mock_release, mock_acquire, mock_startup, mock_subproc, koan_root):
+        """Stale .koan-cycle from a previous session is cleared on startup."""
+        from app.run import main_loop
+
+        os.environ["KOAN_ROOT"] = str(koan_root)
+        os.environ["KOAN_PROJECTS"] = f"test:{koan_root}"
+        (koan_root / ".koan-project").write_text("test")
+
+        # Create stale cycle file
+        (koan_root / ".koan-cycle").write_text("CYCLE")
+
+        def startup_then_stop(*args, **kwargs):
+            (koan_root / ".koan-stop").touch()
+            return (5, 10, "koan/")
+
+        mock_startup.side_effect = startup_then_stop
+
+        with patch("app.run._notify"):
+            main_loop()
+
+        # Stale cycle file was cleared on startup (didn't trigger cycle)
+        assert not (koan_root / ".koan-cycle").exists()
+
+
+# ---------------------------------------------------------------------------
+# Test: _handle_update
+# ---------------------------------------------------------------------------
+
+class TestHandleUpdate:
+    def test_update_with_new_commits(self, tmp_path):
+        """_handle_update pulls updates and requests restart."""
+        from app.run import _handle_update
+        from app.update_manager import UpdateResult
+
+        instance = str(tmp_path / "instance")
+        os.makedirs(instance, exist_ok=True)
+
+        result = UpdateResult(
+            success=True, old_commit="abc1234", new_commit="def5678",
+            commits_pulled=3,
+        )
+
+        with patch("app.update_manager.pull_upstream", return_value=result) as mock_pull, \
+             patch("app.restart_manager.request_restart") as mock_restart, \
+             patch("app.pause_manager.remove_pause") as mock_unpause, \
+             patch("app.run._notify") as mock_notify:
+            _handle_update(str(tmp_path), instance, 10)
+
+        mock_pull.assert_called_once()
+        mock_restart.assert_called_once_with(str(tmp_path))
+        mock_unpause.assert_called_once_with(str(tmp_path))
+        assert "3 new commits" in mock_notify.call_args[0][1]
+
+    def test_update_already_up_to_date(self, tmp_path):
+        """_handle_update still restarts even when no updates found."""
+        from app.run import _handle_update
+        from app.update_manager import UpdateResult
+
+        instance = str(tmp_path / "instance")
+        os.makedirs(instance, exist_ok=True)
+
+        result = UpdateResult(
+            success=True, old_commit="abc1234", new_commit="abc1234",
+            commits_pulled=0,
+        )
+
+        with patch("app.update_manager.pull_upstream", return_value=result), \
+             patch("app.restart_manager.request_restart") as mock_restart, \
+             patch("app.pause_manager.remove_pause"), \
+             patch("app.run._notify") as mock_notify:
+            _handle_update(str(tmp_path), instance, 5)
+
+        mock_restart.assert_called_once()
+        assert "up to date" in mock_notify.call_args[0][1]
+
+    def test_update_fails_still_restarts(self, tmp_path):
+        """_handle_update restarts even when update fails."""
+        from app.run import _handle_update
+        from app.update_manager import UpdateResult
+
+        instance = str(tmp_path / "instance")
+        os.makedirs(instance, exist_ok=True)
+
+        result = UpdateResult(
+            success=False, old_commit="abc1234", new_commit="abc1234",
+            commits_pulled=0, error="No git remote found",
+        )
+
+        with patch("app.update_manager.pull_upstream", return_value=result), \
+             patch("app.restart_manager.request_restart") as mock_restart, \
+             patch("app.pause_manager.remove_pause"), \
+             patch("app.run._notify") as mock_notify:
+            _handle_update(str(tmp_path), instance, 3)
+
+        mock_restart.assert_called_once()
+        assert "failed" in mock_notify.call_args[0][1]
 
 
 # ---------------------------------------------------------------------------

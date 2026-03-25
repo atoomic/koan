@@ -47,6 +47,7 @@ from app.run_log import (  # noqa: F401 — re-exported for backward compat
 )
 from app.shutdown_manager import is_shutdown_requested, clear_shutdown
 from app.signals import (
+    CYCLE_FILE,
     PAUSE_FILE,
     PROJECT_FILE,
     SHUTDOWN_FILE,
@@ -496,6 +497,36 @@ def _commit_instance(instance: str, message: str = ""):
 
 
 # ---------------------------------------------------------------------------
+# Update handler (graceful update + restart)
+# ---------------------------------------------------------------------------
+
+def _handle_update(koan_root: str, instance: str, count: int):
+    """Handle /update: pull upstream updates, then trigger restart.
+
+    Called after the current mission completes. Pulls the latest code
+    and requests a restart. If the pull fails, notifies and still restarts
+    (the user explicitly asked for an update).
+    """
+    from app.update_manager import pull_upstream
+    from app.restart_manager import request_restart
+    from app.pause_manager import remove_pause
+
+    result = pull_upstream(Path(koan_root))
+    if not result.success:
+        log("koan", f"Update failed: {result.error}")
+        _notify(instance, f"🔄 Update failed ({result.error}), restarting anyway.")
+    elif result.changed:
+        log("koan", f"Update: {result.summary()}")
+        _notify(instance, f"🔄 Update complete after {count} runs. {result.summary()} Restarting...")
+    else:
+        log("koan", "Update: already up to date, restarting.")
+        _notify(instance, f"🔄 Update complete after {count} runs. Already up to date. Restarting...")
+
+    remove_pause(koan_root)
+    request_restart(koan_root)
+
+
+# ---------------------------------------------------------------------------
 # Pause mode handler
 # ---------------------------------------------------------------------------
 
@@ -531,7 +562,7 @@ def handle_pause(
         _reset_usage_session(instance)
         return "resume"
 
-    # Sleep 5 min in 5s increments — check for resume/stop/restart/shutdown
+    # Sleep 5 min in 5s increments — check for resume/stop/restart/shutdown/update
     with protected_phase("Paused — waiting for resume"):
         for _ in range(60):
             if not Path(koan_root, PAUSE_FILE).exists():
@@ -541,6 +572,9 @@ def handle_pause(
                 break
             if Path(koan_root, SHUTDOWN_FILE).exists():
                 log("pause", "Shutdown signal detected while paused")
+                break
+            if Path(koan_root, CYCLE_FILE).exists():
+                log("pause", "Update signal detected while paused")
                 break
             if check_restart(koan_root):
                 break
@@ -591,6 +625,7 @@ def main_loop():
     # file persists and would cause an immediate exit on next startup.
     Path(koan_root, STOP_FILE).unlink(missing_ok=True)
     Path(koan_root, SHUTDOWN_FILE).unlink(missing_ok=True)
+    Path(koan_root, CYCLE_FILE).unlink(missing_ok=True)
     clear_restart(koan_root)
 
     # Install SIGINT handler
@@ -621,6 +656,14 @@ def main_loop():
                 current = _read_current_project(koan_root)
                 _notify(instance, f"Kōan stopped on request after {count} runs. Last project: {current}.")
                 break
+
+            # --- Update check (finish mission → update → restart) ---
+            cycle_file = Path(koan_root, CYCLE_FILE)
+            if cycle_file.exists():
+                log("koan", "Update requested. Updating and restarting...")
+                cycle_file.unlink(missing_ok=True)
+                _handle_update(koan_root, instance, count)
+                sys.exit(RESTART_EXIT_CODE)
 
             # --- Shutdown check (stops both agent loop and bridge) ---
             if is_shutdown_requested(koan_root, start_time):
@@ -1007,7 +1050,22 @@ def _handle_skill_dispatch(
     # Check for cli_skill translation before failing unrecognized /commands
     if is_skill_mission(mission_title):
         from pathlib import Path as _Path
-        from app.skill_dispatch import translate_cli_skill_mission
+        from app.skill_dispatch import (
+            translate_cli_skill_mission,
+            strip_passthrough_command,
+        )
+
+        # Some /commands (e.g. /gh_request) are bridge-side handlers that
+        # can also land in the mission queue via GitHub notifications.
+        # Strip the prefix and let Claude handle them as regular missions.
+        passthrough_text = strip_passthrough_command(mission_title)
+        if passthrough_text is not None:
+            _debug_log(
+                f"[run] passthrough command: '{mission_title}' -> '{passthrough_text}'"
+            )
+            log("mission", "Decision: PASSTHROUGH (command stripped, sending to Claude)")
+            return False, passthrough_text
+
         translated = translate_cli_skill_mission(
             mission_text=mission_title,
             koan_root=_Path(koan_root),
@@ -1461,15 +1519,42 @@ def _run_iteration(
     fd_err, stderr_file = tempfile.mkstemp(prefix="koan-err-")
     os.close(fd_err)
     claude_exit = 1  # default to failure; overwritten on successful execution
+    plugin_dir = None  # generated plugin dir for Skill tool (cleaned up in finally)
     try:
         # Build CLI command (provider-agnostic with per-project overrides)
         from app.mission_runner import build_mission_command
         from app.debug import debug_log as _debug_log
+
+        # Generate plugin directory so Claude CLI can discover Kōan skills
+        plugin_dirs = None
+        try:
+            from app.plugin_generator import generate_plugin_dir, cleanup_plugin_dir
+            from app.skills import build_registry
+            extra_dirs = []
+            # Include project-local skills (<project>/.claude/skills/)
+            project_skills = Path(project_path) / ".claude" / "skills"
+            if project_skills.is_dir():
+                extra_dirs.append(project_skills)
+            instance_skills = instance / "skills"
+            if instance_skills.is_dir():
+                extra_dirs.append(instance_skills)
+            # Include user-installed Claude Code skills (~/.claude/skills/)
+            user_skills = Path.home() / ".claude" / "skills"
+            if user_skills.is_dir():
+                extra_dirs.append(user_skills)
+            registry = build_registry(extra_dirs=extra_dirs or None)
+            if registry.list_by_audience("agent", "command", "hybrid"):
+                plugin_dir = generate_plugin_dir(registry)
+                plugin_dirs = [str(plugin_dir)]
+        except Exception as e:
+            _debug_log(f"[run] plugin dir generation skipped: {e}")
+
         cmd = build_mission_command(
             prompt=prompt,
             autonomous_mode=autonomous_mode,
             extra_flags="",
             project_name=project_name,
+            plugin_dirs=plugin_dirs,
             system_prompt=system_prompt,
         )
 
@@ -1585,6 +1670,12 @@ def _run_iteration(
             log("error", f"Post-mission processing error: {e}\n{traceback.format_exc()}")
     finally:
         _cleanup_temp(stdout_file, stderr_file)
+        if plugin_dir:
+            try:
+                from app.plugin_generator import cleanup_plugin_dir
+                cleanup_plugin_dir(plugin_dir)
+            except Exception as e:
+                print(f"[run] plugin cleanup error: {e}", file=sys.stderr)
 
     # Report result — always notify on completion (success or failure)
     if claude_exit == 0:

@@ -98,7 +98,7 @@ def get_mission_tools(project_name: str = "") -> str:
 
     Missions run with full tool access including Bash for code execution.
 
-    Config key: tools.mission (default: Read, Glob, Grep, Edit, Write, Bash)
+    Config key: tools.mission (default: Read, Glob, Grep, Edit, Write, Bash, Skill)
     Per-project override: projects.yaml tools.mission
 
     Args:
@@ -107,7 +107,7 @@ def get_mission_tools(project_name: str = "") -> str:
     Returns:
         Comma-separated tool names.
     """
-    return _get_tools_for_role("mission", ["Read", "Glob", "Grep", "Edit", "Write", "Bash"], project_name)
+    return _get_tools_for_role("mission", ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "Skill"], project_name)
 
 
 def get_contemplative_tools(project_name: str = "") -> str:
@@ -284,6 +284,24 @@ def get_interval_seconds() -> int:
     return _safe_int(config.get("interval_seconds", 300), 300)
 
 
+def get_same_project_stickiness_percent() -> int:
+    """Get same-project stickiness chance (0-100) for cache reuse.
+
+    When > 0, autonomous exploration may intentionally stay on the same
+    project as the previous run with this probability. This helps keep
+    prompt prefixes cache-hot across consecutive runs on the same project.
+
+    Config key: prompt_caching.same_project_stickiness_percent
+    Default: 0 (disabled, preserves legacy anti-repeat behavior)
+    """
+    config = _load_config()
+    prompt_cfg = config.get("prompt_caching", {})
+    if not isinstance(prompt_cfg, dict):
+        return 0
+    value = _safe_int(prompt_cfg.get("same_project_stickiness_percent", 0), 0)
+    return max(0, min(100, value))
+
+
 def get_fast_reply_model() -> str:
     """Get model to use for fast replies (command handlers like /usage, /sparring).
 
@@ -349,6 +367,38 @@ def get_mission_timeout() -> int:
     """
     config = _load_config()
     return _safe_int(config.get("mission_timeout", 3600), 3600)
+
+
+def get_skill_max_turns() -> int:
+    """Get max turns for skill execution (fix, implement, incident).
+
+    Controls the maximum number of agentic turns Claude CLI is allowed
+    to take during heavy-lifting skill invocations. Higher values allow
+    complex implementations to complete without hitting the ceiling.
+
+    Config key: skill_max_turns (default: 200).
+
+    Returns:
+        Maximum number of turns.
+    """
+    config = _load_config()
+    return _safe_int(config.get("skill_max_turns", 200), 200)
+
+
+def get_post_mission_timeout() -> int:
+    """Get timeout in seconds for the post-mission pipeline.
+
+    Controls the overall deadline for post-mission steps: verification,
+    reflection, PR review learning, and auto-merge.  Without this ceiling,
+    accumulated steps can block the agent loop for too long.
+
+    Config key: post_mission_timeout (default: 300 — 5 minutes).
+
+    Returns:
+        Timeout in seconds.
+    """
+    config = _load_config()
+    return _safe_int(config.get("post_mission_timeout", 300), 300)
 
 
 def get_plan_review_config() -> dict:
@@ -465,7 +515,7 @@ def get_cli_binary_for_shell() -> str:
 def get_cli_provider_name() -> str:
     """Get the configured CLI provider name for display.
 
-    Returns "claude" or "copilot".
+    Returns "claude", "codex", "copilot", "local", or "ollama-launch".
     """
     from app.cli_provider import get_provider_name
     return get_provider_name()

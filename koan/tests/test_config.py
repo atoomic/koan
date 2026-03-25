@@ -51,7 +51,7 @@ class TestGetMissionTools:
         from app.config import get_mission_tools
 
         with _mock_config({}):
-            assert get_mission_tools() == "Read,Glob,Grep,Edit,Write,Bash"
+            assert get_mission_tools() == "Read,Glob,Grep,Edit,Write,Bash,Skill"
 
     def test_custom(self):
         from app.config import get_mission_tools
@@ -91,7 +91,7 @@ class TestGetAllowedTools:
         from app.config import get_allowed_tools
 
         with _mock_config({}):
-            assert get_allowed_tools() == "Read,Glob,Grep,Edit,Write,Bash"
+            assert get_allowed_tools() == "Read,Glob,Grep,Edit,Write,Bash,Skill"
 
 
 # --- get_tools_description ---
@@ -262,6 +262,32 @@ class TestGetIntervalSeconds:
             assert get_interval_seconds() == 120
 
 
+# --- get_same_project_stickiness_percent ---
+
+
+class TestGetSameProjectStickinessPercent:
+    def test_default_disabled(self):
+        from app.config import get_same_project_stickiness_percent
+
+        with _mock_config({}):
+            assert get_same_project_stickiness_percent() == 0
+
+    def test_reads_nested_prompt_caching_value(self):
+        from app.config import get_same_project_stickiness_percent
+
+        with _mock_config({"prompt_caching": {"same_project_stickiness_percent": 35}}):
+            assert get_same_project_stickiness_percent() == 35
+
+    def test_clamps_out_of_range_values(self):
+        from app.config import get_same_project_stickiness_percent
+
+        with _mock_config({"prompt_caching": {"same_project_stickiness_percent": 999}}):
+            assert get_same_project_stickiness_percent() == 100
+
+        with _mock_config({"prompt_caching": {"same_project_stickiness_percent": -5}}):
+            assert get_same_project_stickiness_percent() == 0
+
+
 # --- get_fast_reply_model ---
 
 
@@ -372,6 +398,35 @@ class TestGetSkillTimeout:
             assert get_skill_timeout() == 3600
 
 
+# --- get_skill_max_turns ---
+
+
+class TestGetSkillMaxTurns:
+    def test_default(self):
+        from app.config import get_skill_max_turns
+
+        with _mock_config({}):
+            assert get_skill_max_turns() == 200
+
+    def test_custom(self):
+        from app.config import get_skill_max_turns
+
+        with _mock_config({"skill_max_turns": 100}):
+            assert get_skill_max_turns() == 100
+
+    def test_string_value_coerced(self):
+        from app.config import get_skill_max_turns
+
+        with _mock_config({"skill_max_turns": "300"}):
+            assert get_skill_max_turns() == 300
+
+    def test_invalid_string_returns_default(self):
+        from app.config import get_skill_max_turns
+
+        with _mock_config({"skill_max_turns": "infinite"}):
+            assert get_skill_max_turns() == 200
+
+
 # --- get_mission_timeout ---
 
 
@@ -393,6 +448,35 @@ class TestGetMissionTimeout:
 
         with _mock_config({"mission_timeout": 0}):
             assert get_mission_timeout() == 0
+
+
+# --- get_post_mission_timeout ---
+
+
+class TestGetPostMissionTimeout:
+    def test_default(self):
+        from app.config import get_post_mission_timeout
+
+        with _mock_config({}):
+            assert get_post_mission_timeout() == 300
+
+    def test_custom(self):
+        from app.config import get_post_mission_timeout
+
+        with _mock_config({"post_mission_timeout": 600}):
+            assert get_post_mission_timeout() == 600
+
+    def test_string_parsed(self):
+        from app.config import get_post_mission_timeout
+
+        with _mock_config({"post_mission_timeout": "120"}):
+            assert get_post_mission_timeout() == 120
+
+    def test_invalid_returns_default(self):
+        from app.config import get_post_mission_timeout
+
+        with _mock_config({"post_mission_timeout": "nope"}):
+            assert get_post_mission_timeout() == 300
 
 
 # --- build_claude_flags ---

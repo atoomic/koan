@@ -25,12 +25,17 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
-# Patterns that indicate quota exhaustion in CLI output.
-# Shared across providers (Claude, Copilot, etc.).
-QUOTA_PATTERNS = [
-    # Claude-specific
+# Strict patterns: specific enough to match safely in both stdout and stderr.
+# These are actual CLI error messages, not terms that appear in normal text.
+_STRICT_QUOTA_PATTERNS = [
+    # Claude-specific error messages
     r"out of extra usage",
     r"quota.*reached",
+]
+
+# Loose patterns: generic terms that may appear in Claude's response text
+# (e.g., a plan discussing API rate limiting).  Only safe to match in stderr.
+_LOOSE_QUOTA_PATTERNS = [
     # Generic / shared
     r"rate limit",
     # Copilot / GitHub API
@@ -43,8 +48,13 @@ QUOTA_PATTERNS = [
     r"retry[\s-]+after",
 ]
 
-# Compiled regex for performance
+# Combined list for backward-compatible use in detect_quota_exhaustion()
+QUOTA_PATTERNS = _STRICT_QUOTA_PATTERNS + _LOOSE_QUOTA_PATTERNS
+
+# Compiled regexes
 _QUOTA_RE = re.compile("|".join(QUOTA_PATTERNS), re.IGNORECASE)
+_STRICT_QUOTA_RE = re.compile("|".join(_STRICT_QUOTA_PATTERNS), re.IGNORECASE)
+_LOOSE_QUOTA_RE = re.compile("|".join(_LOOSE_QUOTA_PATTERNS), re.IGNORECASE)
 
 # Pattern to extract reset info from output.
 # Claude: "resets 10am (Europe/Paris)"
@@ -60,6 +70,11 @@ _MAX_RETRY_SECONDS = 86400  # 24 hours
 _MAX_RETRY_MINUTES = 1440   # 24 hours in minutes
 _MAX_RETRY_HOURS = 24       # 24 hours
 _DEFAULT_RETRY_SECONDS = 3600  # 1 hour fallback for zero/negative values
+
+# Sentinel returned when quota check is unreliable (both log files unreadable).
+# Callers should check `result is QUOTA_CHECK_UNRELIABLE` to distinguish from
+# "quota not exhausted" (None) and "quota exhausted" (tuple).
+QUOTA_CHECK_UNRELIABLE = ("__unreliable__", "Quota check failed: could not read log files")
 
 
 def _clamp_retry_seconds(seconds: int) -> int:
@@ -239,26 +254,41 @@ def handle_quota_exhaustion(
     Returns:
         (reset_display, resume_message) if quota exhausted, None otherwise
     """
-    # Read output files (stderr first, then stdout — matches original bash order)
-    parts = []
+    # Read output files separately — stderr is trusted (CLI error messages),
+    # stdout may contain Claude's response text which can mention "rate limit"
+    # etc. in normal discussion (e.g., a plan about API rate limiting).
+    stderr_text = ""
+    stdout_text = ""
     read_failures = 0
-    for filepath in [stderr_file, stdout_file]:
-        try:
-            parts.append(Path(filepath).read_text())
-        except OSError:
-            read_failures += 1
+    try:
+        stderr_text = Path(stderr_file).read_text()
+    except OSError:
+        read_failures += 1
+    try:
+        stdout_text = Path(stdout_file).read_text()
+    except OSError:
+        read_failures += 1
     if read_failures == 2:
         print(
             f"[quota_handler] WARNING: could not read stdout ({stdout_file}) "
             f"or stderr ({stderr_file}) — quota check unreliable",
             file=sys.stderr,
         )
-    combined = "\n".join(parts)
+        return QUOTA_CHECK_UNRELIABLE
 
-    if not detect_quota_exhaustion(combined):
+    # Check stderr with ALL patterns (both strict and loose) — stderr
+    # contains CLI error messages, not user content.
+    # Check stdout with STRICT patterns only — loose patterns like
+    # "rate limit" cause false positives when Claude's response discusses
+    # API rate limiting.
+    quota_detected = bool(_QUOTA_RE.search(stderr_text)) or bool(
+        _STRICT_QUOTA_RE.search(stdout_text)
+    )
+    if not quota_detected:
         return None
 
-    # Extract and parse reset info
+    # Extract and parse reset info (from both sources — reset times are safe)
+    combined = stderr_text + "\n" + stdout_text
     reset_info = extract_reset_info(combined)
     reset_timestamp, reset_display = parse_reset_time(reset_info)
     effective_ts, resume_message = compute_resume_info(reset_timestamp, reset_display)
@@ -302,7 +332,10 @@ if __name__ == "__main__":
         stdout_file=sys.argv[6],
         stderr_file=sys.argv[7],
     )
-    if result:
+    if result is QUOTA_CHECK_UNRELIABLE:
+        print("UNRELIABLE: could not read log files", file=sys.stderr)
+        sys.exit(2)
+    elif result:
         reset_display, resume_message = result
         # Output for bash: RESET_DISPLAY|RESUME_MSG
         print(f"{reset_display}|{resume_message}")

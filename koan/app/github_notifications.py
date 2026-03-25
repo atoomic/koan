@@ -15,12 +15,195 @@ import re
 import subprocess
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from app.bounded_set import BoundedSet
-from app.github import api
+from app.github import SSOAuthRequired, api
 
 log = logging.getLogger(__name__)
+
+# Count of SSO failures observed during the current processing cycle.
+# Reset at the start of each cycle by the caller (loop_manager).
+_sso_failure_count: int = 0
+
+# Consecutive fetch failures in fetch_unread_notifications.
+# After _FETCH_FAILURE_THRESHOLD consecutive failures, log at warning level
+# and notify via outbox so the user knows GitHub polling is broken.
+_consecutive_fetch_failures: int = 0
+_FETCH_FAILURE_THRESHOLD = 3
+# Track whether we already sent an outbox alert for the current failure streak,
+# so we don't spam the user on every subsequent failure.
+_fetch_failure_alerted: bool = False
+
+# Consecutive SSO failures across cycles.  Only reset when a full cycle
+# completes with zero SSO failures, indicating the token works again.
+_consecutive_sso_failures: int = 0
+
+# Threshold at which an outbox alert is sent.
+SSO_ESCALATION_THRESHOLD: int = 5
+
+# Track whether the outbox escalation has already fired for the current
+# failure streak so we don't spam on every subsequent cycle.
+_sso_escalation_sent: bool = False
+
+
+def reset_sso_failure_count() -> None:
+    """Reset the per-cycle SSO failure counter.
+
+    Called at the start of each notification cycle.  Does NOT reset the
+    cross-cycle consecutive counter — that is handled by
+    ``update_consecutive_sso_failures()``.
+    """
+    global _sso_failure_count
+    _sso_failure_count = 0
+
+
+def reset_consecutive_sso_state() -> None:
+    """Reset all consecutive SSO failure state.  For tests only."""
+    global _consecutive_sso_failures, _sso_escalation_sent
+    _consecutive_sso_failures = 0
+    _sso_escalation_sent = False
+
+
+def get_sso_failure_count() -> int:
+    """Return the number of SSO failures observed in the current cycle."""
+    return _sso_failure_count
+
+
+def reset_fetch_failure_count() -> None:
+    """Reset the consecutive fetch failure counter."""
+    global _consecutive_fetch_failures, _fetch_failure_alerted
+    _consecutive_fetch_failures = 0
+    _fetch_failure_alerted = False
+
+
+def get_fetch_failure_count() -> int:
+    """Return the number of consecutive fetch failures."""
+    return _consecutive_fetch_failures
+
+
+def _record_fetch_failure(reason: str) -> None:
+    """Record a fetch failure, escalate logging and notify after threshold."""
+    global _consecutive_fetch_failures, _fetch_failure_alerted
+    _consecutive_fetch_failures += 1
+
+    if _consecutive_fetch_failures < _FETCH_FAILURE_THRESHOLD:
+        log.debug("GitHub API: failed to fetch notifications: %s", reason)
+        return
+
+    # Threshold reached — escalate to warning
+    log.warning(
+        "GitHub API: %d consecutive fetch failures (latest: %s). "
+        "Notification polling may be broken.",
+        _consecutive_fetch_failures,
+        reason,
+    )
+
+    # Send a one-time outbox alert so the user gets a Telegram notification
+    if not _fetch_failure_alerted:
+        _fetch_failure_alerted = True
+        _send_fetch_failure_alert(_consecutive_fetch_failures, reason)
+
+
+def _send_fetch_failure_alert(count: int, reason: str) -> None:
+    """Write a fetch-failure alert to outbox.md."""
+    try:
+        koan_root = os.environ.get("KOAN_ROOT", "")
+        if not koan_root:
+            return
+        outbox_path = Path(koan_root) / "instance" / "outbox.md"
+        if not outbox_path.parent.is_dir():
+            return
+        from app.utils import append_to_outbox
+        msg = (
+            f"⚠️ GitHub notification polling has failed {count} times in a row "
+            f"({reason}). @mentions may be missed until connectivity is restored.\n"
+        )
+        append_to_outbox(outbox_path, msg)
+    except Exception as exc:
+        log.debug("Failed to write fetch-failure alert to outbox: %s", exc)
+
+
+def _clear_fetch_failures() -> None:
+    """Reset failure counter on a successful fetch."""
+    global _consecutive_fetch_failures, _fetch_failure_alerted
+    if _consecutive_fetch_failures > 0:
+        if _fetch_failure_alerted:
+            log.info(
+                "GitHub API: notification fetch recovered after %d failures",
+                _consecutive_fetch_failures,
+            )
+        _consecutive_fetch_failures = 0
+        _fetch_failure_alerted = False
+
+
+def get_consecutive_sso_failures() -> int:
+    """Return the number of consecutive SSO failures across cycles."""
+    return _consecutive_sso_failures
+
+
+def update_consecutive_sso_failures() -> None:
+    """Update the cross-cycle consecutive failure counter.
+
+    Call this AFTER a notification cycle completes.  If the cycle had
+    SSO failures, they are added to the running total.  If the cycle
+    was clean, the running total resets to zero.
+    """
+    global _consecutive_sso_failures, _sso_escalation_sent
+    if _sso_failure_count > 0:
+        _consecutive_sso_failures += _sso_failure_count
+    else:
+        _consecutive_sso_failures = 0
+        _sso_escalation_sent = False
+
+
+def check_sso_escalation() -> bool:
+    """Check if SSO failures should be escalated to outbox.
+
+    Returns True if an outbox alert was written, False otherwise.
+    The alert fires once per failure streak (reset when failures stop).
+    """
+    global _sso_escalation_sent
+    if _sso_escalation_sent:
+        return False
+    if _consecutive_sso_failures < SSO_ESCALATION_THRESHOLD:
+        return False
+
+    koan_root = os.environ.get("KOAN_ROOT", "")
+    if not koan_root:
+        return False
+
+    outbox_path = Path(koan_root) / "instance" / "outbox.md"
+    try:
+        from app.utils import append_to_outbox
+        append_to_outbox(
+            outbox_path,
+            f"⚠️ GitHub SSO auth has failed {_consecutive_sso_failures} times "
+            "consecutively — token needs re-authorization.\n"
+            "Run: `gh auth refresh -h github.com -s read:org`\n",
+        )
+        _sso_escalation_sent = True
+        log.warning(
+            "SSO escalation: %d consecutive failures, alert written to outbox",
+            _consecutive_sso_failures,
+        )
+        return True
+    except Exception as e:
+        log.debug("Failed to write SSO escalation to outbox: %s", e)
+        return False
+
+
+def _record_sso_failure(context: str) -> None:
+    """Record an SSO failure and log a warning (once per cycle)."""
+    global _sso_failure_count
+    _sso_failure_count += 1
+    if _sso_failure_count == 1:
+        log.warning(
+            "GitHub SSO auth failure detected (%s). "
+            "Token needs re-authorization: gh auth refresh -h github.com -s read:org",
+            context,
+        )
 
 # In-memory set of processed comment IDs (resets on restart).
 # Bounded: FIFO eviction when limit is reached (oldest entries removed first).
@@ -96,22 +279,25 @@ def fetch_unread_notifications(known_repos: Optional[Set[str]] = None,
             endpoint = f"notifications?since={since}&all=true"
         raw = api(endpoint, extra_args=["--paginate"])
     except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
-        log.debug("GitHub API: failed to fetch notifications: %s", e)
+        _record_fetch_failure(str(e))
         return FetchResult([], [])
 
     if not raw:
-        log.debug("GitHub API: empty response from notifications endpoint")
+        _record_fetch_failure("empty response")
         return FetchResult([], [])
 
     try:
         notifications = json.loads(raw)
     except json.JSONDecodeError:
-        log.debug("GitHub API: invalid JSON in notifications response")
+        _record_fetch_failure("invalid JSON")
         return FetchResult([], [])
 
     if not isinstance(notifications, list):
-        log.debug("GitHub API: unexpected response type: %s", type(notifications).__name__)
+        _record_fetch_failure(f"unexpected type: {type(notifications).__name__}")
         return FetchResult([], [])
+
+    # Successful parse — clear any failure streak
+    _clear_fetch_failures()
 
     log.debug(
         "GitHub API: %d total notifications%s",
@@ -123,12 +309,16 @@ def fetch_unread_notifications(known_repos: Optional[Set[str]] = None,
     skipped_repos: List[str] = []
     actionable = []
     drain = []
+    # Direct @mention reasons always pass the repo filter — the bot was
+    # explicitly called, so we must process regardless of projects.yaml.
+    _DIRECT_MENTION_REASONS = {"mention", "team_mention"}
     for notif in notifications:
         reason = notif.get("reason", "?")
         repo_name = notif.get("repository", {}).get("full_name", "?")
 
-        # Filter by known repos if provided — normalize for comparison
-        if known_repos:
+        # Filter by known repos if provided — normalize for comparison.
+        # Direct @mentions bypass this filter: the bot was explicitly invoked.
+        if known_repos and reason not in _DIRECT_MENTION_REASONS:
             repo_lower = repo_name.lower()
             if repo_lower not in known_repos:
                 skipped_repos.append(repo_name)
@@ -179,8 +369,8 @@ def parse_mention_command(comment_body: str, nickname: str) -> Optional[Tuple[st
     # Remove code blocks to avoid matching mentions in code
     clean_body = _CODE_BLOCK_RE.sub('', comment_body)
 
-    # Match @nickname followed by a command word
-    pattern = rf'@{re.escape(nickname)}\s+(\w+)(.*?)(?:\n|$)'
+    # Match @nickname followed by a command word (optional leading / is stripped)
+    pattern = rf'@{re.escape(nickname)}\s+/?(\w+)(.*?)(?:\n|$)'
     match = re.search(pattern, clean_body, re.IGNORECASE)
     if not match:
         return None
@@ -239,6 +429,9 @@ def get_comment_from_notification(notification: dict) -> Optional[dict]:
     try:
         raw = api(endpoint)
         return json.loads(raw) if raw else None
+    except SSOAuthRequired:
+        _record_sso_failure(f"get_comment endpoint={endpoint[:80]}")
+        return None
     except (RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired):
         return None
 
@@ -331,6 +524,9 @@ def find_mention_in_thread(
     try:
         raw = api(issue_endpoint)
         comments = json.loads(raw) if raw else []
+    except SSOAuthRequired:
+        _record_sso_failure(f"find_mention issue_comments {owner}/{repo}#{number}")
+        comments = []
     except (RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired):
         comments = []
 
@@ -348,6 +544,9 @@ def find_mention_in_thread(
         try:
             raw = api(review_endpoint)
             review_comments = json.loads(raw) if raw else []
+        except SSOAuthRequired:
+            _record_sso_failure(f"find_mention review_comments {owner}/{repo}#{number}")
+            review_comments = []
         except (RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired):
             review_comments = []
 
@@ -443,6 +642,8 @@ def check_already_processed(comment_id: str, bot_username: str,
                 if reaction.get("user", {}).get("login") == bot_username:
                     _processed_comments.add(comment_id)
                     return True
+    except SSOAuthRequired:
+        _record_sso_failure(f"check_already_processed comment={comment_id}")
     except (RuntimeError, json.JSONDecodeError):
         pass
 
@@ -501,6 +702,9 @@ def check_user_permission(owner: str, repo: str, username: str,
         data = json.loads(raw) if raw else {}
         permission = data.get("permission", "none")
         return permission in ("admin", "write")
+    except SSOAuthRequired:
+        _record_sso_failure(f"check_user_permission {owner}/{repo}")
+        return False
     except (RuntimeError, json.JSONDecodeError):
         return False
 

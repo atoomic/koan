@@ -19,9 +19,10 @@ from app.bridge_state import (
     _reset_registry,
 )
 from app.notify import TypingIndicator, send_telegram
-from app.signals import PAUSE_FILE, QUOTA_RESET_FILE, STOP_FILE
+from app.signals import CYCLE_FILE, PAUSE_FILE, QUOTA_RESET_FILE, STOP_FILE
 from app.skills import Skill, SkillContext, SkillError, execute_skill
 from app.utils import (
+    atomic_write,
     parse_project as _parse_project,
     detect_project_from_text,
     get_known_projects,
@@ -46,7 +47,7 @@ def set_callbacks(
 
 # Core commands that remain hardcoded (safety-critical or bootstrap)
 CORE_COMMANDS = frozenset({
-    "help", "stop", "sleep", "resume", "skill",
+    "help", "stop", "update", "upgrade", "sleep", "resume", "skill",
     "pause", "work", "awake", "start", "run",  # aliases for sleep/resume
 })
 
@@ -59,15 +60,33 @@ def handle_command(text: str):
     # --- Core hardcoded commands (safety-critical / bootstrap) ---
 
     if cmd == "/stop":
-        from app.utils import atomic_write
         atomic_write(KOAN_ROOT / STOP_FILE, "STOP")
         send_telegram("⏹️ Stop requested. Current mission will complete, then Kōan will stop.")
         return
 
-    if cmd in ("/pause", "/sleep"):
-        from app.pause_manager import is_paused, create_pause
+    if cmd in ("/update", "/upgrade"):
+        atomic_write(KOAN_ROOT / CYCLE_FILE, "CYCLE")
+        send_telegram("🔄 Update requested. Current mission will complete, then Kōan will update and restart.")
+        return
+
+    if cmd in ("/pause", "/sleep") or cmd.startswith(("/pause ", "/sleep ")):
+        from app.pause_manager import is_paused, create_pause, parse_duration
         if is_paused(str(KOAN_ROOT)):
             send_telegram("⏸️ Already paused. /resume to unpause.")
+            return
+
+        # Parse optional duration argument: /pause 2h, /pause 30m, /pause 1h30m
+        args = text.strip().split(None, 1)[1].strip() if " " in text.strip() else ""
+        duration_secs = parse_duration(args) if args else None
+
+        if duration_secs:
+            import time as _time
+            from app.reset_parser import time_until_reset
+            resume_at = int(_time.time()) + duration_secs
+            remaining = time_until_reset(resume_at)
+            create_pause(str(KOAN_ROOT), reason="timed", timestamp=resume_at,
+                         display=f"until {remaining} (paused for {args})")
+            send_telegram(f"⏸️ Paused for {args}. Auto-resumes in ~{remaining}. /resume to unpause early.")
         else:
             create_pause(str(KOAN_ROOT), reason="manual", display="paused via Telegram")
             send_telegram("⏸️ Paused. No missions will run. /resume to unpause.")
@@ -406,7 +425,8 @@ _GROUP_META = {
 _CORE_COMMAND_HELP = [
     ("help",   "Show help overview or details",   ["h"],                    "system"),
     ("stop",   "Stop the run loop",               [],                      "system"),
-    ("pause",  "Pause mission processing",         ["sleep"],              "system"),
+    ("update", "Finish current mission, update, restart", ["upgrade"],     "system"),
+    ("pause",  "Pause mission processing (optional: /pause 2h)",  ["sleep"],  "system"),
     ("resume", "Resume mission processing",        ["work", "awake", "run", "start"], "system"),
     ("skill",  "Manage skill packages",            [],                     "system"),
 ]

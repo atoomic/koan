@@ -73,7 +73,7 @@ Communication between processes happens through shared files in `instance/` with
 
 **Process management:**
 - **`pid_manager.py`** — Exclusive PID file enforcement for run, awake, and ollama processes. Provides `start_all()` (unified stack launcher with provider auto-detection), `start_runner()`, `start_awake()`, `start_ollama()`, and `stop_processes()` (graceful SIGTERM with force-kill fallback)
-- **`pause_manager.py`** — Pause state management (`.koan-pause` / `.koan-pause-reason` files)
+- **`pause_manager.py`** — Pause state management (`.koan-pause` / `.koan-pause-reason` files). Supports time-bounded pauses with auto-resume (e.g., `/pause 2h`)
 - **`restart_manager.py`** — File-based restart signaling between bridge and run loop (`.koan-restart`)
 - **`focus_manager.py`** — Focus mode management (`.koan-focus` JSON); skips contemplative sessions when active
 
@@ -81,7 +81,8 @@ Communication between processes happens through shared files in `instance/` with
 - **`provider/base.py`** — `CLIProvider` base class + tool name constants
 - **`provider/claude.py`** — `ClaudeProvider` (Claude Code CLI)
 - **`provider/copilot.py`** — `CopilotProvider` (GitHub Copilot CLI) with tool name mapping
-- **`cli_provider.py`** — Re-export facade; `build_full_command()` used throughout
+- **`provider/__init__.py`** — Provider registry, resolution (env → config → default), cached singleton, and convenience functions (`run_command()`, `run_command_streaming()`, `build_full_command()`). Main entry point for the provider package.
+- **`cli_provider.py`** — Re-export facade (legacy); prefer importing from `provider` directly
 
 **Git & GitHub:**
 - **`git_sync.py`** / **`git_auto_merge.py`** — Branch tracking, sync awareness, configurable auto-merge
@@ -110,7 +111,7 @@ Communication between processes happens through shared files in `instance/` with
 Extensible command plugin system. Each skill lives in `skills/<scope>/<skill-name>/` with a `SKILL.md` (YAML frontmatter defining commands, aliases, metadata) and an optional `handler.py`.
 
 - **`skills.py`** — Registry that discovers SKILL.md files, parses frontmatter (custom lite YAML parser, no PyYAML), maps commands/aliases to skills, and dispatches execution.
-- **Core skills** live in `koan/skills/core/` (cancel, chat, check, claudemd, focus, idea, implement, journal, language, list, live, magic, mission, plan, pr, priority, projects, quota, rebase, recreate, recurring, refactor, reflect, review, shutdown, sparring, start, status, update, verbose)
+- **Core skills** live in `koan/skills/core/` (cancel, chat, check, claudemd, delete_project, focus, idea, implement, journal, language, list, live, magic, mission, plan, pr, priority, projects, quota, rebase, recreate, recurring, refactor, reflect, review, shutdown, sparring, start, status, update, verbose)
 - **Custom skills** loaded from `instance/skills/<scope>/` — each scope directory can be a cloned Git repo for team sharing.
 - **Handler pattern**: `def handle(ctx: SkillContext) -> Optional[str]` — return string for Telegram reply, empty string for "already handled", None for no message.
 - **`worker: true`** flag in SKILL.md marks blocking skills (Claude calls, API requests) that run in a background thread.
@@ -137,8 +138,10 @@ Extensible command plugin system. Each skill lives in `skills/<scope>/<skill-nam
 - Multi-project support: up to 50 projects, each with isolated memory under `memory/projects/{name}/`
 - Tests use temp directories and isolated env vars — no real Telegram calls
 - `system-prompt.md` defines the Claude agent's identity, priorities, and autonomous mode rules
+- **Read docs before implementing** — Before implementing or modifying a feature, read the relevant `docs/*.md` files to understand the existing design, constraints, and conventions. The `docs/` directory is the reference for understanding the codebase beyond what the code itself shows. Skip this only for trivial changes that clearly don't touch a documented area.
 - **No inline prompts in Python code** — LLM prompts MUST be extracted to `.md` files. Skill-bound prompts go in `skills/<scope>/<name>/prompts/` and are loaded via `load_skill_prompt()`. Infrastructure prompts used by `koan/app/` modules stay in `koan/system-prompts/` and are loaded via `load_prompt()`.
 - **System prompts must be generic** — Never reference specific instance details like owner names in system prompts. Use generic terms like "your human" instead of personal names. Prompts are in English; instance-specific personality and language preferences come from `soul.md`.
 - **User manual maintenance** — When adding, removing, or modifying a core skill, update `docs/user-manual.md` accordingly: add the skill to the appropriate tier section and the quick-reference appendix. The manual must stay in sync with `koan/skills/core/`.
 - **Help group enforcement** — Every core skill MUST have a `group:` field in its SKILL.md frontmatter (one of: missions, code, pr, status, config, ideas, system). This ensures commands are discoverable via `/help`. If adding a new hardcoded core command (not skill-based), add it to `_CORE_COMMAND_HELP` in `command_handlers.py`. The test suite enforces this — `TestCoreSkillGroupEnforcement` will fail if a core skill is missing its group.
 - **No hyphens in skill names or aliases** — Skill command names, aliases, and directory names MUST use underscores (`_`), never hyphens (`-`). Hyphens break Telegram command parsing because Telegram treats the hyphen as a word boundary, cutting the command short. Example: use `dead_code` not `dead-code`, `scaffold_skill` not `scaffold-skill`.
+- **Documentation maintenance** — When adding or modifying a feature, update the corresponding section in `README.md` and/or the relevant `docs/*.md` file (e.g., `docs/user-manual.md`, `docs/skills.md`, `docs/auto-update.md`). If no documentation file exists for the feature, create one under `docs/`. After implementing or significantly updating a feature, verify that `docs/` reflects the current state — create a new `docs/*.md` file if the feature area isn't documented yet, or update the existing one. Public-facing documentation must stay in sync with the codebase — undocumented features are invisible to users, and stale docs are worse than no docs.

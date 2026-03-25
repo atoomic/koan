@@ -93,7 +93,7 @@ Pending  →  In Progress  →  Done ✓
 ```
 
 1. **Pending** — Queued and waiting. Kōan picks missions from the top of the queue.
-2. **In Progress** — Kōan is actively working on it via Claude Code CLI.
+2. **In Progress** — Kōan is actively working on it via the configured CLI provider.
 3. **Done** — Completed successfully. Code is in a `koan/*` branch, often with a draft PR.
 4. **Failed** — Something went wrong. Kōan logs the reason and moves on.
 
@@ -287,6 +287,27 @@ These features turn Kōan from a task runner into a full development workflow pa
 - `/plan webapp Add rate limiting to public API endpoints` — Target a specific project
 </details>
 
+**`/deepplan`** — Spec-first design with Socratic exploration of 2-3 approaches before planning. For complex missions where design matters more than speed.
+
+- **Usage:** `/deepplan <idea>`, `/deepplan <project> <idea>`, `/deepplan <github-issue-url>`
+- **Aliases:** `/deeplan`
+- **GitHub @mention:** `@koan-bot /deepplan <idea>` on an issue
+
+The workflow: (1) explores your codebase and surfaces 2-3 distinct design approaches with trade-offs, (2) runs a spec review loop (up to 5 iterations) to ensure the spec is concrete and complete, (3) posts the approved spec as a GitHub issue, (4) queues a `/plan <issue-url>` mission for your review and approval.
+
+When given a GitHub issue URL, the project is automatically detected from the repository and the issue title, body, and all comments are fetched to provide full context for the design exploration.
+
+Use this before `/plan` when the idea is architecturally complex, when you want to explore alternatives before committing, or when design mistakes would be expensive to fix later.
+
+<details>
+<summary>Use cases</summary>
+
+- `/deepplan Refactor the auth middleware to support OAuth2` — Explore design approaches before writing any code
+- `/deepplan koan Add multi-tenant project isolation` — Target a specific project with spec-first design
+- `/deepplan https://github.com/org/repo/issues/42` — Deep plan from an existing GitHub issue with full context
+- `/deepplan Redesign the mission queue for concurrent execution` — Surface trade-offs for a complex architectural change
+</details>
+
 **`/implement`** — Queue an implementation mission for a GitHub issue.
 
 - **Usage:** `/implement <issue-url> [additional context]`
@@ -366,6 +387,18 @@ These features turn Kōan from a task runner into a full development workflow pa
 <summary>Use cases</summary>
 
 - `/rebase https://github.com/org/repo/pull/42` — Resolve conflicts and update the PR
+</details>
+
+**`/squash`** — Squash all PR commits into a single clean commit.
+
+- **Usage:** `/squash <pr-url>`
+- **Aliases:** `/sq`
+- **GitHub @mention:** `@koan-bot /squash` on a PR
+
+<details>
+<summary>Use cases</summary>
+
+- `/squash https://github.com/org/repo/pull/42` — Clean up messy commit history before merge
 </details>
 
 **`/recreate`** — Re-implement a PR from scratch on a fresh branch. Useful when a PR has diverged too far.
@@ -743,10 +776,19 @@ tools:
   allowed: []                 # Whitelist (empty = all allowed)
   blocked: []                 # Blacklist specific tools
 
+# Start on pause — boot directly into pause mode
+# Useful for scheduled launches (cron, launchd) where you want
+# the stack running but idle until you explicitly /resume.
+start_on_pause: false
+
 # Schedule (when Kōan is allowed to work)
 schedule:
   timezone: UTC
   active_hours: "00:00-23:59" # Default: always active
+
+# Skill execution limits
+skill_timeout: 3600           # Max seconds for /fix, /implement, /incident
+skill_max_turns: 200          # Max agentic turns for heavy skills
 
 # Prompt guard (content safety)
 prompt_guard: true            # Enable prompt injection detection
@@ -780,7 +822,7 @@ projects:
 ```
 
 Key per-project settings:
-- **`cli_provider`** — `claude`, `copilot`, or `local`
+- **`cli_provider`** — `claude`, `codex`, `copilot`, `local`, or `ollama-launch`
 - **`models`** — Override model selection per role
 - **`tools`** — Restrict available tools
 - **`git_auto_merge`** — Auto-merge completed PRs (strategy: squash/merge/rebase)
@@ -863,6 +905,7 @@ Kōan supports multiple CLI backends. Configure globally via `KOAN_CLI_PROVIDER`
 | Provider | Best for | Docs |
 |----------|----------|------|
 | **Claude Code** (default) | Full-featured agent, best reasoning | [provider-claude.md](provider-claude.md) |
+| **OpenAI Codex** | ChatGPT users who want Codex models | [provider-codex.md](provider-codex.md) |
 | **GitHub Copilot** | Teams with existing Copilot licenses | [provider-copilot.md](provider-copilot.md) |
 | **Local LLM** | Offline, privacy, zero API cost | [provider-local.md](provider-local.md) |
 
@@ -887,6 +930,27 @@ Kōan supports multiple CLI backends. Configure globally via `KOAN_CLI_PROVIDER`
 
 ### System Management
 
+**`/pause`** — Pause mission processing. Kōan stays running but won't pick up new missions.
+
+- **Aliases:** `/sleep`
+
+<details>
+<summary>Use cases</summary>
+
+- `/pause` — Temporarily stop mission work without shutting down
+- Resume with `/resume` when ready
+</details>
+
+**`/resume`** — Resume mission processing after a pause (manual or automatic).
+
+- **Aliases:** `/work`, `/awake`, `/run`, `/start`
+
+<details>
+<summary>Use cases</summary>
+
+- `/resume` — Unpause after a manual `/pause` or quota exhaustion
+</details>
+
 **`/shutdown`** — Shutdown both the agent loop and the messaging bridge.
 
 <details>
@@ -895,15 +959,18 @@ Kōan supports multiple CLI backends. Configure globally via `KOAN_CLI_PROVIDER`
 - `/shutdown` — Gracefully stop everything (e.g., before system maintenance)
 </details>
 
-**`/update`** — Pull the latest Kōan code from upstream and restart.
+**`/update`** — Finish the current mission, pull updates, and restart.
 
 - **Aliases:** `/upgrade`
-- Only restarts when new code is pulled. Use `/restart` to force a restart without pulling.
+- Graceful update: waits for the current mission to complete before pulling and restarting.
+- If the update fails, Kōan still restarts (you asked for it).
+- Use `/restart` if you just need a fresh start without pulling code.
 
 <details>
 <summary>Use cases</summary>
 
-- `/update` — Get the latest features and fixes
+- `/update` — "Finish what you're doing, update yourself, and come back"
+- `/upgrade` — Same as `/update`
 </details>
 
 **`/restart`** — Restart both agent and bridge processes without pulling new code.
@@ -964,6 +1031,20 @@ See [docs/auto-update.md](auto-update.md) for details.
 
 - `/add_project https://github.com/org/new-repo` — Add a new repo for Kōan to manage
 - `/add_project https://github.com/org/new-repo myproject` — Add with a custom name
+</details>
+
+### Removing Projects
+
+**`/delete_project`** — Remove a project from the workspace.
+
+- **Usage:** `/delete_project <project-name>`
+- **Aliases:** `/delete`, `/del`
+
+<details>
+<summary>Use cases</summary>
+
+- `/delete_project myrepo` — Remove a project directory and its projects.yaml entry
+- `/del myrepo` — Same, using short alias
 </details>
 
 ### Performance Profiling
@@ -1069,12 +1150,14 @@ All commands at a glance. **Tier:** B = Beginner, I = Intermediate, P = Power Us
 | `/unfocus` | — | B | Exit focus mode |
 | `/brainstorm <topic>` | — | I | Decompose topic into linked sub-issues + master issue |
 | `/plan <desc>` | — | I | Create a structured implementation plan |
+| `/deepplan <idea\|issue-url>` | `/deeplan` | I | Spec-first design: explore approaches, post spec, queue /plan |
 | `/implement <issue>` | `/impl` | I | Implement a GitHub issue |
 | `/fix <issue>` | — | I | Full bug-fix pipeline (understand → plan → test → fix → PR) |
 | `/review <PR> [--architecture]` | `/rv` | I | Review a pull request |
 | `/refactor <desc>` | `/rf` | I | Targeted refactoring mission |
 | `/ask <comment-url>` | — | I | Ask a question about a PR/issue — posts AI reply to GitHub |
 | `/rebase <PR>` | `/rb` | I | Rebase a PR onto its base branch |
+| `/squash <PR>` | `/sq` | I | Squash all PR commits into one clean commit |
 | `/recreate <PR>` | `/rc` | I | Re-implement a PR from scratch |
 | `/pr <PR>` | — | I | Review and update a GitHub PR |
 | `/check <url>` | `/inspect` | I | Run project health checks on a PR/issue |
@@ -1102,11 +1185,14 @@ All commands at a glance. **Tier:** B = Beginner, I = Intermediate, P = Power Us
 | `/language <lang>` | `/lng` | P | Set reply language |
 | `/french` | `/fr`, `/francais`, `/français` | P | Switch to French |
 | `/english` | `/en`, `/anglais` | P | Switch to English |
+| `/pause` | `/sleep` | P | Pause mission processing |
+| `/resume` | `/work`, `/awake`, `/run`, `/start` | P | Resume mission processing |
 | `/shutdown` | — | P | Shutdown all processes |
-| `/update` | `/upgrade` | P | Update Kōan and restart |
+| `/update` | `/upgrade` | P | Finish mission, update, restart |
 | `/restart` | — | P | Restart processes (no code pull) |
 | `/snapshot` | — | P | Export memory state |
 | `/add_project <url>` | `/add_project` | P | Add a project from GitHub |
+| `/delete_project <name>` | `/delete`, `/del` | P | Remove a project from workspace |
 | `/profile <project>` | `/perf`, `/benchmark` | P | Performance profiling mission |
 | `/tech_debt [project]` | `/td`, `/debt` | P | Scan project for tech debt |
 | `/dead_code [project]` | `/dc` | P | Scan for unused code |

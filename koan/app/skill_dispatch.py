@@ -33,9 +33,28 @@ from app.utils import is_known_project
 # bridge_state.py caches via _get_registry(), but translate_cli_skill_mission()
 # (called from run.py) was rebuilding the registry from filesystem on every
 # invocation.  This cache avoids that overhead.
+# Invalidated when skills directories change on disk (mtime check).
 _cached_registry = None
 _cached_extra_dirs: Optional[tuple] = None
+_cached_mtime: float = 0.0
 _registry_lock = threading.Lock()
+
+
+def _get_skills_dir_mtime(instance_dir: Path) -> float:
+    """Get the max mtime of core and instance skills directories."""
+    best = 0.0
+    core_dir = Path(__file__).resolve().parent.parent / "skills" / "core"
+    try:
+        best = max(best, core_dir.stat().st_mtime)
+    except OSError:
+        pass
+    instance_skills = instance_dir / "skills"
+    if instance_skills.is_dir():
+        try:
+            best = max(best, instance_skills.stat().st_mtime)
+        except OSError:
+            pass
+    return best
 
 
 # Mapping of skill command names to their CLI runner modules.
@@ -46,6 +65,7 @@ _SKILL_RUNNERS = {
     "fix": "skills.core.fix.fix_runner",
     "rebase": "app.rebase_pr",
     "recreate": "app.recreate_pr",
+    "squash": "app.squash_pr",
     "review": "app.review_runner",
     "ai": "app.ai_runner",
     "check": "app.check_runner",
@@ -53,12 +73,21 @@ _SKILL_RUNNERS = {
     "dead_code": "skills.core.dead_code.dead_code_runner",
     "profile": "skills.core.profile.profile_runner",
     "brainstorm": "skills.core.brainstorm.brainstorm_runner",
+    "deepplan": "skills.core.deepplan.deepplan_runner",
+    "deeplan": "skills.core.deepplan.deepplan_runner",
     "claudemd": "app.claudemd_refresh",
     "claude": "app.claudemd_refresh",
     "claude.md": "app.claudemd_refresh",
     "claude_md": "app.claudemd_refresh",
     "incident": "skills.core.incident.incident_runner",
 }
+
+# Commands that look like /skills but should be sent to Claude as regular
+# missions. The /prefix is stripped and the remaining text becomes the task.
+# This avoids "Unknown skill command" errors for commands that are handled
+# on the bridge side (Telegram) but can also land in the mission queue
+# via GitHub notifications.
+_PASSTHROUGH_TO_CLAUDE = {"gh_request"}
 
 _PROJECT_TAG_RE = re.compile(r"^\[projec?t:([a-zA-Z0-9_-]+)\]\s*")
 _PROJECT_WORD_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
@@ -198,11 +227,14 @@ def build_skill_command(
     # Dispatch to command-specific builder
     _COMMAND_BUILDERS = {
         "brainstorm": lambda: _build_brainstorm_cmd(base_cmd, args, project_path),
+        "deepplan": lambda: _build_deepplan_cmd(base_cmd, args, project_path),
+        "deeplan": lambda: _build_deepplan_cmd(base_cmd, args, project_path),
         "plan": lambda: _build_plan_cmd(base_cmd, args, project_path),
         "implement": lambda: _build_implement_cmd(base_cmd, args, project_path),
         "fix": lambda: _build_implement_cmd(base_cmd, args, project_path),
         "rebase": lambda: _build_pr_url_cmd(base_cmd, args, project_path),
         "recreate": lambda: _build_pr_url_cmd(base_cmd, args, project_path),
+        "squash": lambda: _build_pr_url_cmd(base_cmd, args, project_path),
         "review": lambda: _build_review_cmd(base_cmd, args, project_path),
         "ai": lambda: _build_ai_cmd(base_cmd, project_name, project_path, instance_dir),
         "check": lambda: _build_check_cmd(base_cmd, args, instance_dir, koan_root),
@@ -284,6 +316,21 @@ def _build_brainstorm_cmd(
     return cmd
 
 
+def _build_deepplan_cmd(
+    base_cmd: List[str], args: str, project_path: str,
+) -> List[str]:
+    """Build deepplan_runner command.
+
+    Detects GitHub issue URLs in args and passes them as --issue-url.
+    Falls back to --idea for free-text input.
+    """
+    url_and_context = _extract_pr_or_issue_url_and_context(args)
+    if url_and_context:
+        issue_url, _context = url_and_context
+        return base_cmd + ["--project-path", project_path, "--issue-url", issue_url]
+    return base_cmd + ["--project-path", project_path, "--idea", args.strip()]
+
+
 def _build_plan_cmd(
     base_cmd: List[str], args: str, project_path: str,
 ) -> List[str]:
@@ -343,13 +390,19 @@ def _build_pr_url_cmd(
 def _build_review_cmd(
     base_cmd: List[str], args: str, project_path: str,
 ) -> Optional[List[str]]:
-    """Build review_runner command, passing --architecture if present."""
+    """Build review_runner command, passing --architecture and --plan-url if present."""
     url_match = _PR_URL_RE.search(args)
     if not url_match:
         return None
     cmd = base_cmd + [url_match.group(0), "--project-path", project_path]
     if "--architecture" in args:
         cmd.append("--architecture")
+    # Pass --plan-url if explicitly provided
+    plan_url_match = re.search(
+        r'--plan-url\s+(https://github\.com/[^\s]+)', args,
+    )
+    if plan_url_match:
+        cmd.extend(["--plan-url", plan_url_match.group(1)])
     return cmd
 
 
@@ -499,7 +552,7 @@ def validate_skill_args(command: str, args: str) -> Optional[str]:
     if command not in _SKILL_RUNNERS:
         return None
 
-    if command in ("rebase", "recreate", "review"):
+    if command in ("rebase", "recreate", "review", "squash"):
         if not _PR_URL_RE.search(args):
             return (
                 f"/{command} requires a PR URL "
@@ -515,6 +568,23 @@ def validate_skill_args(command: str, args: str) -> Optional[str]:
         if not (_PR_URL_RE.search(args) or _ISSUE_URL_RE.search(args)):
             return "/check requires a GitHub URL (PR or issue)"
 
+    return None
+
+
+def strip_passthrough_command(mission_text: str) -> Optional[str]:
+    """If the mission uses a passthrough command, strip it and return the text.
+
+    Passthrough commands (e.g. /gh_request) look like skill missions but
+    should be sent to Claude as regular tasks. This function strips the
+    /command prefix and returns the remaining text for Claude to handle.
+
+    Returns:
+        The mission text without the /command prefix, or None if this is
+        not a passthrough command.
+    """
+    _, command, args = parse_skill_mission(mission_text)
+    if command in _PASSTHROUGH_TO_CLAUDE:
+        return args if args else None
     return None
 
 
@@ -563,14 +633,19 @@ def translate_cli_skill_mission(
 
     # Look up skill in registry — cached to avoid rebuilding from filesystem
     # on every mission check.  Lock protects against concurrent rebuild races
-    # when multiple missions start simultaneously.
-    global _cached_registry, _cached_extra_dirs
+    # when multiple missions start simultaneously.  Mtime check invalidates
+    # the cache when skills directories change on disk.
+    global _cached_registry, _cached_extra_dirs, _cached_mtime
     instance_skills_dir = instance_dir / "skills"
     extra = tuple(p for p in [instance_skills_dir] if p.is_dir())
+    current_mtime = _get_skills_dir_mtime(instance_dir)
     with _registry_lock:
-        if _cached_registry is None or extra != _cached_extra_dirs:
+        if (_cached_registry is None
+                or extra != _cached_extra_dirs
+                or current_mtime > _cached_mtime):
             _cached_registry = build_registry(list(extra))
             _cached_extra_dirs = extra
+            _cached_mtime = current_mtime
         registry = _cached_registry
 
     skill = registry.get(scope, name)

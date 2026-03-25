@@ -30,6 +30,7 @@ from app.claude_step import (
     commit_if_changes,
     run_claude,
     run_claude_step,
+    strip_cli_noise,
     wait_for_ci,
 )
 from app.git_utils import ordered_remotes as _ordered_remotes
@@ -285,7 +286,12 @@ def run_rebase(
     original_branch = _get_current_branch(project_path)
 
     try:
-        fetch_remote = _checkout_pr_branch(branch, project_path)
+        fetch_remote = _checkout_pr_branch(
+            branch, project_path,
+            head_remote=head_remote,
+            head_owner=context.get("head_owner", ""),
+            repo=repo,
+        )
     except Exception as e:
         return False, f"Failed to checkout branch `{branch}`: {e}"
 
@@ -307,9 +313,10 @@ def run_rebase(
         return False, f"Rebase failed on `{base}` (tried origin and upstream). Could not resolve conflicts."
 
     # ── Step 4: Analyze review comments and apply changes ──────────────
+    change_summary = ""
     if _has_review_feedback(context):
         notify_fn(f"Analyzing review comments on `{branch}`...")
-        _apply_review_feedback(
+        change_summary = _apply_review_feedback(
             context, pr_number, project_path, actions_log,
             skill_dir=skill_dir,
         )
@@ -361,6 +368,7 @@ def run_rebase(
         pr_number, branch, base, actions_log, context,
         diffstat=diffstat,
         ci_section=ci_section,
+        change_summary=change_summary,
     )
 
     try:
@@ -830,44 +838,124 @@ def _apply_review_feedback(
     project_path: str,
     actions_log: List[str],
     skill_dir: Optional[Path] = None,
-) -> None:
-    """Analyze review comments via Claude and apply requested changes."""
-    from app.claude_step import run_claude_step
+) -> str:
+    """Analyze review comments via Claude and apply requested changes.
+
+    Returns:
+        A change summary string describing what was modified (empty if
+        no changes were made).  Used for descriptive commit messages and
+        PR comments so that review-driven changes are always explained.
+    """
+    from app.cli_provider import build_full_command
+    from app.config import get_model_config
 
     prompt = _build_rebase_prompt(context, skill_dir=skill_dir)
-    run_claude_step(
+
+    models = get_model_config()
+    cmd = build_full_command(
         prompt=prompt,
-        project_path=project_path,
-        commit_msg=f"rebase: apply review feedback on #{pr_number}",
-        success_label="Applied review feedback",
-        failure_label="Review feedback step failed",
-        actions_log=actions_log,
+        allowed_tools=["Bash", "Read", "Write", "Glob", "Grep", "Edit"],
+        model=models["mission"],
+        fallback=models["fallback"],
         max_turns=20,
     )
 
+    result = run_claude(cmd, project_path, timeout=600)
+
+    if not result["success"]:
+        actions_log.append(
+            f"Review feedback step failed: {result['error'][:200]}"
+        )
+        return ""
+
+    # Extract Claude's change summary from its output
+    change_summary = strip_cli_noise(result.get("output", "")).strip()
+    # Truncate overly long summaries (keep last portion which is the summary)
+    if len(change_summary) > 1000:
+        change_summary = change_summary[-1000:]
+
+    # Build a descriptive commit message with the summary as the body
+    subject = f"rebase: apply review feedback on #{pr_number}"
+    if change_summary:
+        commit_msg = f"{subject}\n\n{change_summary}"
+    else:
+        commit_msg = subject
+
+    committed = commit_if_changes(project_path, commit_msg)
+    if committed:
+        actions_log.append("Applied review feedback")
+        return change_summary
+
+    return ""
 
 
-def _checkout_pr_branch(branch: str, project_path: str) -> str:
-    """Checkout the PR branch, fetching from origin or upstream.
+
+def _checkout_pr_branch(
+    branch: str,
+    project_path: str,
+    head_remote: Optional[str] = None,
+    head_owner: str = "",
+    repo: str = "",
+) -> str:
+    """Checkout the PR branch, fetching from the appropriate remote.
 
     Uses ``git checkout -B`` to create or reset the local branch,
     ensuring a stale local branch with the same name never blocks
     the checkout.
 
+    When the PR comes from a fork that has no local remote configured,
+    the fork is added as a temporary remote named ``fork-<owner>`` and
+    fetched from there.
+
+    Args:
+        branch: The branch name to checkout.
+        project_path: Local path to the git repository.
+        head_remote: Pre-resolved remote name for the PR head (from
+            ``_find_remote_for_repo``).  Tried first if given.
+        head_owner: GitHub owner of the PR's head repository.  Used to
+            add a temporary remote when no existing remote matches.
+        repo: GitHub repository name.  Used together with *head_owner*.
+
     Returns:
         The remote name used for the fetch (e.g. ``"origin"`` or ``"upstream"``).
     """
-    # Try origin first, then upstream (for cross-repo PRs)
-    fetch_remote = "origin"
-    try:
-        _run_git(["git", "fetch", "origin", branch], cwd=project_path)
-    except Exception:
+    # Build ordered list of remotes to try: head_remote first, then origin/upstream
+    remotes = _ordered_remotes(head_remote)
+
+    for remote in remotes:
         try:
-            _run_git(["git", "fetch", "upstream", branch], cwd=project_path)
-            fetch_remote = "upstream"
-        except Exception:
+            _run_git(["git", "fetch", remote, branch], cwd=project_path)
+            # Success — use this remote
+            fetch_remote = remote
+            break
+        except Exception as e:
+            print(f"[rebase_pr] fetch from {remote} failed: {e}", file=sys.stderr)
+            continue
+    else:
+        # None of the known remotes had the branch.
+        # If we know the fork owner, add it as a temporary remote and retry.
+        if head_owner and repo:
+            fork_remote = f"fork-{head_owner}"
+            fork_url = f"https://github.com/{head_owner}/{repo}.git"
+            try:
+                _run_git(
+                    ["git", "remote", "add", fork_remote, fork_url],
+                    cwd=project_path,
+                )
+            except Exception as e:
+                # Remote may already exist from a previous run
+                print(f"[rebase_pr] remote add {fork_remote} failed (may already exist): {e}", file=sys.stderr)
+            try:
+                _run_git(["git", "fetch", fork_remote, branch], cwd=project_path)
+                fetch_remote = fork_remote
+            except Exception:
+                raise RuntimeError(
+                    f"Branch `{branch}` not found on any remote "
+                    f"(tried {', '.join(remotes)} and {fork_remote})"
+                )
+        else:
             raise RuntimeError(
-                f"Branch `{branch}` not found on origin or upstream"
+                f"Branch `{branch}` not found on {' or '.join(remotes)}"
             )
 
     # -B creates the branch if missing, or resets it if it already exists.
@@ -926,6 +1014,7 @@ def _build_rebase_comment(
     context: dict,
     diffstat: str = "",
     ci_section: str = "",
+    change_summary: str = "",
 ) -> str:
     """Build a markdown comment summarizing the rebase."""
     title = context.get("title", f"PR #{pr_number}")
@@ -951,6 +1040,10 @@ def _build_rebase_comment(
     # Show what review feedback was addressed
     if _has_review_feedback(context) and any("feedback" in a.lower() for a in actions_log):
         parts.append("Review feedback was analyzed and applied.\n")
+
+    # Include detailed change summary when review feedback produced code changes
+    if change_summary:
+        parts.append(f"### Changes\n\n{change_summary}\n")
 
     parts.append(f"### Actions\n\n{actions_md}\n")
 
