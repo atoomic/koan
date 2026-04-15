@@ -254,6 +254,33 @@ def _get_tdd_section(mission_title: str) -> str:
     return load_prompt("tdd-mode")
 
 
+def _get_testing_antipatterns_section(mission_title: str) -> str:
+    """Return the testing anti-patterns reference for test-involving missions.
+
+    Injected when:
+    - Mission is tagged [tdd], OR
+    - Mission title contains keywords that typically require test additions
+
+    Skipped for non-testing missions (docs, reviews, analysis) and for
+    autonomous mode (no mission title) to avoid wasting context.
+    """
+    if not mission_title:
+        return ""
+
+    from app.missions import extract_tdd_tag
+
+    from app.prompts import load_prompt
+
+    if extract_tdd_tag(mission_title):
+        return load_prompt("testing-anti-patterns")
+
+    from app.mission_verifier import expects_tests
+    if expects_tests(mission_title):
+        return load_prompt("testing-anti-patterns")
+
+    return ""
+
+
 def _get_verbose_section(instance: str) -> str:
     """Build the verbose mode section if .koan-verbose exists."""
     koan_root = str(Path(instance).parent)
@@ -307,6 +334,62 @@ def _warn_unresolved_placeholders(text: str, template_name: str) -> None:
         )
 
 
+def _is_focus_mode() -> bool:
+    """Return True if focus mode is enabled (config-level or file-based).
+
+    Focus mode disables autonomous GitHub issue pickup — the agent prompt
+    replaces the ``GitHub Issue Selection`` section with an explicit
+    instruction to only act on explicitly-queued missions.
+
+    Checks both config.yaml/env (permanent) and .koan-focus file (temporary).
+    """
+    try:
+        from app.config import is_focus_mode
+        if is_focus_mode():
+            return True
+    except (ImportError, OSError, ValueError):
+        pass
+    # Also check file-based focus (.koan-focus from /focus command)
+    try:
+        koan_root = os.environ.get("KOAN_ROOT", "")
+        if koan_root:
+            from app.focus_manager import check_focus
+            return check_focus(koan_root) is not None
+    except (ImportError, OSError, ValueError):
+        pass
+    return False
+
+
+_GITHUB_ISSUE_SECTION_RE = re.compile(
+    r"## GitHub Issue Selection.*?(?=\n# Autonomy\b|\n## |\Z)",
+    re.DOTALL,
+)
+
+
+_FOCUS_MODE_REPLACEMENT = (
+    "## Focus Mode (autonomous GitHub pickup disabled)\n\n"
+    "Kōan is running in **focus mode**. You MUST NOT pick up "
+    "GitHub issues on your own.\n\n"
+    "- Only work on the explicit mission assigned above (if any).\n"
+    "- If no mission is assigned, do nothing autonomously — exit gracefully.\n"
+    "- Do not browse open issues, do not create branches for unassigned work,\n"
+    "  do not open speculative PRs.\n"
+    "- If the assigned mission references a specific GitHub issue, you may\n"
+    "  work on that issue only.\n\n"
+)
+
+
+def _apply_focus_mode_override(prompt: str) -> str:
+    """Replace the GitHub Issue Selection section when focus mode is active."""
+    if not _is_focus_mode():
+        return prompt
+    return _GITHUB_ISSUE_SECTION_RE.sub(
+        _FOCUS_MODE_REPLACEMENT.rstrip(),
+        prompt,
+        count=1,
+    )
+
+
 def _load_agent_template(
     instance: str,
     project_name: str,
@@ -336,6 +419,7 @@ def _load_agent_template(
         MISSION_INSTRUCTION=mission_instruction,
         BRANCH_PREFIX=branch_prefix,
     )
+    result = _apply_focus_mode_override(result)
     _warn_unresolved_placeholders(result, "agent")
     return result
 
@@ -420,6 +504,9 @@ def build_agent_prompt(
     # Append TDD mode section if mission is tagged [tdd]
     prompt += _get_tdd_section(mission_title)
 
+    # Append testing anti-patterns reference for [tdd] or test-expecting missions
+    prompt += _get_testing_antipatterns_section(mission_title)
+
     # Append verification gate for mission-driven runs
     prompt += _get_verification_gate_section(mission_title)
 
@@ -497,6 +584,10 @@ def build_agent_prompt_parts(
     if tdd:
         sys_parts.append(tdd)
 
+    antipatterns = _get_testing_antipatterns_section(mission_title)
+    if antipatterns:
+        sys_parts.append(antipatterns)
+
     verification = _get_verification_gate_section(mission_title)
     if verification:
         sys_parts.append(verification)
@@ -526,6 +617,7 @@ def build_contemplative_prompt(
     instance: str,
     project_name: str,
     session_info: str,
+    github_nickname: str = "",
 ) -> str:
     """Build the contemplative session prompt from template.
 
@@ -533,6 +625,9 @@ def build_contemplative_prompt(
         instance: Path to instance directory
         project_name: Current project name
         session_info: Context about current session state
+        github_nickname: Bot's GitHub nickname for pre-check instructions.
+            Pass empty string (default) when GitHub is not configured — the
+            prompt's GitHub section will be omitted automatically.
 
     Returns:
         Complete contemplative prompt string
@@ -544,7 +639,27 @@ def build_contemplative_prompt(
         INSTANCE=instance,
         PROJECT_NAME=project_name,
         SESSION_INFO=session_info,
+        GITHUB_NICKNAME=github_nickname,
     )
+
+    # Strip the GitHub pre-check block when no nickname is configured.
+    # The block is delimited by {GITHUB_CHECK_BLOCK_START} / {GITHUB_CHECK_BLOCK_END}
+    # sentinel lines in the template.
+    if not github_nickname:
+        import re
+        prompt = re.sub(
+            r"\{GITHUB_CHECK_BLOCK_START\}.*?\{GITHUB_CHECK_BLOCK_END\}\n?",
+            "",
+            prompt,
+            flags=re.DOTALL,
+        )
+    else:
+        # Remove the sentinel markers, leaving the block content intact.
+        prompt = prompt.replace("{GITHUB_CHECK_BLOCK_START}\n", "")
+        prompt = prompt.replace("{GITHUB_CHECK_BLOCK_END}\n", "")
+        prompt = prompt.replace("{GITHUB_CHECK_BLOCK_START}", "")
+        prompt = prompt.replace("{GITHUB_CHECK_BLOCK_END}", "")
+
     _warn_unresolved_placeholders(prompt, "contemplative")
 
     # Append language preference (overrides soul.md default)
@@ -577,6 +692,7 @@ def main():
     contemplate_parser.add_argument("--instance", required=True)
     contemplate_parser.add_argument("--project-name", required=True)
     contemplate_parser.add_argument("--session-info", required=True)
+    contemplate_parser.add_argument("--github-nickname", default="")
 
     args = parser.parse_args()
 
@@ -597,6 +713,7 @@ def main():
             instance=args.instance,
             project_name=args.project_name,
             session_info=args.session_info,
+            github_nickname=args.github_nickname,
         ))
 
 

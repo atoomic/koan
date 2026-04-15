@@ -510,7 +510,7 @@ class TestHandleResume:
     def test_no_quota_file(self, mock_send, mock_alive, tmp_path):
         with patch("app.command_handlers.KOAN_ROOT", tmp_path):
             handle_resume()
-        assert "No pause or quota hold" in mock_send.call_args[0][0]
+        assert "Resume acknowledged" in mock_send.call_args[0][0]
 
     @patch("app.command_handlers._is_runner_alive", return_value=True)
     @patch("app.command_handlers.send_telegram")
@@ -658,8 +658,8 @@ class TestHandleStart:
         """/resume should NOT call _handle_start — verify separation."""
         with patch("app.command_handlers.KOAN_ROOT", tmp_path):
             handle_command("/resume")
-        # /resume with no pause file → "No pause or quota hold"
-        assert "No pause" in mock_send.call_args[0][0]
+        # /resume with no pause file → "Resume acknowledged"
+        assert "Resume acknowledged" in mock_send.call_args[0][0]
 
     @patch("app.command_handlers.send_telegram")
     def test_help_shows_system_group(self, mock_send, tmp_path):
@@ -743,6 +743,35 @@ class TestHandleChat:
             handle_chat("hello")
         mock_send.assert_called_once()
         assert "couldn't formulate" in mock_send.call_args[0][0]
+
+    @patch("app.awake.save_conversation_message")
+    @patch("app.awake.load_recent_history", return_value=[])
+    @patch("app.awake.format_conversation_history", return_value="")
+    @patch("app.awake.get_tools_description", return_value="")
+    @patch("app.awake.get_chat_tools", return_value="")
+    @patch("app.awake.send_telegram")
+    @patch("app.awake.subprocess.run")
+    def test_chat_uses_dedicated_chat_workspace_cwd(
+        self, mock_run, mock_send, mock_tools, mock_tools_desc,
+        mock_fmt, mock_hist, mock_save, tmp_path,
+    ):
+        """Chat CLI must run in instance/.chat-workspace/ to avoid Claude
+        session lock conflicts with concurrent mission execution."""
+        mock_run.return_value = MagicMock(stdout="ok", returncode=0)
+        project_path = str(tmp_path / "some-project")
+        with patch("app.awake.INSTANCE_DIR", tmp_path), \
+             patch("app.awake.KOAN_ROOT", tmp_path), \
+             patch("app.awake.PROJECT_PATH", project_path), \
+             patch("app.awake.CONVERSATION_HISTORY_FILE", tmp_path / "history.jsonl"), \
+             patch("app.awake.SOUL", ""), \
+             patch("app.awake.SUMMARY", ""):
+            handle_chat("hello")
+        cwd = mock_run.call_args.kwargs.get("cwd")
+        assert cwd is not None
+        assert ".chat-workspace" in cwd
+        assert cwd != project_path
+        assert cwd != str(tmp_path)
+        assert (tmp_path / ".chat-workspace").is_dir()
 
     @patch("app.awake.save_conversation_message")
     @patch("app.awake.load_recent_history", return_value=[])

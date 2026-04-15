@@ -10,6 +10,7 @@ Provides:
 - get_project_tools(config, name) -> dict: Get tool restrictions for a project
 - get_project_exploration(config, name) -> bool: Get exploration flag for a project
 - get_project_max_open_prs(config, name) -> int: Get max open PRs limit for a project
+- get_project_max_pending_branches(config, name) -> int: Get max pending branches limit
 - get_project_github_authorized_users(config, name) -> list: Get GitHub authorized users
 
 File location: projects.yaml at KOAN_ROOT (next to .env).
@@ -306,6 +307,32 @@ def get_project_mcp(config: dict, project_name: str) -> list:
     return mcp
 
 
+def get_project_focus(config: dict, project_name: str) -> bool:
+    """Get focus flag for a project from projects.yaml.
+
+    When True, the agent only works on explicitly queued missions for this
+    project — no contemplative sessions, no DEEP mode, no autonomous
+    exploration. Equivalent to ``exploration: false`` but unified under the
+    focus concept.
+
+    Supports defaults-level and per-project overrides. Common patterns:
+      - ``defaults: { focus: true }`` + ``myapp: { focus: false }``
+        → all projects focused except myapp
+      - ``defaults: { focus: false }`` + ``vendor: { focus: true }``
+        → only vendor is focused
+
+    Returns False by default (focus not enforced).
+    """
+    project_cfg = get_project_config(config, project_name)
+    value = project_cfg.get("focus", False)
+
+    # Handle string values like "true", "yes", "1"
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+
+    return bool(value)
+
+
 def get_project_exploration(config: dict, project_name: str) -> bool:
     """Get exploration flag for a project from projects.yaml.
 
@@ -336,6 +363,28 @@ def get_project_max_open_prs(config: dict, project_name: str) -> int:
     """
     project_cfg = get_project_config(config, project_name)
     value = project_cfg.get("max_open_prs", 0)
+
+    # Coerce to int; invalid values map to 0 (unlimited)
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return 0
+
+    # Negative or zero → unlimited
+    return result if result > 0 else 0
+
+
+def get_project_max_pending_branches(config: dict, project_name: str) -> int:
+    """Get max pending branches limit for a project from projects.yaml.
+
+    Controls the maximum number of pending branches (open PRs ∪ local
+    unmerged branches) allowed before mission pickup and exploration are
+    blocked for this project.
+
+    Returns 10 by default. Returns 0 for unlimited (no limit).
+    """
+    project_cfg = get_project_config(config, project_name)
+    value = project_cfg.get("max_pending_branches", 10)
 
     # Coerce to int; invalid values map to 0 (unlimited)
     try:

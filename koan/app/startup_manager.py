@@ -8,6 +8,7 @@ Called from run.py's main_loop() during process initialization.
 """
 
 import os
+import time
 from pathlib import Path
 
 from app.run_log import log
@@ -233,7 +234,16 @@ def check_health(koan_root: str, max_age: int = 120):
 
 
 def check_self_reflection(instance: str):
-    """Trigger periodic self-reflection if due."""
+    """Trigger periodic self-reflection if due and enabled in config.
+
+    Controlled by the ``startup_reflection`` config key (default: false).
+    When disabled, reflection is skipped at startup — it can still be
+    triggered manually via the CLI entry point.
+    """
+    from app.config import get_startup_reflection
+    if not get_startup_reflection():
+        return
+
     log("health", "Checking self-reflection trigger...")
     from app.self_reflection import (
         should_reflect, run_reflection, save_reflection, notify_outbox,
@@ -253,12 +263,31 @@ def handle_start_on_pause(koan_root: str):
     to prevent auto-resume from a previous session. Preserves
     manual pauses (user explicitly requested via /pause).
 
-    Skipped when KOAN_SKIP_START_PAUSE=1 (set by /resume auto-restart
-    to avoid immediately re-pausing the freshly launched runner).
+    Skipped when:
+    - KOAN_SKIP_START_PAUSE=1 (set by /resume auto-restart to avoid
+      immediately re-pausing the freshly launched runner).
+    - .koan-skip-start-pause file exists with a recent timestamp (set by
+      /resume during startup to prevent the race where handle_start_on_pause
+      re-creates the pause file after /resume removed it).
     """
     if os.environ.get("KOAN_SKIP_START_PAUSE") == "1":
         log("pause", "start_on_pause skipped (KOAN_SKIP_START_PAUSE=1)")
         return
+
+    from app.signals import SKIP_START_PAUSE_FILE
+
+    skip_file = Path(koan_root) / SKIP_START_PAUSE_FILE
+    if skip_file.exists():
+        try:
+            ts = int(skip_file.read_text().strip())
+            age = time.time() - ts
+            if age < 300:  # Fresh (< 5 min) — /resume was sent during startup
+                skip_file.unlink(missing_ok=True)
+                log("pause", "start_on_pause skipped (/resume requested during startup)")
+                return
+        except (ValueError, OSError):
+            pass
+        skip_file.unlink(missing_ok=True)
 
     from app.utils import get_start_on_pause
 
@@ -349,11 +378,11 @@ def check_auto_update(koan_root: str, instance: str) -> bool:
     return perform_auto_update(koan_root, instance)
 
 
-def run_morning_ritual(instance: str):
-    """Execute the morning ritual."""
+def run_morning_ritual(instance: str) -> bool:
+    """Execute the morning ritual. Returns True on success, False otherwise."""
     log("init", "Running morning ritual...")
     from app.rituals import run_ritual
-    run_ritual("morning", Path(instance))
+    return run_ritual("morning", Path(instance))
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +463,7 @@ def run_startup(koan_root: str, instance: str, projects: list):
     log("init", f"Starting. Max runs: {max_runs}, interval: {interval}s")
 
     # Import status/notify helpers lazily from run
-    from app.run import set_status, _build_startup_status, _notify
+    from app.run import set_status, _build_startup_status, _notify, _notify_raw
 
     project_list = "\n".join(f"  • {n}" for n, _ in sorted(projects))
     current_project = projects[0][0] if projects else "none"
@@ -453,7 +482,11 @@ def run_startup(koan_root: str, instance: str, projects: list):
     # Auto-update check (before daily report / morning ritual)
     updated = _safe_run("Auto-update check", check_auto_update, koan_root, instance)
     if updated:
-        # Restart signal has been set — exit to let wrapper restart us
+        # Restart signal has been set — notify so the human knows the agent
+        # is restarting under newer code, then exit to let wrapper restart us.
+        # Use _notify_raw so the verbatim text + 🔄 marker survive (skipping
+        # the Claude-CLI personality reformatter).
+        _notify_raw(instance, "🔄 Auto-update pulled new commits — restarting under updated code...")
         import sys
         from app.restart_manager import RESTART_EXIT_CODE
         sys.exit(RESTART_EXIT_CODE)
@@ -461,8 +494,15 @@ def run_startup(koan_root: str, instance: str, projects: list):
     # Daily report
     _safe_run("Daily report", run_daily_report)
 
+    # Startup-status pings use _notify_raw so the 🌅/⚠️ markers and exact
+    # wording reach Telegram intact (no Claude CLI rewrite).
+    _notify_raw(instance, "🌅 Running morning ritual (Claude CLI, up to ~90s)...")
     with protected_phase("Morning ritual"):
-        _safe_run("Morning ritual", run_morning_ritual, instance)
+        ritual_ok = _safe_run("Morning ritual", run_morning_ritual, instance)
+    if ritual_ok:
+        _notify_raw(instance, "🌅 Morning ritual complete — preparing first iteration.")
+    else:
+        _notify_raw(instance, "⚠️ Morning ritual skipped/failed — preparing first iteration anyway.")
 
     # Initialize hook system and fire session_start
     from app.hooks import fire_hook, init_hooks

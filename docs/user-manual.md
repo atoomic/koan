@@ -279,6 +279,48 @@ Kōan can manage multiple projects simultaneously. It rotates between them based
 - `/active` — "I'm done, you can work again"
 </details>
 
+### Permanent Focus Mode
+
+Focus mode can be made permanent via config, turning Kōan into a pure mission executor. When enabled, the agent only runs missions you explicitly queue — it never picks up GitHub issues autonomously, never runs contemplative reflection, and never enters DEEP mode. The loop keeps polling Telegram, GitHub notifications, and recurring schedules, so it still wakes up the moment you queue something.
+
+This extends the `/focus` Telegram command (which is time-bounded) into a permanent config-level switch.
+
+- **Enable globally in `instance/config.yaml`:**
+  ```yaml
+  focus: true
+  ```
+- **Or via environment variable:** `KOAN_FOCUS=1` (takes precedence over `config.yaml`).
+- **Per-project in `projects.yaml`:**
+  ```yaml
+  defaults:
+    focus: true          # All projects focused by default
+  projects:
+    myapp:
+      focus: false       # Override: allow autonomous work on myapp
+  ```
+- **Disable:** set back to `false`, or `KOAN_FOCUS=0`.
+
+What continues to run under focus mode:
+
+- Missions queued via `/mission`, GitHub `@mention` commands, and recurring schedules.
+- Heartbeat, auto-update, Telegram polling, GitHub notification polling, CI queue drain.
+
+What is disabled:
+
+- DEEP mode (capped at `implement`).
+- Contemplative sessions (random reflection rolls are skipped).
+- Autonomous exploration (the loop idles with wake-on-mission when no mission is pending).
+- The agent prompt's `GitHub Issue Selection` section is replaced with an explicit "do not pick up issues" instruction.
+
+**How it differs from `/passive`:** passive mode blocks all execution (missions sit as Pending until you `/active`). Focus mode keeps the executor running for any mission you queue — it only gates *autonomous work selection*.
+
+**When to use:**
+
+- You want Kōan to act strictly on demand, no surprises on the PR list.
+- You're handing off mission dispatch to another system (CI, a team workflow) and want Kōan to be a quiet executor.
+- Multi-bot setups where only one instance should pick up issues autonomously.
+- Per-project: focus some repos while allowing exploration on others.
+
 ---
 
 ## Intermediate — Productivity Workflows
@@ -866,9 +908,31 @@ skill_max_turns: 200          # Max agentic turns for heavy skills
 
 # Prompt guard (content safety)
 prompt_guard: true            # Enable prompt injection detection
+
+# Review ignore — exclude files from /review PR diffs
+# Reduces token spend on generated/vendored code
+# review_ignore:
+#   glob:
+#     - "vendor/**"    # all files under vendor/
+#     - "*.lock"       # lock files at any depth
+#   regex:
+#     - '.*\.pb\.go$'  # protobuf-generated files (full path regex)
 ```
 
 See `instance.example/config.yaml` for all available options.
+
+**`/config_check`** — Detect drift between your `instance/config.yaml` and the template at `instance.example/config.yaml`. Reports two things:
+
+- **Missing keys** — in the template but absent from your config. These are new features released since you last synced and are probably worth reviewing.
+- **Extra keys** — in your config but absent from the template. These are usually deprecated/removed settings (or typos).
+
+Run it after every Kōan update to stay in sync:
+
+```
+/config_check
+```
+
+The same check runs automatically as part of `/doctor` — use `/config_check` when you only want the config slice without the rest of the diagnostic report.
 
 ### Per-Project Overrides
 
@@ -1325,6 +1389,7 @@ All commands at a glance. **Tier:** B = Beginner, I = Intermediate, P = Power Us
 | `/ci_check <PR>` | — | I | Check and fix CI failures on a PR |
 | `/gh_request <url> <text>` | — | I | Route natural-language GitHub request to the right skill |
 | `/claudemd [project]` | `/claude`, `/claude.md`, `/claude_md` | I | Refresh a project's CLAUDE.md |
+| `/config_check` | `/cfgcheck`, `/configcheck` | P | Detect config.yaml drift against instance.example template |
 | `/gha_audit [project]` | `/gha` | I | Audit GitHub Actions for security issues |
 | `/changelog [project]` | `/changes` | I | Generate changelog from commits/journal |
 | `/daily <text>` | — | I | Schedule a daily recurring mission |

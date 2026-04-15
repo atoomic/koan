@@ -450,6 +450,21 @@ def _notify(instance: str, message: str):
         log("error", f"Notification failed: {e}")
 
 
+def _notify_raw(instance: str, message: str):
+    """Send a notification straight to Telegram, skipping the Claude-CLI
+    personality reformatter (notify.format_and_send → format_outbox.
+    format_message). Use this for terse status updates (startup progress,
+    auto-update restarts) where the verbatim text and emoji matter and the
+    extra Claude CLI call would defeat the point. send_telegram still
+    handles priority filtering, flood protection, and retries.
+    """
+    try:
+        from app.notify import send_telegram
+        send_telegram(message)
+    except Exception as e:
+        log("error", f"Raw notification failed: {e}")
+
+
 def _notify_mission_end(
     instance: str,
     project_name: str,
@@ -774,6 +789,8 @@ def main_loop():
                     count = 0
                     consecutive_errors = 0
                     consecutive_idle = 0
+                    global _startup_notified
+                    _startup_notified = False
                 continue
 
             # --- Iteration body (exception-protected) ---
@@ -1223,6 +1240,13 @@ _MISSION_RETRY_DELAY = 10  # seconds
 _last_mission_timed_out = False
 _last_mission_aborted = False
 
+# Tracks whether the cold-start Telegram burst (GH scan / Jira scan / first
+# mission pick) has already fired since process start or /resume. Decoupled
+# from the productive-run `count` because idle/passive/quota/sleep-wake paths
+# leave `count` at 0, which previously caused the startup trio to re-fire on
+# every non-productive wake-up (issue #1193).
+_startup_notified = False
+
 
 def _get_git_head(project_path: str) -> str:
     """Get current git HEAD SHA for retry safety check."""
@@ -1378,17 +1402,65 @@ def _run_iteration(
         if valid:
             projects = valid
 
+    # Per-phase Telegram visibility for the first iteration only. After
+    # process start or /resume, count is 0 and the first iteration runs
+    # several slow steps (GH cold-start, Jira scan, plan_iteration) that
+    # together take ~30-90s before any mission notification fires. Surface
+    # progress to Telegram so the human knows what's happening. count>=1
+    # iterations stay quiet to avoid steady-state spam.
+    global _startup_notified
+    is_first_iteration = not _startup_notified
+    _startup_notified = True
+
     # Check GitHub notifications before planning (converts @mentions to missions
     # so plan_iteration() sees them immediately instead of waiting for sleep)
+    log("koan", "Checking GitHub notifications...")
+    if is_first_iteration:
+        _notify_raw(instance, "🔍 Scanning GitHub notifications (cold start, may take ~1 min)...")
     from app.loop_manager import process_github_notifications
+    gh_missions = 0
     try:
         gh_missions = process_github_notifications(koan_root, instance)
         if gh_missions > 0:
             log("github", f"Pre-iteration: {gh_missions} mission(s) created from GitHub notifications")
+        else:
+            log("koan", "No new GitHub notifications")
     except Exception as e:
         log("error", f"Pre-iteration GitHub notification check failed: {e}")
 
+    # Check Jira notifications before planning (converts @mentions to missions
+    # so plan_iteration() sees them immediately instead of waiting for sleep)
+    from app.jira_config import get_jira_enabled
+    from app.utils import load_config
+    jira_enabled = get_jira_enabled(load_config())
+    jira_missions = 0
+    if jira_enabled:
+        log("koan", "Checking Jira notifications...")
+        if is_first_iteration:
+            if gh_missions > 0:
+                _notify_raw(instance, f"📋 GitHub: {gh_missions} new mission(s) queued. Scanning Jira...")
+            else:
+                _notify_raw(instance, "📋 GitHub: scanned, no new missions. Scanning Jira...")
+        from app.loop_manager import process_jira_notifications
+        try:
+            jira_missions = process_jira_notifications(koan_root, instance)
+            if jira_missions > 0:
+                log("jira", f"Pre-iteration: {jira_missions} mission(s) created from Jira notifications")
+            else:
+                log("koan", "No new Jira notifications")
+        except Exception as e:
+            log("error", f"Pre-iteration Jira notification check failed: {e}")
+
+    if is_first_iteration:
+        if jira_enabled and jira_missions > 0:
+            _notify_raw(instance, f"🎯 Jira: {jira_missions} new mission(s) queued. Picking first mission from queue...")
+        elif gh_missions > 0:
+            _notify_raw(instance, f"🎯 GitHub: {gh_missions} new mission(s) queued. Picking first mission from queue...")
+        else:
+            _notify_raw(instance, "🎯 Notifications clear. Picking first mission from queue...")
+
     # Plan iteration (delegated to iteration_manager)
+    log("koan", "Planning iteration...")
     last_project = _read_current_project(koan_root)
     plan = plan_iteration(
         instance_dir=instance,
@@ -1411,12 +1483,14 @@ def _run_iteration(
         _notify(instance, f"⚠️ Budget tracker error: {plan['tracker_error']} — running in review-only mode until fixed")
 
     # Display usage
-    log("quota", "Usage Status:")
+    log("quota", "Usage (token estimate — may differ from real API quota):")
     if plan["display_lines"]:
         for line in plan["display_lines"]:
             print(f"  {line}")
     else:
         print("  [No usage data available - using fallback mode]")
+    if plan.get("cost_today", 0.0) > 0:
+        print(f"  Cost today: ${plan['cost_today']:.2f}")
     print(f"  Safety margin: 10% → Available: {plan['available_pct']}%")
     print()
 
@@ -1455,8 +1529,8 @@ def _run_iteration(
             f"👁️ Passive — read-only ({p.get('passive_remaining', 'indefinite')})",
         ),
         "focus_wait": lambda p: (
-            f"Focus mode active ({p.get('focus_remaining', 'unknown')} remaining) — no missions pending, sleeping",
-            f"Focus mode — waiting for missions ({p.get('focus_remaining', 'unknown')} remaining)",
+            f"Focus mode active ({p.get('focus_remaining', 'permanent')}) — no missions pending, sleeping",
+            f"Focus mode — waiting for missions ({p.get('focus_remaining', 'permanent')})",
         ),
         "schedule_wait": lambda _: (
             "Work hours active — waiting for missions (exploration suppressed)",
@@ -1470,15 +1544,33 @@ def _run_iteration(
             "PR limit reached for all projects — waiting for reviews",
             f"PR limit reached — waiting for reviews ({time.strftime('%H:%M')})",
         ),
+        "branch_saturated_wait": lambda p: (
+            p.get("decision_reason") or "Project branch-saturated — waiting for reviews/merges",
+            f"Branch-saturated — waiting ({time.strftime('%H:%M')})",
+        ),
     }
     if action in _IDLE_WAIT_CONFIG:
         log_msg, status_msg = _IDLE_WAIT_CONFIG[action](plan)
         log("koan", log_msg)
         set_status(koan_root, status_msg)
+        # branch_saturated_wait: the pending missions ARE the blocker
+        # (the picked mission's project is over its PR limit), so waking
+        # on pending missions would just tight-loop back into the same
+        # blocked state. Wait the full interval for PR count to change.
+        # passive_wait: passive mode blocks all execution, so waking on
+        # a pending mission tight-loops (logs flood in make logs).
+        wake_on_mission = action not in ("branch_saturated_wait", "passive_wait")
         with protected_phase(status_msg):
-            wake = interruptible_sleep(interval, koan_root, instance)
+            wake = interruptible_sleep(
+                interval, koan_root, instance,
+                wake_on_mission=wake_on_mission,
+            )
         if wake == "mission":
             log("koan", f"New mission detected during {action} — waking up")
+        # branch_saturated_wait is a human-unblock state (review PRs),
+        # not an idle state — don't accumulate toward auto-pause.
+        if action == "branch_saturated_wait":
+            return False  # blocked on external action — not idle, not productive
         return "idle"  # idle wait — not productive, trackable
 
     if action == "wait_pause":
@@ -1487,8 +1579,10 @@ def _run_iteration(
 
     # --- Pre-flight quota check ---
     if action in ("mission", "autonomous"):
+        log("koan", "Running pre-flight quota check...")
         if _run_preflight_check(plan, koan_root, instance, count):
             return False  # quota exhausted pre-flight — not productive
+        log("koan", "Pre-flight OK — quota available")
 
     # --- Execute mission or autonomous run ---
     mission_title = plan["mission_title"]
@@ -1498,6 +1592,7 @@ def _run_iteration(
 
     # --- Dedup guard ---
     if mission_title:
+        log("koan", "Checking mission dedup history...")
         try:
             from app.mission_history import should_skip_mission
             if should_skip_mission(instance, mission_title, max_executions=3):
@@ -1637,6 +1732,7 @@ def _run_iteration(
         log("error", f"Failed to create pending.md: {e}")
 
     # Execute Claude
+    log("koan", "Building CLI command and launching Claude...")
     if mission_title:
         set_status(koan_root, f"Run {run_num}/{max_runs} — executing mission on {project_name}")
     else:
@@ -1702,6 +1798,8 @@ def _run_iteration(
             instance_dir=instance, project_name=project_name, run_num=run_num,
         )
         _debug_log(f"[run] cli: exit_code={claude_exit}")
+        elapsed_min = (int(time.time()) - mission_start) / 60
+        log("koan", f"Claude CLI finished (exit={claude_exit}, {elapsed_min:.1f}min)")
 
         # --- Mission retry on transient CLI errors ---
         # One retry for missions, zero for autonomous (they're lower-priority).
@@ -1720,7 +1818,19 @@ def _run_iteration(
                 has_mission=bool(mission_title),
             )
 
+        # --- JSON success override ---
+        # Claude CLI can return non-zero even when the session JSON shows
+        # success (is_error=false).  Override the exit code so the
+        # post-mission pipeline (verification, reflection, auto-merge)
+        # is not skipped and the notification shows ✅ instead of ❌.
+        if claude_exit != 0:
+            from app.mission_runner import check_json_success
+            if check_json_success(stdout_file):
+                log("koan", f"CLI exited {claude_exit} but JSON output indicates success — overriding to 0")
+                claude_exit = 0
+
         # Verify core files survived the mission (after retry, so result is final)
+        log("koan", "Running core file integrity check...")
         integrity_warnings = check_core_files(koan_root, core_snapshot, project_path)
         if integrity_warnings:
             log_integrity_warnings(integrity_warnings)
@@ -1810,6 +1920,7 @@ def _run_iteration(
             return True  # count as productive so loop continues immediately
 
         # Post-mission pipeline
+        log("koan", "Starting post-mission pipeline...")
         _status_prefix = f"Run {run_num}/{max_runs}"
         set_status(koan_root, f"{_status_prefix} — finalizing")
         try:
@@ -1844,6 +1955,13 @@ def _run_iteration(
                     reset_display, resume_msg = "", "Auto-resume in ~5h"
                 log("quota", f"Quota reached. {reset_display}")
 
+                # Requeue mission: _finalize_mission already moved it to Failed,
+                # but quota failures are transient — move it back to Pending
+                # so it gets retried after the pause ends.
+                if original_mission_title:
+                    log("quota", "Requeueing mission to Pending (quota is transient)")
+                    _requeue_mission_in_file(instance, original_mission_title)
+
                 # Create pause state so the main loop actually stops
                 reset_ts, _disp = _compute_quota_reset_ts(instance)
                 from app.pause_manager import create_pause
@@ -1852,6 +1970,7 @@ def _run_iteration(
                 _commit_instance(instance, f"koan: quota exhausted {time.strftime('%Y-%m-%d-%H:%M')}")
                 _notify(instance, (
                     f"⚠️ Claude quota exhausted. {reset_display}\n\n"
+                    f"Mission '{original_mission_title[:60]}' moved back to Pending.\n"
                     f"Kōan paused after {count} runs. {resume_msg} or use /resume to restart manually."
                 ))
                 return True  # ran Claude before quota hit — productive

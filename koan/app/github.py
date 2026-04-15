@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 import time
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from app.retry import (
     retry_with_backoff,
@@ -18,6 +18,31 @@ from app.retry import (
     is_gh_secondary_rate_limit,
     parse_retry_after,
 )
+
+
+# Bot usernames whose @mentions should be escaped in GitHub comments to
+# avoid triggering automated bot responses.
+_BOT_USERNAMES = ('copilot', 'dependabot', 'github-actions')
+
+# Regex to match bare @bot mentions (case-insensitive), with negative
+# lookbehind/lookahead to skip already-backtick-escaped variants.
+_BOT_MENTION_RE = re.compile(
+    r'(?<!`)@(' + '|'.join(re.escape(u) for u in _BOT_USERNAMES) + r')(?![\w-])(?!`)',
+    re.IGNORECASE,
+)
+
+
+def sanitize_github_comment(text: Optional[str]) -> Optional[str]:
+    """Escape bare bot @mentions so GitHub doesn't trigger automated bots.
+
+    Replaces ``@copilot``, ``@dependabot``, ``@github-actions`` (any
+    capitalisation) with backtick-escaped variants unless already enclosed
+    in backticks.  Safe to call on any string including empty strings and
+    ``None`` values.
+    """
+    if not text:
+        return text
+    return _BOT_MENTION_RE.sub(r'`@\1`', text)
 
 
 class SSOAuthRequired(RuntimeError):
@@ -478,6 +503,86 @@ def batch_count_open_prs(repos: list, author: str) -> Dict[str, int]:
     except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError,
             OSError, TypeError, KeyError):
         return {}
+
+
+def list_open_pr_branches(repo: str, author: str, cwd: str = None) -> List[str]:
+    """List branch names of open PRs by a specific author in a repository.
+
+    Args:
+        repo: Repository in ``owner/repo`` format.
+        author: GitHub username to filter by. If empty, returns ``[]``.
+        cwd: Optional working directory.
+
+    Returns:
+        Sorted list of branch names (headRefName) for open PRs.
+        Returns empty list on error.
+    """
+    if not author:
+        return []
+
+    try:
+        output = run_gh(
+            "pr", "list",
+            "--repo", repo,
+            "--state", "open",
+            "--author", author,
+            "--json", "headRefName",
+            cwd=cwd, timeout=15,
+        )
+        prs = json.loads(output) if output else []
+        if not isinstance(prs, list):
+            return []
+        return sorted({
+            pr["headRefName"]
+            for pr in prs
+            if isinstance(pr, dict) and pr.get("headRefName")
+        })
+    except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError,
+            TypeError, KeyError):
+        return []
+
+
+def find_bot_comment(
+    owner: str, repo: str, pr_number: int, marker: str,
+) -> Optional[dict]:
+    """Search issue comments on a PR for a comment containing ``marker``.
+
+    Only searches conversation (issue-level) comments, not inline review
+    comments.  Returns the first matching comment, or ``None`` if absent.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        pr_number: PR number (int or str).
+        marker: Marker string to search for (e.g. ``SUMMARY_TAG``).
+
+    Returns:
+        Dict with keys ``id``, ``body``, ``user`` from the GitHub API, or
+        ``None`` if no matching comment is found or on any error.
+    """
+    try:
+        raw = run_gh(
+            "api",
+            f"repos/{owner}/{repo}/issues/{pr_number}/comments",
+            "--paginate",
+            "--jq", r'.[] | {id: .id, body: .body, user: .user.login}',
+            timeout=30,
+        )
+    except RuntimeError:
+        return None
+
+    if not raw.strip():
+        return None
+
+    for line in raw.strip().split("\n"):
+        try:
+            comment = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if marker in comment.get("body", ""):
+            return comment
+
+    return None
 
 
 def count_open_prs(repo: str, author: str, cwd: str = None) -> int:

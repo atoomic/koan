@@ -17,6 +17,7 @@ from app.prompt_builder import (
     _get_staleness_section,
     _get_mission_type_section,
     _get_tdd_section,
+    _get_testing_antipatterns_section,
     _get_verification_gate_section,
     _get_verbose_section,
     _get_security_flagging_section,
@@ -590,6 +591,7 @@ class TestBuildContemplativePrompt:
             INSTANCE=prompt_env["instance"],
             PROJECT_NAME="testproj",
             SESSION_INFO="Pause mode. Run loop paused.",
+            GITHUB_NICKNAME="",
         )
         assert result == "Contemplative template"
 
@@ -606,6 +608,52 @@ class TestBuildContemplativePrompt:
         call_kwargs = mock_load.call_args[1]
         assert "Run 5/25" in call_kwargs["SESSION_INFO"]
         assert "deep" in call_kwargs["SESSION_INFO"]
+
+    def test_github_nickname_included_in_prompt(self, prompt_env):
+        """When github_nickname is set, the pre-check block appears with the nickname."""
+        result = build_contemplative_prompt(
+            instance=prompt_env["instance"],
+            project_name="testproj",
+            session_info="Run 1/10",
+            github_nickname="Koan-Bot",
+        )
+        assert "Koan-Bot" in result
+        # Sentinel markers must not remain in the output
+        assert "GITHUB_CHECK_BLOCK_START" not in result
+        assert "GITHUB_CHECK_BLOCK_END" not in result
+        # The pre-check instructions should be present
+        assert "gh issue view" in result
+        assert "gh pr list" in result
+
+    def test_github_nickname_empty_omits_check_block(self, prompt_env):
+        """When github_nickname is empty, the pre-check block is stripped."""
+        result = build_contemplative_prompt(
+            instance=prompt_env["instance"],
+            project_name="testproj",
+            session_info="Run 1/10",
+            github_nickname="",
+        )
+        # Sentinel markers must not remain
+        assert "GITHUB_CHECK_BLOCK_START" not in result
+        assert "GITHUB_CHECK_BLOCK_END" not in result
+        # GitHub-specific instructions should be absent
+        assert "gh issue view" not in result
+        assert "gh pr list" not in result
+
+    def test_github_nickname_default_is_empty(self, prompt_env):
+        """github_nickname defaults to empty string (no GitHub check block)."""
+        result_default = build_contemplative_prompt(
+            instance=prompt_env["instance"],
+            project_name="testproj",
+            session_info="Run 1/10",
+        )
+        result_explicit_empty = build_contemplative_prompt(
+            instance=prompt_env["instance"],
+            project_name="testproj",
+            session_info="Run 1/10",
+            github_nickname="",
+        )
+        assert result_default == result_explicit_empty
 
 
 # --- Tests for CLI interface ---
@@ -666,6 +714,7 @@ class TestCLI:
             instance=prompt_env["instance"],
             project_name="koan",
             session_info="Pause mode",
+            github_nickname="",
         )
         captured = capsys.readouterr()
         assert "Contemplate output" in captured.out
@@ -1146,6 +1195,52 @@ class TestGetTddSection:
         )
 
         assert "TDD Mode" not in result
+
+
+# --- Tests for _get_testing_antipatterns_section ---
+
+
+class TestGetTestingAntipatternsSection:
+    """Tests for testing anti-patterns reference injection."""
+
+    def test_tdd_tag_injects_antipatterns(self):
+        """Mission tagged [tdd] should inject testing anti-patterns reference."""
+        result = _get_testing_antipatterns_section("[tdd] Add user validation")
+        assert "Anti-Pattern" in result
+        assert "Self-Check" in result
+
+    def test_test_expecting_keyword_injects_antipatterns(self):
+        """Mission with test-expecting keywords should inject anti-patterns reference."""
+        # 'implement', 'fix', 'add', 'create', 'build' all trigger expects_tests
+        result = _get_testing_antipatterns_section("implement login feature")
+        assert "Anti-Pattern" in result
+
+    def test_fix_keyword_injects_antipatterns(self):
+        """'fix' keyword in mission title should inject anti-patterns reference."""
+        result = _get_testing_antipatterns_section("fix authentication bug")
+        assert "Anti-Pattern" in result
+
+    def test_non_testing_mission_returns_empty(self):
+        """Non-testing missions (docs, review, audit) should not inject anti-patterns."""
+        assert _get_testing_antipatterns_section("update README") == ""
+        assert _get_testing_antipatterns_section("review PR changes") == ""
+        assert _get_testing_antipatterns_section("audit security setup") == ""
+
+    def test_empty_mission_returns_empty(self):
+        """Autonomous mode (no mission) should not inject anti-patterns."""
+        assert _get_testing_antipatterns_section("") == ""
+
+    def test_no_double_injection_with_tdd_tag(self):
+        """[tdd] missions should include anti-patterns exactly once."""
+        result = _get_testing_antipatterns_section("[tdd] implement login")
+        count = result.count("Testing Anti-Patterns Reference")
+        assert count == 1
+
+    def test_project_tag_does_not_false_positive(self):
+        """[project:X] brackets should not trigger anti-patterns injection."""
+        # 'update docs' is not a test-expecting mission — project tag is irrelevant
+        result = _get_testing_antipatterns_section("[project:koan] update docs")
+        assert result == ""
 
 
 # --- Tests for _get_verification_gate_section ---

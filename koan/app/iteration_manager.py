@@ -33,10 +33,24 @@ from typing import List, Optional, Tuple
 from app.loop_manager import resolve_focus_area
 
 
+# Set to True when running as CLI subprocess (stdout carries JSON).
+_cli_mode = False
+
+
 def _log_iteration(category: str, message: str):
-    """Log iteration events to stderr. Uses stderr to avoid polluting
-    stdout when iteration_manager runs as a subprocess (CLI mode outputs JSON)."""
-    print(f"[{category}] {message}", file=sys.stderr)
+    """Log iteration events via run_log.log() for timestamp+color support.
+
+    Falls back to stderr when in CLI subprocess mode (stdout carries JSON)
+    or when run_log is not available.
+    """
+    if _cli_mode:
+        print(f"[{category}] {message}", file=sys.stderr)
+        return
+    try:
+        from app.run_log import log as _run_log
+        _run_log(category, message)
+    except ImportError:
+        print(f"[{category}] {message}", file=sys.stderr)
 
 
 def _refresh_usage(usage_state: Path, usage_md: Path, count: int):
@@ -108,11 +122,15 @@ def _get_usage_decision(usage_md: Path, count: int, projects_str: str):
             if weekly_match:
                 display_lines.append(weekly_match.group(0).strip())
 
+        # Get today's actual cost from cost tracker (accurate, not estimated)
+        cost_today = _get_cost_today(usage_md.parent)
+
         return {
             "mode": mode,
             "available_pct": available_pct,
             "reason": reason,
             "display_lines": display_lines,
+            "cost_today": cost_today,
         }
     except (ImportError, OSError, ValueError) as e:
         _log_iteration("error", f"Usage tracker error: {e}")
@@ -123,6 +141,20 @@ def _get_usage_decision(usage_md: Path, count: int, projects_str: str):
             "display_lines": [],
             "tracker_error": str(e),
         }
+
+
+def _get_cost_today(instance_dir: Path) -> float:
+    """Get today's actual API cost from cost tracker JSONL data.
+
+    Returns 0.0 if cost tracking is unavailable.
+    """
+    try:
+        from app.cost_tracker import summarize_day
+        summary = summarize_day(instance_dir)
+        return summary.get("total_cost_usd", 0.0)
+    except (ImportError, OSError, ValueError, KeyError) as e:
+        _log_iteration("error", f"Cost tracker read failed: {e}")
+        return 0.0
 
 
 def _inject_recurring(instance_dir: Path):
@@ -174,17 +206,19 @@ def _fallback_mission_extract(instance_dir: Path, projects_str: str,
         from app.pick_mission import fallback_extract
 
         missions_path = instance_dir / "missions.md"
-        if not missions_path.exists():
+        try:
+            content = missions_path.read_text()
+        except FileNotFoundError:
             return None, None
 
-        pending_count = count_pending(missions_path.read_text())
+        pending_count = count_pending(content)
         if pending_count <= 0:
             return None, None
 
         _log_iteration("error",
             f"{context_msg} — {pending_count} pending mission(s) exist "
             f"— attempting direct extraction")
-        project, title = fallback_extract(missions_path, projects_str)
+        project, title = fallback_extract(content, projects_str)
         if project and title:
             _log_iteration("mission",
                 f"Direct fallback picked: [{project}] {title[:60]}")
@@ -267,18 +301,22 @@ def _get_known_project_names(projects: List[Tuple[str, str]]) -> list:
 
 def _should_contemplate(autonomous_mode: str, focus_active: bool,
                         contemplative_chance: int,
-                        schedule_state=None) -> bool:
+                        schedule_state=None,
+                        focus_mode: bool = False) -> bool:
     """Check if this iteration should be a contemplative session.
 
     Contemplative sessions only trigger when:
+    - Focus mode is NOT active (neither config-level nor file-based)
     - Mode is deep or implement (need budget for Claude call)
-    - Focus mode is NOT active
     - Schedule is not in work_hours
     - Random roll succeeds (chance boosted during deep_hours)
 
     Returns:
         True if should run a contemplative session
     """
+    if focus_mode:
+        return False
+
     if autonomous_mode not in ("deep", "implement"):
         return False
 
@@ -458,7 +496,8 @@ def _select_random_exploration_project(
     return random.choice(candidates)
 
 
-FilterResult = namedtuple("FilterResult", ["projects", "pr_limited"])
+FilterResult = namedtuple("FilterResult", ["projects", "pr_limited", "branch_saturated"],
+                         defaults=[[]])
 AutonomousDecision = namedtuple("AutonomousDecision", ["action", "focus_remaining"])
 
 
@@ -468,13 +507,16 @@ def _filter_exploration_projects(
 ) -> FilterResult:
     """Filter projects to only those eligible for exploration.
 
-    Checks two gates in order:
+    Checks three gates in order:
     1. ``exploration`` flag — projects with ``exploration: false`` are excluded.
     2. ``max_open_prs`` limit — projects at or over their PR limit are excluded.
+    3. ``max_pending_branches`` limit — projects at or over their branch limit
+       are excluded.
 
     Returns a FilterResult with:
     - ``projects``: list of (name, path) tuples eligible for exploration
     - ``pr_limited``: list of project names excluded due to PR limit
+    - ``branch_saturated``: list of project names excluded due to branch limit
     """
     from app.projects_config import (
         load_projects_config, get_project_exploration,
@@ -542,46 +584,86 @@ def _filter_exploration_projects(
 
         projects_needing_check[name] = (path, limit, urls_to_check)
 
-    if not projects_needing_check:
-        return FilterResult(projects=filtered, pr_limited=pr_limited)
+    if projects_needing_check:
+        # Phase 2: Batch-fetch PR counts for all repos in one GraphQL call
+        all_repos = []
+        for _, (_, _, urls) in projects_needing_check.items():
+            all_repos.extend(urls)
+        all_repos = list(dict.fromkeys(all_repos))  # deduplicate, preserve order
 
-    # Phase 2: Batch-fetch PR counts for all repos in one GraphQL call
-    all_repos = []
-    for _, (_, _, urls) in projects_needing_check.items():
-        all_repos.extend(urls)
-    all_repos = list(dict.fromkeys(all_repos))  # deduplicate, preserve order
+        batch_results = batch_count_open_prs(all_repos, author)
 
-    batch_results = batch_count_open_prs(all_repos, author)
+        # Phase 3: Evaluate limits using batch results (fall back to sequential on miss)
+        for name, (path, limit, urls_to_check) in projects_needing_check.items():
+            total_open = 0
+            any_error = False
 
-    # Phase 3: Evaluate limits using batch results (fall back to sequential on miss)
-    for name, (path, limit, urls_to_check) in projects_needing_check.items():
-        total_open = 0
-        any_error = False
+            for url in urls_to_check:
+                if url in batch_results:
+                    count = batch_results[url]
+                else:
+                    # Batch missed this repo — fall back to individual query
+                    count = cached_count_open_prs(url, author)
+                if count >= 0:
+                    total_open += count
+                else:
+                    any_error = True
 
-        for url in urls_to_check:
-            if url in batch_results:
-                count = batch_results[url]
+            if any_error and total_open == 0:
+                # All URLs errored — conservative: treat as PR-limited
+                pr_limited.append(name)
+                continue
+
+            if total_open >= limit:
+                _log_iteration("koan",
+                    f"Project '{name}' at PR limit ({total_open}/{limit}) — excluding from exploration")
+                pr_limited.append(name)
             else:
-                # Batch missed this repo — fall back to individual query
-                count = cached_count_open_prs(url, author)
-            if count >= 0:
-                total_open += count
-            else:
-                any_error = True
+                filtered.append((name, path))
 
-        if any_error and total_open == 0:
-            # All URLs errored — conservative: treat as PR-limited
-            pr_limited.append(name)
+    # Gate 3: max_pending_branches limit
+    from app.projects_config import get_project_max_pending_branches
+
+    instance_dir = str(Path(koan_root) / "instance")
+    branch_saturated = []
+    final_filtered = []
+
+    for name, path in filtered:
+        branch_limit = get_project_max_pending_branches(config, name)
+        if branch_limit == 0:
+            final_filtered.append((name, path))
             continue
 
-        if total_open >= limit:
-            _log_iteration("koan",
-                f"Project '{name}' at PR limit ({total_open}/{limit}) — excluding from exploration")
-            pr_limited.append(name)
-        else:
-            filtered.append((name, path))
+        project_cfg = config.get("projects", {}).get(name, {}) or {}
+        urls = set()
+        primary = project_cfg.get("github_url", "")
+        if primary:
+            urls.add(primary)
+        for u in project_cfg.get("github_urls", []):
+            if u:
+                urls.add(u)
 
-    return FilterResult(projects=filtered, pr_limited=pr_limited)
+        try:
+            from app.branch_limiter import count_pending_branches
+            count = count_pending_branches(
+                instance_dir, name, path, list(urls), author,
+            )
+        except Exception as e:
+            _log_iteration("debug",
+                f"Branch count failed for '{name}': {e} — allowing")
+            final_filtered.append((name, path))
+            continue
+
+        if count >= branch_limit:
+            _log_iteration("koan",
+                f"Project '{name}' branch-saturated ({count}/{branch_limit}) "
+                f"— excluding from exploration")
+            branch_saturated.append(name)
+        else:
+            final_filtered.append((name, path))
+
+    return FilterResult(projects=final_filtered, pr_limited=pr_limited,
+                        branch_saturated=branch_saturated)
 
 
 def _check_schedule():
@@ -605,7 +687,7 @@ def _make_result(*, action, project_name, project_path="",
                  recurring_injected, focus_remaining=None,
                  passive_remaining=None,
                  schedule_mode="normal", error=None,
-                 tracker_error=None):
+                 tracker_error=None, cost_today=0.0):
     """Build a standardised iteration-plan result dict."""
     return {
         "action": action,
@@ -623,6 +705,7 @@ def _make_result(*, action, project_name, project_path="",
         "schedule_mode": schedule_mode,
         "error": error,
         "tracker_error": tracker_error,
+        "cost_today": cost_today,
     }
 
 
@@ -631,6 +714,7 @@ def _decide_autonomous_action(
     koan_root: str,
     schedule_state,
     contemplative_chance: int = 10,
+    focus_mode: bool = False,
 ) -> "AutonomousDecision":
     """Decide autonomous action via a linear priority chain.
 
@@ -643,21 +727,26 @@ def _decide_autonomous_action(
     3. Schedule wait — work_hours active, skip exploration
     4. Autonomous exploration — default fallback
 
+    When ``focus_mode`` is True (config-level or file-based), contemplation
+    and exploration are disabled — the loop idles via ``focus_wait``.
+
     Returns:
         AutonomousDecision(action, focus_remaining)
     """
     focus_state = _check_focus(koan_root)
-    focus_active = focus_state is not None
+    focus_active = focus_state is not None or focus_mode
     _log_iteration("koan",
         f"Evaluating autonomous action "
-        f"(mode={autonomous_mode}, focus_active={focus_active})")
+        f"(mode={autonomous_mode}, focus_active={focus_active}, "
+        f"focus_mode={focus_mode})")
 
     # 1. Contemplative session (random reflection)
     if _should_contemplate(autonomous_mode, focus_active,
-                           contemplative_chance, schedule_state):
+                           contemplative_chance, schedule_state,
+                           focus_mode=focus_mode):
         return AutonomousDecision(action="contemplative", focus_remaining=None)
 
-    # 2. Focus mode active → wait for missions
+    # 2. Focus mode active → wait for missions (file-based or config-level)
     if focus_state is not None:
         try:
             focus_remaining = focus_state.remaining_display()
@@ -666,6 +755,11 @@ def _decide_autonomous_action(
             focus_remaining = "unknown"
         return AutonomousDecision(action="focus_wait",
                                  focus_remaining=focus_remaining)
+
+    # 2b. Config-level focus mode (permanent, no remaining time)
+    if focus_mode:
+        return AutonomousDecision(action="focus_wait",
+                                 focus_remaining="permanent")
 
     # 3. Schedule work_hours → suppress exploration
     if schedule_state is not None and schedule_state.in_work_hours:
@@ -726,6 +820,14 @@ def plan_iteration(
     # Convert projects to string format for downstream functions
     projects_str = _projects_to_str(projects)
 
+    # Step 0: Detect config-level focus mode (disables autonomous work)
+    try:
+        from app.config import is_focus_mode
+        focus_mode = is_focus_mode()
+    except (ImportError, OSError, ValueError) as e:
+        _log_iteration("error", f"Focus mode config lookup failed: {e}")
+        focus_mode = False
+
     # Step 1: Refresh usage
     _refresh_usage(usage_state, usage_md, count)
 
@@ -736,7 +838,19 @@ def plan_iteration(
     decision_reason = decision["reason"]
     display_lines = decision["display_lines"]
     tracker_error = decision.get("tracker_error")
+    cost_today = decision.get("cost_today", 0.0)
     _log_iteration("koan", f"Usage decision: mode={autonomous_mode}, available={available_pct}%")
+
+    # Step 2a: Cap mode at implement when focus mode is active.
+    # DEEP mode encourages autonomous GitHub issue pickup, which focus
+    # mode explicitly forbids — missions only, no autonomous work.
+    if focus_mode and autonomous_mode == "deep":
+        decision_reason = (
+            f"{decision_reason} (capped from deep: focus mode active)"
+        )
+        autonomous_mode = "implement"
+        _log_iteration("koan",
+            "Focus mode: capped mode deep → implement")
 
     # Step 2b: Check schedule and cap mode based on deep_hours config.
     # This runs early (before mission pick) so the capped mode affects
@@ -766,12 +880,17 @@ def plan_iteration(
     # Step 3b: Drain CI queue (one entry per iteration, non-blocking)
     ci_drain_msg = _drain_ci_queue(instance)
 
-    # Step 4: Pick mission
+    # Step 4: Pick mission. Manual missions (queued in missions.md or via
+    # notifications) are always eligible regardless of branch saturation —
+    # max_pending_branches is a self-throttle for autonomous exploration,
+    # not a gate on human instructions. Saturation is enforced by
+    # _filter_exploration_projects in the no-mission path only.
     mission_project, mission_title = _pick_mission(
         instance, projects_str, run_num, autonomous_mode, last_project,
     )
     if mission_project and mission_title:
-        _log_iteration("mission", f"Mission picked: [{mission_project}] {mission_title[:80]}")
+        _log_iteration("mission",
+            f"Mission picked: [{mission_project}] {mission_title[:80]}")
     else:
         _log_iteration("koan", "No pending mission — entering autonomous mode")
 
@@ -798,9 +917,8 @@ def plan_iteration(
             passive_remaining=remaining,
         )
 
-    # Step 5: Resolve project
+    # Step 5: Resolve project for the picked mission.
     if mission_project and mission_title:
-        # Mission picked — resolve project path (case-insensitive)
         resolved = _resolve_project_path(mission_project, projects)
 
         if resolved is None:
@@ -824,6 +942,7 @@ def plan_iteration(
                 error=f"Unknown project '{project_name}'. Known: {', '.join(known)}",
                 tracker_error=tracker_error,
             )
+
     else:
         # No mission — autonomous mode
         mission_title = ""
@@ -846,13 +965,44 @@ def plan_iteration(
                 tracker_error=tracker_error,
             )
 
+        # Short-circuit: config-level focus mode means no autonomous work.
+        # Skip exploration filtering, contemplative rolls, and any gh calls —
+        # idle with wake-on-mission like exploration_wait.
+        if focus_mode:
+            _log_iteration("koan",
+                "Focus mode: no pending mission — entering focus_wait")
+            focus_area = resolve_focus_area(autonomous_mode, has_mission=False)
+            return _make_result(
+                action="focus_wait",
+                project_name=projects[0][0] if projects else "default",
+                project_path=projects[0][1] if projects else "",
+                autonomous_mode=autonomous_mode,
+                focus_area=focus_area,
+                available_pct=available_pct,
+                decision_reason=(
+                    "Focus mode — no autonomous work, "
+                    "waiting for queued missions"
+                ),
+                display_lines=display_lines,
+                recurring_injected=recurring_injected,
+                schedule_mode=schedule_state.mode if schedule_state else "normal",
+                tracker_error=tracker_error,
+            )
+
         # Filter to exploration-enabled projects only
         filter_result = _filter_exploration_projects(projects, koan_root,
                                                      schedule_state=schedule_state)
         exploration_projects = filter_result.projects
         if not exploration_projects:
-            # Determine whether this is exploration-disabled or PR-limited
-            if filter_result.pr_limited:
+            # Determine whether this is exploration-disabled, PR-limited, or branch-saturated
+            if filter_result.branch_saturated:
+                _log_iteration("koan", "All exploration projects branch-saturated — waiting for reviews")
+                wait_action = "branch_saturated_wait"
+                wait_reason = (
+                    f"Branch limit reached for: {', '.join(filter_result.branch_saturated)} "
+                    f"— waiting for reviews/merges"
+                )
+            elif filter_result.pr_limited:
                 _log_iteration("koan", "All exploration projects at PR limit — waiting for reviews")
                 wait_action = "pr_limit_wait"
                 wait_reason = (
@@ -902,6 +1052,7 @@ def plan_iteration(
 
         autonomous_decision = _decide_autonomous_action(
             autonomous_mode, koan_root, schedule_state, contemplative_chance,
+            focus_mode=focus_mode,
         )
         action = autonomous_decision.action
 
@@ -955,11 +1106,14 @@ def plan_iteration(
         recurring_injected=recurring_injected,
         schedule_mode=schedule_state.mode if schedule_state else "normal",
         tracker_error=tracker_error,
+        cost_today=cost_today,
     )
 
 
 def main():
     """CLI entry point for iteration_manager."""
+    global _cli_mode
+    _cli_mode = True
     parser = argparse.ArgumentParser(description="Kōan iteration planner")
     subparsers = parser.add_subparsers(dest="command")
 

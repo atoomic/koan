@@ -807,7 +807,8 @@ class TestHandlePause:
         instance = str(koan_root / "instance")
         (koan_root / ".koan-pause").touch()
 
-        with patch("app.pause_manager.check_and_resume", return_value="Quota reset"):
+        with patch("app.pause_manager.check_and_resume", return_value="Quota reset"), \
+             patch("app.run._notify"):
             result = handle_pause(str(koan_root), instance, 5)
         assert result == "resume"
 
@@ -1816,8 +1817,11 @@ class TestIdleWaitConfig:
             count=0, max_runs=10, interval=60, git_sync_interval=5,
         )
 
-        # Verify sleep was called with the interval
-        mock_sleep.assert_called_once_with(60, str(tmp_path), instance)
+        # Verify sleep was called with the interval and wakes on missions
+        # (default behaviour for non-branch-saturated waits).
+        mock_sleep.assert_called_once_with(
+            60, str(tmp_path), instance, wake_on_mission=True,
+        )
         # Verify status was set with focus info
         status_calls = [c for c in mock_status.call_args_list if "Focus mode" in str(c)]
         assert len(status_calls) >= 1
@@ -1890,6 +1894,56 @@ class TestIdleWaitConfig:
         mock_sleep.assert_called_once()
         status_calls = [c for c in mock_status.call_args_list if "PR limit" in str(c)]
         assert len(status_calls) >= 1
+
+    @patch("app.run.run_claude_task")
+    @patch("app.run.interruptible_sleep", return_value=None)
+    @patch("app.run.set_status")
+    @patch("app.run.log")
+    @patch("app.run.plan_iteration")
+    def test_branch_saturated_wait_action(
+        self, mock_plan, mock_log, mock_status, mock_sleep, mock_cli, tmp_path,
+    ):
+        """branch_saturated_wait must sleep without waking on pending missions,
+        not launch the CLI, and return non-idle so auto-pause is not tripped.
+
+        Regressions covered:
+          - Action fell through _IDLE_WAIT_CONFIG → autonomous CLI ran anyway.
+          - interruptible_sleep woke immediately on pending missions (the very
+            missions that caused the saturation), producing a 1-iter/sec tight
+            loop that burned through MAX_CONSECUTIVE_IDLE in seconds and
+            triggered bogus "Idle for 150 min — auto-pausing".
+        """
+        from app.run import _run_iteration
+        mock_plan.return_value = self._make_plan(
+            "branch_saturated_wait",
+            decision_reason="Project 'koan' at branch limit (36/10) — mission stays Pending",
+        )
+        instance = str(tmp_path / "instance")
+        os.makedirs(instance, exist_ok=True)
+        (tmp_path / ".koan-project").write_text("koan")
+
+        result = _run_iteration(
+            koan_root=str(tmp_path),
+            instance=instance,
+            projects=[("koan", "/tmp/koan")],
+            count=0, max_runs=10, interval=60, git_sync_interval=5,
+        )
+
+        # Slept once with wake_on_mission=False so the pending (blocked)
+        # missions don't short-circuit the wait into a tight loop.
+        mock_sleep.assert_called_once_with(
+            60, str(tmp_path), instance, wake_on_mission=False,
+        )
+        # Status contains "Branch-saturated", not "DEEP"
+        status_calls = [c for c in mock_status.call_args_list if "Branch-saturated" in str(c)]
+        assert len(status_calls) >= 1
+        assert not any("DEEP" in str(c) for c in mock_status.call_args_list)
+        # CLI must NOT be launched
+        mock_cli.assert_not_called()
+        # Must not count as "idle" — branch saturation is blocked-on-human,
+        # not truly idle. Returning "idle" would accumulate consecutive_idle
+        # and trigger the 150-min auto-pause path.
+        assert result != "idle"
 
     @patch("app.run.interruptible_sleep", return_value="mission")
     @patch("app.run.set_status")
@@ -2553,9 +2607,13 @@ class TestRunIterationErrorAction:
 
         # Mission moved to Failed
         mock_update.assert_called_once_with(instance, "do stuff", failed=True)
-        # User notified
-        mock_notify.assert_called_once()
-        assert "Unknown project: foo" in mock_notify.call_args[0][1]
+        # User notified about the error (filter out first-iteration startup
+        # notifications which can also fire when count=0).
+        error_msgs = [
+            c for c in mock_notify.call_args_list
+            if "Unknown project: foo" in c.args[1]
+        ]
+        assert len(error_msgs) == 1
         # Instance committed
         mock_commit.assert_called_once_with(instance)
 
@@ -2599,9 +2657,13 @@ class TestRunIterationErrorAction:
         mock_update.assert_not_called()
         # No instance commit
         mock_commit.assert_not_called()
-        # Notification sent
-        mock_notify.assert_called_once()
-        assert "Iteration error" in mock_notify.call_args[0][1]
+        # Iteration-error notification sent (filter out first-iteration
+        # startup notifications which can also fire when count=0).
+        error_msgs = [
+            c for c in mock_notify.call_args_list
+            if "Iteration error" in c.args[1]
+        ]
+        assert len(error_msgs) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2688,6 +2750,210 @@ class TestRunIterationGitHubPreCheck:
                 interval=10,
                 git_sync_interval=5,
             )
+
+
+class TestRunIterationFirstIterationNotifications:
+    """Per-phase Telegram visibility for the first iteration after startup
+    or /resume. count==0 fires GH/Jira/picking notifications; count>=1 stays
+    quiet to avoid steady-state spam.
+    """
+
+    @staticmethod
+    def _stop_plan(koan_root):
+        return {
+            "action": "error",
+            "error": "test-stop",
+            "project_name": "test",
+            "project_path": str(koan_root),
+            "mission_title": "",
+            "autonomous_mode": "implement",
+            "focus_area": "",
+            "available_pct": 50,
+            "decision_reason": "Default",
+            "display_lines": [],
+            "recurring_injected": [],
+        }
+
+    @pytest.fixture(autouse=True)
+    def _reset_startup_flag(self):
+        import app.run as run_mod
+        run_mod._startup_notified = False
+        yield
+        run_mod._startup_notified = False
+
+    @patch("app.jira_config.get_jira_enabled", return_value=True)
+    @patch("app.run.plan_iteration")
+    @patch("app.run._notify_raw")
+    @patch("app.loop_manager.process_jira_notifications", return_value=0)
+    @patch("app.loop_manager.process_github_notifications", return_value=0)
+    def test_first_iteration_emits_phase_notifications(
+        self, mock_gh, mock_jira, mock_notify_raw, mock_plan, mock_jira_enabled, koan_root,
+    ):
+        """count=0: scanning-GH, scanning-Jira, picking-mission Telegrams all
+        fire via _notify_raw (verbatim, no Claude-CLI rewrite).
+        """
+        from app.run import _run_iteration
+        mock_plan.return_value = self._stop_plan(koan_root)
+        instance = str(koan_root / "instance")
+
+        with patch("app.utils.get_known_projects", return_value=[("test", str(koan_root))]):
+            _run_iteration(
+                koan_root=str(koan_root), instance=instance,
+                projects=[("test", str(koan_root))],
+                count=0, max_runs=5, interval=10, git_sync_interval=5,
+            )
+
+        messages = [c.args[1] for c in mock_notify_raw.call_args_list]
+        joined = " | ".join(messages)
+        assert "Scanning GitHub notifications" in joined
+        assert "Scanning Jira" in joined
+        assert "Picking first mission" in joined
+
+    @patch("app.run.plan_iteration")
+    @patch("app.run._notify_raw")
+    @patch("app.loop_manager.process_jira_notifications", return_value=0)
+    @patch("app.loop_manager.process_github_notifications", return_value=0)
+    def test_subsequent_iteration_stays_quiet(
+        self, mock_gh, mock_jira, mock_notify_raw, mock_plan, koan_root,
+    ):
+        """After the first iteration, the startup trio must not re-fire —
+        even when count stays 0 (non-productive idle/passive wake loop,
+        regression test for #1193).
+        """
+        from app.run import _run_iteration
+        mock_plan.return_value = self._stop_plan(koan_root)
+        instance = str(koan_root / "instance")
+
+        with patch("app.utils.get_known_projects", return_value=[("test", str(koan_root))]):
+            _run_iteration(
+                koan_root=str(koan_root), instance=instance,
+                projects=[("test", str(koan_root))],
+                count=0, max_runs=5, interval=10, git_sync_interval=5,
+            )
+            mock_notify_raw.reset_mock()
+            # Simulate a non-productive wake-up: count still 0 because the
+            # previous iteration was idle/passive, not a productive mission.
+            _run_iteration(
+                koan_root=str(koan_root), instance=instance,
+                projects=[("test", str(koan_root))],
+                count=0, max_runs=5, interval=10, git_sync_interval=5,
+            )
+
+        messages = [c.args[1] for c in mock_notify_raw.call_args_list]
+        joined = " | ".join(messages)
+        assert "Scanning GitHub" not in joined
+        assert "Scanning Jira" not in joined
+        assert "Picking first mission" not in joined
+
+    @patch("app.jira_config.get_jira_enabled", return_value=False)
+    @patch("app.run.plan_iteration")
+    @patch("app.run._notify_raw")
+    @patch("app.loop_manager.process_github_notifications", return_value=0)
+    def test_first_iteration_skips_jira_when_disabled(
+        self, mock_gh, mock_notify_raw, mock_plan, mock_jira_enabled, koan_root,
+    ):
+        """When Jira is not configured, no Jira-related messages appear."""
+        from app.run import _run_iteration
+        mock_plan.return_value = self._stop_plan(koan_root)
+        instance = str(koan_root / "instance")
+
+        with patch("app.utils.get_known_projects", return_value=[("test", str(koan_root))]):
+            _run_iteration(
+                koan_root=str(koan_root), instance=instance,
+                projects=[("test", str(koan_root))],
+                count=0, max_runs=5, interval=10, git_sync_interval=5,
+            )
+
+        messages = [c.args[1] for c in mock_notify_raw.call_args_list]
+        joined = " | ".join(messages)
+        assert "Jira" not in joined
+        assert "Scanning GitHub notifications" in joined
+        assert "Notifications clear" in joined
+
+    @patch("app.jira_config.get_jira_enabled", return_value=True)
+    @patch("app.run.plan_iteration")
+    @patch("app.run._notify_raw")
+    @patch("app.loop_manager.process_jira_notifications", return_value=2)
+    @patch("app.loop_manager.process_github_notifications", return_value=3)
+    def test_first_iteration_reports_mission_counts(
+        self, mock_gh, mock_jira, mock_notify_raw, mock_plan, mock_jira_enabled, koan_root,
+    ):
+        """When notifications create missions, the count surfaces in the
+        startup messages so the human knows new work was queued.
+        """
+        from app.run import _run_iteration
+        mock_plan.return_value = self._stop_plan(koan_root)
+        instance = str(koan_root / "instance")
+
+        with patch("app.utils.get_known_projects", return_value=[("test", str(koan_root))]):
+            _run_iteration(
+                koan_root=str(koan_root), instance=instance,
+                projects=[("test", str(koan_root))],
+                count=0, max_runs=5, interval=10, git_sync_interval=5,
+            )
+
+        messages = [c.args[1] for c in mock_notify_raw.call_args_list]
+        joined = " | ".join(messages)
+        assert "GitHub: 3 new mission" in joined
+        assert "Jira: 2 new mission" in joined
+
+    @patch("app.jira_config.get_jira_enabled", return_value=True)
+    @patch("app.run.plan_iteration")
+    @patch("app.notify.send_telegram")
+    @patch("app.run._notify")
+    @patch("app.loop_manager.process_jira_notifications", return_value=0)
+    @patch("app.loop_manager.process_github_notifications", return_value=0)
+    def test_first_iteration_status_messages_bypass_formatter(
+        self, mock_gh, mock_jira, mock_notify, mock_send, mock_plan, mock_jira_enabled, koan_root,
+    ):
+        """Startup-status notifications must NOT route through _notify (and
+        therefore NOT trigger the Claude-CLI formatter). They must reach
+        send_telegram directly via _notify_raw, with verbatim text + emoji.
+        """
+        from app.run import _run_iteration
+        mock_plan.return_value = self._stop_plan(koan_root)
+        instance = str(koan_root / "instance")
+
+        with patch("app.utils.get_known_projects", return_value=[("test", str(koan_root))]):
+            _run_iteration(
+                koan_root=str(koan_root), instance=instance,
+                projects=[("test", str(koan_root))],
+                count=0, max_runs=5, interval=10, git_sync_interval=5,
+            )
+
+        # _notify (formatter path) must not have received the status pings.
+        notify_msgs = " | ".join(c.args[1] for c in mock_notify.call_args_list)
+        assert "Scanning GitHub notifications" not in notify_msgs
+        assert "Scanning Jira" not in notify_msgs
+        assert "Picking first mission" not in notify_msgs
+
+        # send_telegram (raw path) received them verbatim, including emojis.
+        send_msgs = " | ".join(c.args[0] for c in mock_send.call_args_list)
+        assert "🔍 Scanning GitHub notifications" in send_msgs
+        assert "📋 GitHub: scanned, no new missions. Scanning Jira..." in send_msgs
+        assert "🎯 Notifications clear" in send_msgs
+
+
+class TestNotifyRaw:
+    """_notify_raw bypasses the Claude-CLI formatter and sends straight to
+    Telegram. Used for terse status pings where verbatim text matters.
+    """
+
+    @patch("app.notify.send_telegram")
+    def test_calls_send_telegram_directly(self, mock_send):
+        from app.run import _notify_raw
+        _notify_raw("/tmp/instance", "🔍 verbatim test")
+        mock_send.assert_called_once_with("🔍 verbatim test")
+
+    @patch("app.run.log")
+    @patch("app.notify.send_telegram", side_effect=RuntimeError("boom"))
+    def test_swallows_send_errors(self, mock_send, mock_log):
+        """Telegram failures must not crash the run loop; same contract as _notify."""
+        from app.run import _notify_raw
+        _notify_raw("/tmp/instance", "test")
+        # Error logged, no exception propagated.
+        assert any("Raw notification failed" in str(c)
+                   for c in mock_log.call_args_list)
 
 
 class TestRunIterationProjectRefresh:
@@ -5454,7 +5720,9 @@ class TestRunIterationPaths:
                 return_value=PrepResult(success=False, error="checkout failed")
             ),
         ) as mocks:
-            result = self._call(tmp_path)
+            # count>=1 — testing operational failure, not first-iteration
+            # behavior; avoids the startup-only Telegram notifications.
+            result = self._call(tmp_path, count=1)
             assert result is False
             mock_update.assert_called_once_with(
                 str(Path(tmp_path) / "instance"), title, failed=True
@@ -5472,7 +5740,7 @@ class TestRunIterationPaths:
             tmp_path, plan,
             prepare_project_branch=MagicMock(side_effect=RuntimeError("git broke")),
         ) as mocks:
-            result = self._call(tmp_path)
+            result = self._call(tmp_path, count=1)
             assert result is False
             mock_update.assert_called_once_with(
                 str(Path(tmp_path) / "instance"), title, failed=True

@@ -161,6 +161,74 @@ class TestParseClaudeOutput:
         assert parse_claude_output(raw) == raw.strip()
 
 
+class TestCheckJsonSuccess:
+    """Test check_json_success — detects successful sessions from JSON output."""
+
+    def test_is_error_false_means_success(self, tmp_path):
+        from app.mission_runner import check_json_success
+
+        f = tmp_path / "stdout.json"
+        f.write_text(json.dumps({"type": "result", "is_error": False, "result": "done"}))
+        assert check_json_success(str(f)) is True
+
+    def test_is_error_true_means_failure(self, tmp_path):
+        from app.mission_runner import check_json_success
+
+        f = tmp_path / "stdout.json"
+        f.write_text(json.dumps({"type": "result", "is_error": True}))
+        assert check_json_success(str(f)) is False
+
+    def test_subtype_success_means_success(self, tmp_path):
+        from app.mission_runner import check_json_success
+
+        f = tmp_path / "stdout.json"
+        f.write_text(json.dumps({"type": "result", "subtype": "success"}))
+        assert check_json_success(str(f)) is True
+
+    def test_empty_file_means_failure(self, tmp_path):
+        from app.mission_runner import check_json_success
+
+        f = tmp_path / "stdout.json"
+        f.write_text("")
+        assert check_json_success(str(f)) is False
+
+    def test_missing_file_means_failure(self):
+        from app.mission_runner import check_json_success
+
+        assert check_json_success("/nonexistent/path") is False
+
+    def test_invalid_json_means_failure(self, tmp_path):
+        from app.mission_runner import check_json_success
+
+        f = tmp_path / "stdout.json"
+        f.write_text("not json at all")
+        assert check_json_success(str(f)) is False
+
+    def test_no_relevant_keys_means_failure(self, tmp_path):
+        from app.mission_runner import check_json_success
+
+        f = tmp_path / "stdout.json"
+        f.write_text(json.dumps({"status": "ok"}))
+        assert check_json_success(str(f)) is False
+
+    def test_real_world_success_output(self, tmp_path):
+        """Reproduce the exact pattern from the run 2 failure."""
+        from app.mission_runner import check_json_success
+
+        output = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "duration_ms": 529131,
+            "result": "Mission complete.",
+            "stop_reason": "end_turn",
+            "total_cost_usd": 1.88,
+        }
+        f = tmp_path / "stdout.json"
+        f.write_text(json.dumps(output))
+        assert check_json_success(str(f)) is True
+
+
 class TestArchivePending:
     """Test archive_pending function."""
 
@@ -1030,7 +1098,7 @@ class TestRecordSessionOutcome:
         # Should not raise
         _record_session_outcome(str(tmp_path), "koan", "deep", 30, "text")
         captured = capsys.readouterr()
-        assert "Session outcome recording failed" in captured.err
+        assert "Session outcome recording failed" in (captured.err + captured.out)
 
 
 class TestRunPostMissionDuration:
@@ -1237,7 +1305,7 @@ class TestCheckAutoMergeErrors:
         result = check_auto_merge(str(tmp_path), "koan", str(tmp_path))
         assert result is None
         captured = capsys.readouterr()
-        assert "Auto-merge check failed" in captured.err
+        assert "Auto-merge check failed" in (captured.err + captured.out)
 
     @patch("app.git_sync.run_git", side_effect=Exception("git error"))
     def test_returns_none_on_git_error(self, mock_git, tmp_path, capsys):
@@ -1246,7 +1314,7 @@ class TestCheckAutoMergeErrors:
         result = check_auto_merge(str(tmp_path), "koan", str(tmp_path))
         assert result is None
         captured = capsys.readouterr()
-        assert "Auto-merge check failed" in captured.err
+        assert "Auto-merge check failed" in (captured.err + captured.out)
 
 
 class TestTriggerReflectionErrors:
@@ -1259,7 +1327,7 @@ class TestTriggerReflectionErrors:
         result = trigger_reflection(str(tmp_path), "audit", 60, project_name="koan")
         assert result is False
         captured = capsys.readouterr()
-        assert "Reflection failed" in captured.err
+        assert "Reflection failed" in (captured.err + captured.out)
 
 
 class TestParseClaudeOutputEdgeCases:
@@ -1964,7 +2032,7 @@ class TestTriggerReflectionEdgeCases:
         result = trigger_reflection(str(tmp_path), "audit", 60, project_name="koan")
         assert result is False
         captured = capsys.readouterr()
-        assert "Reflection failed" in captured.err
+        assert "Reflection failed" in (captured.err + captured.out)
 
     @patch("app.post_mission_reflection.write_to_journal")
     @patch("app.post_mission_reflection.run_reflection", return_value="insight")

@@ -223,6 +223,35 @@ def get_start_on_pause() -> bool:
     return bool(config.get("start_on_pause", False))
 
 
+def is_focus_mode() -> bool:
+    """Check if permanent focus mode is enabled via config.
+
+    Focus mode disables all autonomous work so Kōan only runs missions
+    that were explicitly queued (via Telegram, recurring, or GitHub
+    @mention). No contemplative sessions, no DEEP mode, no exploration
+    fallback.
+
+    This is the config-level permanent switch. The ``/focus`` Telegram
+    command provides time-bounded focus via ``.koan-focus`` file — both
+    mechanisms produce the same runtime behavior.
+
+    Resolution order:
+    1. ``KOAN_FOCUS`` env var (truthy: ``1``, ``true``, ``yes``, ``on``)
+    2. ``focus`` key in ``config.yaml``
+    3. Default: ``False``
+
+    Returns:
+        True when permanent focus mode is active.
+    """
+    env_value = os.environ.get("KOAN_FOCUS", "").strip().lower()
+    if env_value in ("1", "true", "yes", "on"):
+        return True
+    if env_value in ("0", "false", "no", "off"):
+        return False
+    config = _load_config()
+    return bool(config.get("focus", False))
+
+
 def get_start_passive() -> bool:
     """Check if start_passive is enabled in config.yaml.
 
@@ -231,6 +260,16 @@ def get_start_passive() -> bool:
     """
     config = _load_config()
     return bool(config.get("start_passive", False))
+
+
+def get_startup_reflection() -> bool:
+    """Check if startup_reflection is enabled in config.yaml.
+
+    Returns True if koan should run the self-reflection check on startup.
+    Defaults to False to avoid unexpected Claude CLI calls at boot time.
+    """
+    config = _load_config()
+    return bool(config.get("startup_reflection", False))
 
 
 def get_auto_pause() -> bool:
@@ -622,6 +661,32 @@ def get_auto_merge_config(config: dict, project_name: str) -> dict:
     }
 
 
+def get_branch_cleanup_config() -> dict:
+    """Get branch cleanup configuration from config.yaml.
+
+    Controls automatic deletion of merged local and remote branches during
+    git sync. Cleanup runs every ``git_sync_interval`` iterations for each
+    project.
+
+    Config key: branch_cleanup
+      - enabled (bool): Master switch (default: True)
+      - delete_remote_branches (bool): Also push-delete remote branches
+          after local deletion (default: True). Set to False to only
+          clean up local refs without touching the remote.
+
+    Returns:
+        Dict with keys: enabled (bool), delete_remote_branches (bool).
+    """
+    config = _load_config()
+    cleanup_cfg = config.get("branch_cleanup", {})
+    if not isinstance(cleanup_cfg, dict):
+        cleanup_cfg = {}
+    return {
+        "enabled": bool(cleanup_cfg.get("enabled", True)),
+        "delete_remote_branches": bool(cleanup_cfg.get("delete_remote_branches", True)),
+    }
+
+
 def get_prompt_guard_config() -> dict:
     """Get prompt guard configuration.
 
@@ -661,3 +726,34 @@ def get_review_concurrency_config() -> dict:
         "enabled": bool(review_cfg.get("enabled", True)),
         "github_workers": _safe_int(review_cfg.get("github_workers", 4), 4),
     }
+
+
+def get_review_ignore_config() -> dict:
+    """Get review ignore patterns from config.yaml.
+
+    Controls which files are excluded from PR review diffs. Patterns are
+    applied before building the Claude prompt, reducing token spend on
+    generated code, lock files, and vendor directories.
+
+    Config key: review_ignore
+      - glob (list): Glob patterns (e.g. "vendor/**", "*.lock")
+      - regex (list): Regex patterns matched against full path
+
+    Returns:
+        Dict with keys: glob (list), regex (list). Both always present;
+        values default to [].
+    """
+    config = _load_config()
+    review_ignore = config.get("review_ignore", {}) or {}
+    if not isinstance(review_ignore, dict):
+        return {"glob": [], "regex": []}
+
+    globs = review_ignore.get("glob", [])
+    if not isinstance(globs, list):
+        globs = []
+
+    regexes = review_ignore.get("regex", [])
+    if not isinstance(regexes, list):
+        regexes = []
+
+    return {"glob": [str(p) for p in globs], "regex": [str(p) for p in regexes]}

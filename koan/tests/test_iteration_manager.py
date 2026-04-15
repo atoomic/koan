@@ -436,6 +436,7 @@ class TestMakeResult:
             "autonomous_mode", "focus_area", "available_pct", "decision_reason",
             "display_lines", "recurring_injected", "focus_remaining",
             "passive_remaining", "schedule_mode", "error", "tracker_error",
+            "cost_today",
         }
         assert set(result.keys()) == expected_keys
 
@@ -1831,6 +1832,98 @@ projects:
         assert set(repos_arg) == {"owner/koan", "owner/backend"}
 
 
+# === Tests: _filter_exploration_projects with branch saturation ===
+
+
+class TestFilterExplorationProjectsBranchSaturation:
+
+    def setup_method(self):
+        self._batch_patcher = patch("app.github.batch_count_open_prs", return_value={})
+        self._batch_patcher.start()
+
+    def teardown_method(self):
+        self._batch_patcher.stop()
+
+    @patch("app.branch_limiter.count_pending_branches", return_value=5)
+    @patch("app.github.get_gh_username", return_value="koan-bot")
+    def test_under_limit_included(self, mock_user, mock_count, koan_root):
+        """Project under branch limit is included."""
+        (koan_root / "projects.yaml").write_text("""
+projects:
+  koan:
+    path: /path/to/koan
+    max_pending_branches: 10
+""")
+        result = _filter_exploration_projects(
+            [("koan", "/path/to/koan")], str(koan_root),
+        )
+        assert len(result.projects) == 1
+        assert result.branch_saturated == []
+
+    @patch("app.branch_limiter.count_pending_branches", return_value=10)
+    @patch("app.github.get_gh_username", return_value="koan-bot")
+    def test_at_limit_excluded(self, mock_user, mock_count, koan_root):
+        """Project at branch limit is excluded."""
+        (koan_root / "projects.yaml").write_text("""
+projects:
+  koan:
+    path: /path/to/koan
+    max_pending_branches: 10
+""")
+        result = _filter_exploration_projects(
+            [("koan", "/path/to/koan")], str(koan_root),
+        )
+        assert result.projects == []
+        assert result.branch_saturated == ["koan"]
+
+    @patch("app.branch_limiter.count_pending_branches", return_value=15)
+    @patch("app.github.get_gh_username", return_value="koan-bot")
+    def test_over_limit_excluded(self, mock_user, mock_count, koan_root):
+        """Project over branch limit is excluded."""
+        (koan_root / "projects.yaml").write_text("""
+projects:
+  koan:
+    path: /path/to/koan
+    max_pending_branches: 10
+""")
+        result = _filter_exploration_projects(
+            [("koan", "/path/to/koan")], str(koan_root),
+        )
+        assert result.projects == []
+        assert result.branch_saturated == ["koan"]
+
+    @patch("app.github.get_gh_username", return_value="koan-bot")
+    def test_zero_limit_means_unlimited(self, mock_user, koan_root):
+        """max_pending_branches: 0 means unlimited — no branch count check."""
+        (koan_root / "projects.yaml").write_text("""
+projects:
+  koan:
+    path: /path/to/koan
+    max_pending_branches: 0
+""")
+        result = _filter_exploration_projects(
+            [("koan", "/path/to/koan")], str(koan_root),
+        )
+        assert len(result.projects) == 1
+        assert result.branch_saturated == []
+
+    @patch("app.branch_limiter.count_pending_branches", side_effect=Exception("git error"))
+    @patch("app.github.get_gh_username", return_value="koan-bot")
+    def test_error_allows_project(self, mock_user, mock_count, koan_root):
+        """Branch count error → project allowed (fail-open)."""
+        (koan_root / "projects.yaml").write_text("""
+projects:
+  koan:
+    path: /path/to/koan
+    max_pending_branches: 5
+""")
+        result = _filter_exploration_projects(
+            [("koan", "/path/to/koan")], str(koan_root),
+        )
+        assert len(result.projects) == 1
+        assert result.branch_saturated == []
+
+
 # === Tests: _filter_exploration_projects with deep_hours PR limit relaxation ===
 
 
@@ -2245,6 +2338,115 @@ class TestPlanIterationPrLimit:
         assert result["action"] == "exploration_wait"
 
 
+# === Tests: plan_iteration with branch saturation ===
+
+
+class TestPlanIterationBranchSaturation:
+
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._filter_exploration_projects")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("random.randint", return_value=99)
+    def test_all_branch_saturated_returns_branch_saturated_wait(
+        self, mock_rand, mock_focus, mock_filter, mock_refresh, mock_pick,
+        instance_dir, koan_root, usage_state,
+    ):
+        """When all projects are branch-saturated, action is branch_saturated_wait."""
+        mock_filter.return_value = FilterResult(
+            projects=[], pr_limited=[], branch_saturated=["koan", "backend"],
+        )
+
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text("Session (5hr) : 30% (reset in 3h)\nWeekly (7 day) : 20% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["action"] == "branch_saturated_wait"
+        assert "Branch limit" in result["decision_reason"]
+
+    @patch("app.branch_limiter.count_pending_branches", return_value=3)
+    @patch("app.pick_mission.pick_mission", return_value="koan:fix a bug")
+    @patch("app.usage_estimator.cmd_refresh")
+    def test_mission_allowed_when_under_limit(
+        self, mock_refresh, mock_pick, mock_count,
+        instance_dir, koan_root, usage_state,
+    ):
+        """Mission proceeds when project is under branch limit."""
+        (koan_root / "projects.yaml").write_text("""
+projects:
+  koan:
+    path: /path/to/koan
+    max_pending_branches: 10
+""")
+
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text("Session (5hr) : 30% (reset in 3h)\nWeekly (7 day) : 20% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["action"] == "mission"
+        assert result["project_name"] == "koan"
+
+    @patch("app.branch_limiter.count_pending_branches", return_value=50)
+    @patch("app.pick_mission.pick_mission", return_value="koan:fix a bug")
+    @patch("app.usage_estimator.cmd_refresh")
+    def test_manual_mission_runs_despite_branch_saturation(
+        self, mock_refresh, mock_pick, mock_count,
+        instance_dir, koan_root, usage_state,
+    ):
+        """max_pending_branches is a self-throttle for autonomous exploration
+        only — explicit missions in missions.md must run regardless of how
+        many open PRs/unmerged branches the project has.
+
+        Regression: previously the picker post-check (commit 5fd621c) and
+        the saturated-projects loop (2b753ec) both returned
+        branch_saturated_wait for a mission whose project was over the limit.
+        A human queuing work should never be blocked by the agent's own
+        throttle.
+        """
+        (koan_root / "projects.yaml").write_text("""
+projects:
+  koan:
+    path: /path/to/koan
+    max_pending_branches: 5
+""")
+
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text("Session (5hr) : 30% (reset in 3h)\nWeekly (7 day) : 20% (Resets in 5d)\n")
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        # 50 >> 5 limit — but mission is manual, so it proceeds.
+        assert result["action"] == "mission"
+        assert result["project_name"] == "koan"
+        assert result["mission_title"] == "fix a bug"
+
+
 # === Tests: CLI interface ===
 
 
@@ -2505,3 +2707,239 @@ class TestPlanIterationRandomSelection:
         )
         assert result["action"] == "autonomous"
         assert result["project_name"] == "koan"
+
+
+# === Tests: focus mode (config-level permanent focus) ===
+
+
+class TestFocusModeContemplate:
+    """_should_contemplate should return False under focus mode."""
+
+    @patch("random.randint", return_value=0)  # roll would otherwise succeed
+    def test_focus_skips_contemplation_with_ample_budget(self, mock_rand):
+        assert _should_contemplate(
+            "deep", False, 100, focus_mode=True,
+        ) is False
+
+    @patch("random.randint", return_value=0)
+    def test_focus_skips_contemplation_in_implement(self, mock_rand):
+        assert _should_contemplate(
+            "implement", False, 100, focus_mode=True,
+        ) is False
+
+    @patch("random.randint", return_value=0)
+    def test_non_focus_still_contemplates(self, mock_rand):
+        """Sanity check: non-focus path still rolls."""
+        assert _should_contemplate(
+            "deep", False, 100, focus_mode=False,
+        ) is True
+
+
+class TestFocusModePlanIteration:
+    """plan_iteration behavior under config-level focus mode."""
+
+    @patch("app.config.is_focus_mode", return_value=True)
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule", return_value=None)
+    def test_no_mission_returns_focus_wait(
+        self, mock_schedule, mock_focus, mock_refresh, mock_pick, mock_focus_mode,
+        instance_dir, koan_root, usage_state,
+    ):
+        """Focus mode + no pending mission → focus_wait action."""
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text(
+            "Session (5hr) : 30% (reset in 3h)\nWeekly (7 day) : 20% (Resets in 5d)\n"
+        )
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["action"] == "focus_wait"
+        assert result["mission_title"] == ""
+        # DEEP is capped to implement under focus mode
+        assert result["autonomous_mode"] == "implement"
+        assert "focus" in result["decision_reason"].lower()
+
+    @patch("app.iteration_manager._filter_exploration_projects")
+    @patch("app.config.is_focus_mode", return_value=True)
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule", return_value=None)
+    def test_focus_mode_skips_exploration_filter(
+        self, mock_schedule, mock_focus, mock_refresh, mock_pick, mock_focus_mode,
+        mock_filter, instance_dir, koan_root, usage_state,
+    ):
+        """Focus mode should short-circuit before calling exploration filter."""
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text(
+            "Session (5hr) : 30% (reset in 3h)\nWeekly (7 day) : 20% (Resets in 5d)\n"
+        )
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["action"] == "focus_wait"
+        mock_filter.assert_not_called()
+
+    @patch("app.config.is_focus_mode", return_value=True)
+    @patch("app.pick_mission.pick_mission", return_value="koan:Fix auth bug")
+    @patch("app.usage_estimator.cmd_refresh")
+    def test_queued_mission_still_runs_under_focus(
+        self, mock_refresh, mock_pick, mock_focus_mode,
+        instance_dir, koan_root, usage_state,
+    ):
+        """Focus mode never blocks an already-queued mission."""
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text(
+            "Session (5hr) : 30% (reset in 3h)\nWeekly (7 day) : 20% (Resets in 5d)\n"
+        )
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["action"] == "mission"
+        assert result["mission_title"] == "Fix auth bug"
+        assert result["project_name"] == "koan"
+        # Mode still capped at implement (ample budget)
+        assert result["autonomous_mode"] == "implement"
+
+    @patch("app.config.is_focus_mode", return_value=True)
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule", return_value=None)
+    @patch("random.randint", return_value=0)  # contemplation would normally fire
+    def test_focus_mode_blocks_contemplative(
+        self, mock_rand, mock_schedule, mock_focus, mock_refresh, mock_pick,
+        mock_focus_mode, instance_dir, koan_root, usage_state,
+    ):
+        """Focus mode prevents contemplative action even on a 0-roll."""
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text(
+            "Session (5hr) : 30% (reset in 3h)\nWeekly (7 day) : 20% (Resets in 5d)\n"
+        )
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        assert result["action"] == "focus_wait"
+
+    @patch("app.iteration_manager._inject_recurring")
+    @patch("app.config.is_focus_mode", return_value=True)
+    @patch("app.pick_mission.pick_mission", return_value="")
+    @patch("app.usage_estimator.cmd_refresh")
+    @patch("app.iteration_manager._check_focus", return_value=None)
+    @patch("app.iteration_manager._check_schedule", return_value=None)
+    def test_recurring_injection_still_runs(
+        self, mock_schedule, mock_focus, mock_refresh, mock_pick, mock_focus_mode,
+        mock_recurring, instance_dir, koan_root, usage_state,
+    ):
+        """Recurring missions are still injected under focus mode."""
+        mock_recurring.return_value = ["recurring: Daily housekeeping"]
+        usage_md = instance_dir / "usage.md"
+        usage_md.write_text(
+            "Session (5hr) : 30% (reset in 3h)\nWeekly (7 day) : 20% (Resets in 5d)\n"
+        )
+
+        result = plan_iteration(
+            instance_dir=str(instance_dir),
+            koan_root=str(koan_root),
+            run_num=2,
+            count=1,
+            projects=PROJECTS_LIST,
+            last_project="koan",
+            usage_state_path=str(usage_state),
+        )
+
+        mock_recurring.assert_called_once()
+        assert result["recurring_injected"] == ["recurring: Daily housekeeping"]
+
+
+class TestFocusModeConfigHelper:
+    """Tests for app.config.is_focus_mode()."""
+
+    def test_env_var_true(self, monkeypatch):
+        from app.config import is_focus_mode
+        monkeypatch.setenv("KOAN_FOCUS", "1")
+        assert is_focus_mode() is True
+
+    def test_env_var_false_overrides_config(self, monkeypatch):
+        """Env var false should override config.yaml = true."""
+        from app.config import is_focus_mode
+        monkeypatch.setenv("KOAN_FOCUS", "0")
+        with patch("app.config._load_config", return_value={"focus": True}):
+            assert is_focus_mode() is False
+
+    def test_config_true_when_env_unset(self, monkeypatch):
+        from app.config import is_focus_mode
+        monkeypatch.delenv("KOAN_FOCUS", raising=False)
+        with patch("app.config._load_config", return_value={"focus": True}):
+            assert is_focus_mode() is True
+
+    def test_default_false(self, monkeypatch):
+        from app.config import is_focus_mode
+        monkeypatch.delenv("KOAN_FOCUS", raising=False)
+        with patch("app.config._load_config", return_value={}):
+            assert is_focus_mode() is False
+
+
+class TestFocusModePromptOverride:
+    """Tests for prompt_builder focus mode override."""
+
+    def test_github_section_replaced_when_focus(self):
+        from app.prompt_builder import _apply_focus_mode_override
+        sample = (
+            "# Mission\n\n"
+            "## GitHub Issue Selection (IMPLEMENT and DEEP modes)\n\n"
+            "When you choose to work on a GitHub issue...\n"
+            "more text here\n\n"
+            "# Autonomy\n\n"
+            "some autonomy content\n"
+        )
+        with patch("app.prompt_builder._is_focus_mode", return_value=True):
+            result = _apply_focus_mode_override(sample)
+        assert "Focus Mode" in result
+        assert "GitHub Issue Selection" not in result
+        assert "# Autonomy" in result  # downstream content preserved
+
+    def test_github_section_intact_when_not_focus(self):
+        from app.prompt_builder import _apply_focus_mode_override
+        sample = (
+            "## GitHub Issue Selection (IMPLEMENT and DEEP modes)\n\n"
+            "content\n\n"
+            "# Autonomy\n"
+        )
+        with patch("app.prompt_builder._is_focus_mode", return_value=False):
+            result = _apply_focus_mode_override(sample)
+        assert result == sample

@@ -479,6 +479,33 @@ class TestInterruptibleSleep:
         )
         assert result == "mission"
 
+    def test_wake_on_mission_false_ignores_pending(self, tmp_path):
+        """With wake_on_mission=False, pending missions must NOT wake the sleep.
+
+        Used by branch_saturated_wait: the pending missions are the blocker, so
+        waking on them would tight-loop back into the same blocked state.
+        """
+        from app.loop_manager import interruptible_sleep
+
+        koan_root = str(tmp_path / "root")
+        instance = str(tmp_path / "instance")
+        os.makedirs(koan_root, exist_ok=True)
+        os.makedirs(instance, exist_ok=True)
+
+        missions_md = Path(instance) / "missions.md"
+        missions_md.write_text("## Pending\n\n- Blocked mission\n\n## Done\n")
+
+        # Very short interval so the test completes quickly but still goes
+        # through the full sleep cycle without returning "mission".
+        result = interruptible_sleep(
+            interval=1,
+            koan_root=koan_root,
+            instance_dir=instance,
+            check_interval=1,
+            wake_on_mission=False,
+        )
+        assert result == "timeout"
+
     def test_priority_stop_over_pause(self, tmp_path):
         from app.loop_manager import interruptible_sleep
 
@@ -1117,8 +1144,10 @@ class TestDrainNotifications:
             result = process_github_notifications(str(tmp_path), str(tmp_path))
 
         assert result == 1  # 1 actionable processed
-        # Drain notification should also be marked as read
-        mock_mark.assert_called_once_with("400")
+        # Both actionable and drain notifications should be marked as read
+        assert mock_mark.call_count == 2
+        mock_mark.assert_any_call("1")    # actionable
+        mock_mark.assert_any_call("400")  # drain
 
 
 # --- Test _normalize_github_url ---

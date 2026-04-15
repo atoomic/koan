@@ -658,6 +658,11 @@ class TestHandlerCleanFormat:
             lambda url: ("sukria", "koan", "42"),
         )
 
+        monkeypatch.setattr(
+            "app.github_skill_helpers.is_own_pr",
+            lambda owner, repo, pr: (True, "koan/some-branch"),
+        )
+
         from skills.core.rebase.handler import handle
         ctx = self._make_ctx(
             args="https://github.com/sukria/koan/pull/42",
@@ -1022,7 +1027,11 @@ class TestValidateSkillArgs:
     def test_implement_no_url(self):
         err = validate_skill_args("implement", "fix the login bug")
         assert err is not None
-        assert "/implement requires a GitHub issue or PR URL" in err
+        assert "/implement requires" in err
+
+    def test_implement_jira_url_accepted(self):
+        """Jira URLs are valid for /implement."""
+        assert validate_skill_args("implement", "https://org.atlassian.net/browse/PROJ-123") is None
 
     def test_implement_pr_url_accepted(self):
         """PR URLs are valid for /implement — GitHub issues API works for PRs."""
@@ -1084,7 +1093,11 @@ class TestValidateSkillArgs:
     def test_fix_no_url(self):
         err = validate_skill_args("fix", "fix the login bug")
         assert err is not None
-        assert "/fix requires a GitHub issue or PR URL" in err
+        assert "/fix requires" in err
+
+    def test_fix_jira_url_accepted(self):
+        """Jira URLs are valid for /fix."""
+        assert validate_skill_args("fix", "https://org.atlassian.net/browse/CPANEL-52372") is None
 
     def test_fix_pr_url_accepted(self):
         """PR URLs are valid for /fix — same as /implement."""
@@ -1095,6 +1108,85 @@ class TestValidateSkillArgs:
             "fix",
             "https://github.com/Anantys/investmindr/issues/42 backend only",
         ) is None
+
+    # --- Alias validation coverage (#1097) ---
+
+    def test_deeplan_alias_always_valid(self):
+        """deeplan alias resolves to deepplan — no URL requirement."""
+        assert validate_skill_args("deeplan", "some idea") is None
+
+    def test_claude_alias_always_valid(self):
+        """claude alias resolves to claudemd — no URL requirement."""
+        assert validate_skill_args("claude", "koan") is None
+
+    def test_claude_dot_md_alias_always_valid(self):
+        assert validate_skill_args("claude.md", "koan") is None
+
+    def test_claude_underscore_md_alias_always_valid(self):
+        assert validate_skill_args("claude_md", "koan") is None
+
+    def test_secu_alias_always_valid(self):
+        """secu alias resolves to security_audit — no URL requirement."""
+        assert validate_skill_args("secu", "check auth module") is None
+
+    def test_security_alias_always_valid(self):
+        assert validate_skill_args("security", "check auth module") is None
+
+    def test_security_audit_always_valid(self):
+        assert validate_skill_args("security_audit", "check auth module") is None
+
+
+# ---------------------------------------------------------------------------
+# _resolve_canonical and _COMMAND_ALIASES
+# ---------------------------------------------------------------------------
+
+class TestResolveCanonical:
+    """Tests for alias resolution."""
+
+    def test_alias_resolves(self):
+        from app.skill_dispatch import _resolve_canonical
+        assert _resolve_canonical("deeplan") == "deepplan"
+        assert _resolve_canonical("claude") == "claudemd"
+        assert _resolve_canonical("claude.md") == "claudemd"
+        assert _resolve_canonical("claude_md") == "claudemd"
+        assert _resolve_canonical("security") == "security_audit"
+        assert _resolve_canonical("secu") == "security_audit"
+
+    def test_canonical_unchanged(self):
+        from app.skill_dispatch import _resolve_canonical
+        assert _resolve_canonical("plan") == "plan"
+        assert _resolve_canonical("rebase") == "rebase"
+        assert _resolve_canonical("claudemd") == "claudemd"
+
+    def test_unknown_unchanged(self):
+        from app.skill_dispatch import _resolve_canonical
+        assert _resolve_canonical("nonexistent") == "nonexistent"
+
+
+class TestCommandAliasesConsistency:
+    """Verify _COMMAND_ALIASES entries are consistent with _SKILL_RUNNERS."""
+
+    def test_all_aliases_in_skill_runners(self):
+        from app.skill_dispatch import _COMMAND_ALIASES, _SKILL_RUNNERS
+        for alias in _COMMAND_ALIASES:
+            assert alias in _SKILL_RUNNERS, f"alias '{alias}' missing from _SKILL_RUNNERS"
+
+    def test_alias_runner_matches_canonical(self):
+        from app.skill_dispatch import (
+            _COMMAND_ALIASES, _SKILL_RUNNERS, _CANONICAL_RUNNERS,
+        )
+        for alias, canonical in _COMMAND_ALIASES.items():
+            assert _SKILL_RUNNERS[alias] == _CANONICAL_RUNNERS[canonical], (
+                f"alias '{alias}' runner doesn't match canonical '{canonical}'"
+            )
+
+    def test_no_alias_in_canonical_runners(self):
+        """Aliases should not appear in _CANONICAL_RUNNERS."""
+        from app.skill_dispatch import _COMMAND_ALIASES, _CANONICAL_RUNNERS
+        for alias in _COMMAND_ALIASES:
+            assert alias not in _CANONICAL_RUNNERS, (
+                f"alias '{alias}' should not be in _CANONICAL_RUNNERS"
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,8 @@ from app.github import (
     batch_count_open_prs, fetch_issue_state, fetch_issue_with_comments,
     detect_parent_repo, resolve_target_repo, _upstream_remote_repo,
     _parse_remote_url,
+    sanitize_github_comment,
+    find_bot_comment,
 )
 import app.github as github_module
 
@@ -934,3 +936,139 @@ class TestCachedCountOpenPrs:
         mock_time.return_value = 1299.0
         cached_count_open_prs("owner/repo", "koan-bot")
         mock_count.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# sanitize_github_comment
+# ---------------------------------------------------------------------------
+
+class TestSanitizeGithubComment:
+    def test_bare_lowercase(self):
+        assert sanitize_github_comment("Hi @copilot please review") == "Hi `@copilot` please review"
+
+    def test_bare_capitalized(self):
+        assert sanitize_github_comment("Hi @Copilot please review") == "Hi `@Copilot` please review"
+
+    def test_bare_uppercase(self):
+        assert sanitize_github_comment("@COPILOT look at this") == "`@COPILOT` look at this"
+
+    def test_already_escaped_not_double_escaped(self):
+        assert sanitize_github_comment("`@copilot` is already escaped") == "`@copilot` is already escaped"
+
+    def test_no_partial_match(self):
+        assert sanitize_github_comment("@copilotx is not copilot") == "@copilotx is not copilot"
+
+    def test_no_mention(self):
+        assert sanitize_github_comment("no mention here") == "no mention here"
+
+    def test_empty_string(self):
+        assert sanitize_github_comment("") == ""
+
+    def test_none_passthrough(self):
+        assert sanitize_github_comment(None) is None
+
+    def test_multiple_occurrences(self):
+        result = sanitize_github_comment("@copilot and @Copilot and @COPILOT")
+        assert result == "`@copilot` and `@Copilot` and `@COPILOT`"
+
+    def test_in_quote_header(self):
+        text = "> @copilot: can you fix this?\n\nSure, here's how."
+        result = sanitize_github_comment(text)
+        assert "`@copilot`" in result
+        assert "@copilot:" not in result.split("`@copilot`")[0]
+
+    def test_bare_dependabot(self):
+        assert sanitize_github_comment("Thanks @dependabot") == "Thanks `@dependabot`"
+
+    def test_bare_dependabot_capitalized(self):
+        assert sanitize_github_comment("@Dependabot updated") == "`@Dependabot` updated"
+
+    def test_dependabot_already_escaped(self):
+        assert sanitize_github_comment("`@dependabot` is fine") == "`@dependabot` is fine"
+
+    def test_dependabot_no_partial_match(self):
+        assert sanitize_github_comment("@dependabot-preview is different") == "@dependabot-preview is different"
+
+    def test_bare_github_actions(self):
+        assert sanitize_github_comment("See @github-actions run") == "See `@github-actions` run"
+
+    def test_github_actions_capitalized(self):
+        assert sanitize_github_comment("@GitHub-Actions failed") == "`@GitHub-Actions` failed"
+
+    def test_github_actions_already_escaped(self):
+        assert sanitize_github_comment("`@github-actions` ok") == "`@github-actions` ok"
+
+    def test_mixed_bots(self):
+        text = "@copilot and @dependabot and @github-actions"
+        result = sanitize_github_comment(text)
+        assert result == "`@copilot` and `@dependabot` and `@github-actions`"
+
+
+# ---------------------------------------------------------------------------
+# find_bot_comment
+# ---------------------------------------------------------------------------
+
+class TestFindBotComment:
+    """Tests for find_bot_comment — searches PR issue comments for a marker."""
+
+    MARKER = "<!-- koan-summary -->"
+
+    def _make_comment(self, comment_id, body, user="koan-bot"):
+        return json.dumps({"id": comment_id, "body": body, "user": user})
+
+    @patch("app.github.run_gh")
+    def test_returns_comment_when_marker_found(self, mock_gh):
+        raw = self._make_comment(101, f"{self.MARKER}\n## Review\n\nLooks good.")
+        mock_gh.return_value = raw
+        result = find_bot_comment("owner", "repo", 42, self.MARKER)
+        assert result is not None
+        assert result["id"] == 101
+        assert self.MARKER in result["body"]
+
+    @patch("app.github.run_gh")
+    def test_returns_none_when_marker_absent(self, mock_gh):
+        raw = self._make_comment(101, "This comment has no koan marker.")
+        mock_gh.return_value = raw
+        result = find_bot_comment("owner", "repo", 42, self.MARKER)
+        assert result is None
+
+    @patch("app.github.run_gh")
+    def test_returns_first_match_when_multiple_comments_match(self, mock_gh):
+        """When multiple comments have the marker, first one wins."""
+        line1 = self._make_comment(101, f"{self.MARKER} first match")
+        line2 = self._make_comment(202, f"{self.MARKER} second match")
+        mock_gh.return_value = f"{line1}\n{line2}"
+        result = find_bot_comment("owner", "repo", 42, self.MARKER)
+        assert result["id"] == 101
+
+    @patch("app.github.run_gh")
+    def test_returns_none_on_empty_response(self, mock_gh):
+        mock_gh.return_value = ""
+        result = find_bot_comment("owner", "repo", 42, self.MARKER)
+        assert result is None
+
+    @patch("app.github.run_gh", side_effect=RuntimeError("API error"))
+    def test_returns_none_on_api_error(self, mock_gh):
+        result = find_bot_comment("owner", "repo", 42, self.MARKER)
+        assert result is None
+
+    @patch("app.github.run_gh")
+    def test_calls_correct_endpoint(self, mock_gh):
+        mock_gh.return_value = ""
+        find_bot_comment("myowner", "myrepo", 99, self.MARKER)
+        mock_gh.assert_called_once_with(
+            "api",
+            "repos/myowner/myrepo/issues/99/comments",
+            "--paginate",
+            "--jq", r'.[] | {id: .id, body: .body, user: .user.login}',
+            timeout=30,
+        )
+
+    @patch("app.github.run_gh")
+    def test_skips_malformed_json_lines(self, mock_gh):
+        """Malformed JSON lines are skipped; valid ones are still searched."""
+        good = self._make_comment(55, f"no marker here")
+        marked = self._make_comment(66, f"{self.MARKER} found it")
+        mock_gh.return_value = f"{{not valid json}}\n{good}\n{marked}"
+        result = find_bot_comment("owner", "repo", 42, self.MARKER)
+        assert result["id"] == 66
