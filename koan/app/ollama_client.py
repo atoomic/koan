@@ -11,7 +11,7 @@ import json
 import socket
 import urllib.request
 import urllib.error
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 DEFAULT_HOST = "http://localhost:11434"
 
@@ -55,12 +55,8 @@ def _api_request(
 
 def is_server_running(host: str = DEFAULT_HOST, timeout: int = 3) -> bool:
     """Check if the Ollama server is responding."""
-    try:
-        req = urllib.request.Request(f"{host.rstrip('/')}/", method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status == 200
-    except (OSError, urllib.error.URLError):
-        return False
+    ok, _ = _api_request("/", host=host, timeout=timeout)
+    return ok
 
 
 def get_version(host: str = DEFAULT_HOST, timeout: int = 3) -> Optional[str]:
@@ -89,21 +85,24 @@ def show_model(name: str, host: str = DEFAULT_HOST, timeout: int = 10) -> Tuple[
     Returns (success, model_info_dict) with keys like 'modelfile',
     'parameters', 'template', 'details' (family, parameter_size, etc.).
     """
+    _validate_model_name(name)
     return _api_request("/api/show", method="POST", body={"name": name},
                         host=host, timeout=timeout)
 
 
-def pull_model(name: str, host: str = DEFAULT_HOST, timeout: int = 600) -> Tuple[bool, str]:
+def pull_model(name: str, host: str = DEFAULT_HOST, timeout: int = 1800) -> Tuple[bool, str]:
     """Pull (download) a model.
 
     Uses the non-streaming API (stream=false).  This means the HTTP
     request blocks until the entire download completes (up to
-    ``timeout`` seconds, default 10 minutes).  There is no progress
+    ``timeout`` seconds, default 30 minutes).  There is no progress
     feedback during the download — the caller should inform the user
-    that the operation may take a while for large models.
+    that the operation may take a while for large models (70B+ can
+    exceed 10 minutes on slower connections).
 
     Returns (success, status_message).
     """
+    _validate_model_name(name)
     ok, data = _api_request(
         "/api/pull", method="POST",
         body={"name": name, "stream": False},
@@ -120,6 +119,7 @@ def delete_model(name: str, host: str = DEFAULT_HOST, timeout: int = 30) -> Tupl
 
     Returns (success, message).
     """
+    _validate_model_name(name)
     ok, data = _api_request(
         "/api/delete", method="DELETE",
         body={"name": name},
@@ -141,8 +141,19 @@ def list_running(host: str = DEFAULT_HOST, timeout: int = 5) -> Tuple[bool, Any]
     return ok, data
 
 
+def _validate_model_name(name: str) -> None:
+    """Raise ValueError if model name is clearly invalid."""
+    if not name or not name.strip():
+        raise ValueError("Model name must not be empty")
+    if any(c in name for c in "\n\r\t"):
+        raise ValueError(f"Model name contains invalid characters: {name!r}")
+
+
 def format_model_size(size_bytes: int) -> str:
-    """Format byte count as human-readable size (e.g. '4.7 GB')."""
+    """Format byte count as human-readable size (e.g. '4.7 GB').
+
+    Uses 1000-based (SI) units to match ``ollama list`` output.
+    """
     if size_bytes >= 1_000_000_000:
         return f"{size_bytes / 1_000_000_000:.1f} GB"
     if size_bytes >= 1_000_000:
