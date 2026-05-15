@@ -566,6 +566,23 @@ def get_analysis_max_turns() -> int:
     return _safe_int(config.get("analysis_max_turns", 75), 75)
 
 
+def get_contemplative_max_turns() -> int:
+    """Get max turns for contemplative reflection sessions.
+
+    Contemplative prompts read several memory files (soul.md, summary.md,
+    personality-evolution.md, learnings.md) and write output, requiring at
+    least 6-7 tool calls.  The previous hardcoded value of 10 was too tight
+    for projects with complex memory state.
+
+    Config key: contemplative_max_turns (default: 15).
+
+    Returns:
+        Maximum number of turns.
+    """
+    config = _load_config()
+    return _safe_int(config.get("contemplative_max_turns", 15), 15)
+
+
 def get_post_mission_timeout() -> int:
     """Get timeout in seconds for the post-mission pipeline.
 
