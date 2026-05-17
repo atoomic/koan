@@ -55,7 +55,7 @@ is no process to receive a restart signal.
 
 ## State files
 
-Both files live under `$KOAN_ROOT/instance/`:
+Both files live under `$KOAN_ROOT/`:
 
 | File | Written by | Read by | Purpose |
 |---|---|---|---|

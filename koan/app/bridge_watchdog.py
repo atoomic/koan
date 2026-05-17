@@ -207,10 +207,16 @@ def check_and_heal_bridge(koan_root: Path) -> Optional[str]:
 
     state.last_action_ts = now
     state.last_tier = next_tier
-    if next_tier == 3:
+    if next_tier == 3 and "ok=True" not in action_msg:
         # Tier 3 is the last automated recourse — count it as a failure
-        # of the cooperative path so the breaker can trip.
+        # of the cooperative path so the breaker can trip.  But if the
+        # relaunch succeeded, don't increment: the new bridge needs a
+        # moment to write its version stamp before the next probe.
         state.consecutive_failures += 1
+    elif next_tier == 3:
+        # Successful relaunch — reset the failure counter so a brief
+        # stamp-write race doesn't accumulate toward the breaker.
+        state.consecutive_failures = 0
     _save_state(state_path, state)
 
     return f"Bridge self-heal tier {next_tier}: {action_msg}. status: {status.summary()}"
@@ -326,10 +332,16 @@ def _read_bridge_pid(koan_root: Path) -> Optional[int]:
 
 
 def _is_process_alive(pid: int) -> bool:
-    """Cheap liveness check (signal 0).  Mirrors ``pid_manager._is_process_alive``
-    but without the zombie/proc lookup — for the watchdog's purposes a
-    zombie is "not actually running" and we'll catch it on the next
-    heartbeat check anyway."""
+    """Cheap liveness check (signal 0).
+
+    This intentionally does NOT detect zombies (unlike pid_manager's
+    version which checks /proc/<pid>/status).  A zombie bridge passes
+    kill(pid, 0) and would therefore walk through tiers 1→2→3 instead
+    of jumping straight to tier 3.  This is acceptable: the heartbeat
+    will go stale within BRIDGE_HEARTBEAT_STALE_S and trigger recovery
+    anyway, adding at most ~2 cooldown cycles (~90 s) of extra latency.
+    The simpler check avoids platform-specific /proc parsing.
+    """
     try:
         os.kill(pid, 0)
     except (OSError, ProcessLookupError):
