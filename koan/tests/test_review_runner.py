@@ -986,10 +986,11 @@ class TestRunClaudeReview:
 
 class TestMainCli:
     @patch("app.review_runner.run_review")
-    def test_valid_pr_url(self, mock_run):
+    def test_valid_pr_url(self, mock_run, monkeypatch):
         """CLI parses PR URL and calls run_review."""
         from app.review_runner import main
 
+        monkeypatch.delenv("KOAN_ROOT", raising=False)
         mock_run.return_value = (True, "Review posted.", None)
         exit_code = main([
             "https://github.com/owner/repo/pull/42",
