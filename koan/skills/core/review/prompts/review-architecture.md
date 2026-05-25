@@ -12,6 +12,8 @@ respect boundaries, manage dependencies, and uphold design principles.
 ### PR Description
 
 {BODY}
+
+{ISSUE_CONTEXT}
 {PROJECT_MEMORY}
 ---
 

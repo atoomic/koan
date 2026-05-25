@@ -13,6 +13,8 @@ comments, docstrings, and inline documentation introduced or modified in this di
 
 {BODY}
 
+{ISSUE_CONTEXT}
+
 ---
 
 ## Current Diff

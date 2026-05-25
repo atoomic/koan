@@ -1005,6 +1005,8 @@ class TestMainCli:
             project_name=None,
             errors=False,
             comments=False,
+            global_config=None,
+            projects_config=None,
         )
 
     @patch("app.review_runner.run_review")
