@@ -1,7 +1,10 @@
 name: Request Review
 on:
-  pull_request:
-    types: [opened]
+  pull_request
+
+permissions:
+  issues: write
+  pull-requests: write
 
 jobs:
   assign:
