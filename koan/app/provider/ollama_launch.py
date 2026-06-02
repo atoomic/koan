@@ -49,6 +49,7 @@ class OllamaLaunchProvider(CLIProvider):
     """
 
     name = "ollama-launch"
+    uses_ollama = True
 
     def _get_config(self) -> dict:
         """Get ollama_launch config section from config.yaml."""
@@ -207,7 +208,7 @@ class OllamaLaunchProvider(CLIProvider):
         Users can override by setting OLLAMA_NO_CLOUD=0 in their env.
         """
         env: Dict[str, str] = {}
-        if not os.environ.get("OLLAMA_NO_CLOUD"):
+        if "OLLAMA_NO_CLOUD" not in os.environ:
             env["OLLAMA_NO_CLOUD"] = "1"
         return env
 

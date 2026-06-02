@@ -12,8 +12,6 @@ Only works when the configured CLI provider uses Ollama
 (local, ollama, or ollama-launch).
 """
 
-OLLAMA_PROVIDERS = ("local", "ollama", "ollama-launch")
-
 HELP_TEXT = """Ollama commands:
 /ollama — Server status
 /ollama list — Available models
@@ -21,6 +19,15 @@ HELP_TEXT = """Ollama commands:
 /ollama remove <name> — Delete model
 /ollama show <name> — Model details
 /ollama help — This message"""
+
+
+def _is_ollama_provider() -> bool:
+    """Check if the configured CLI provider uses Ollama."""
+    try:
+        from app.provider import is_ollama_provider
+        return is_ollama_provider()
+    except (ImportError, AttributeError):
+        return False
 
 
 def _get_provider_name() -> str:
@@ -34,8 +41,8 @@ def _get_provider_name() -> str:
 
 def handle(ctx):
     """Dispatch to the appropriate subcommand."""
-    provider = _get_provider_name()
-    if provider not in OLLAMA_PROVIDERS:
+    if not _is_ollama_provider():
+        provider = _get_provider_name()
         return f"Ollama commands require an Ollama-based provider (current: {provider})"
 
     args = (ctx.args or "").strip()
@@ -72,7 +79,7 @@ def _handle_status() -> str:
     if version:
         lines.append(f"  Version: {version}")
 
-    lines.append(f"  Status: running")
+    lines.append("  Status: running")
 
     # Available models count
     ok, models = list_models()

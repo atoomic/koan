@@ -583,8 +583,17 @@ def _ollama_http_ready() -> bool:
 
 
 def _needs_ollama(provider: str) -> bool:
-    """Return True if the provider requires ollama serve."""
-    return provider in ("local", "ollama")
+    """Return True if the provider requires a manually started ollama serve.
+
+    ollama-launch manages its own server lifecycle, so it returns False.
+    """
+    if provider == "ollama-launch":
+        return False
+    try:
+        from app.provider import is_ollama_provider
+        return is_ollama_provider(provider)
+    except (ImportError, KeyError):
+        return provider in ("local", "ollama")
 
 
 def _show_startup_banner(koan_root: Path, provider: str) -> None:

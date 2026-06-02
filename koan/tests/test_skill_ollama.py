@@ -13,7 +13,6 @@ from skills.core.ollama.handler import (
     _handle_remove,
     _handle_show,
     HELP_TEXT,
-    OLLAMA_PROVIDERS,
 )
 
 
@@ -34,30 +33,26 @@ def _ctx(args="", provider="ollama-launch"):
 
 class TestProviderGate:
     def test_rejects_claude_provider(self):
-        with patch("skills.core.ollama.handler._get_provider_name", return_value="claude"):
+        with patch("skills.core.ollama.handler._is_ollama_provider", return_value=False), \
+             patch("skills.core.ollama.handler._get_provider_name", return_value="claude"):
             result = handle(_ctx())
         assert "require an Ollama-based provider" in result
         assert "claude" in result
 
     def test_rejects_copilot_provider(self):
-        with patch("skills.core.ollama.handler._get_provider_name", return_value="copilot"):
+        with patch("skills.core.ollama.handler._is_ollama_provider", return_value=False), \
+             patch("skills.core.ollama.handler._get_provider_name", return_value="copilot"):
             result = handle(_ctx())
         assert "require an Ollama-based provider" in result
 
     def test_accepts_local_provider(self):
-        with patch("skills.core.ollama.handler._get_provider_name", return_value="local"):
-            with patch("skills.core.ollama.handler._handle_status", return_value="ok"):
-                result = handle(_ctx())
-        assert result == "ok"
-
-    def test_accepts_ollama_provider(self):
-        with patch("skills.core.ollama.handler._get_provider_name", return_value="ollama"):
+        with patch("skills.core.ollama.handler._is_ollama_provider", return_value=True):
             with patch("skills.core.ollama.handler._handle_status", return_value="ok"):
                 result = handle(_ctx())
         assert result == "ok"
 
     def test_accepts_ollama_launch_provider(self):
-        with patch("skills.core.ollama.handler._get_provider_name", return_value="ollama-launch"):
+        with patch("skills.core.ollama.handler._is_ollama_provider", return_value=True):
             with patch("skills.core.ollama.handler._handle_status", return_value="ok"):
                 result = handle(_ctx())
         assert result == "ok"
@@ -70,7 +65,7 @@ class TestProviderGate:
 
 class TestSubcommandDispatch:
     def _run(self, args, expected_handler):
-        with patch("skills.core.ollama.handler._get_provider_name", return_value="local"):
+        with patch("skills.core.ollama.handler._is_ollama_provider", return_value=True):
             with patch(f"skills.core.ollama.handler.{expected_handler}", return_value="dispatched") as mock_fn:
                 result = handle(_ctx(args))
         assert result == "dispatched"
@@ -117,12 +112,12 @@ class TestSubcommandDispatch:
         mock.assert_called_once_with("qwen3-coder")
 
     def test_help_subcommand(self):
-        with patch("skills.core.ollama.handler._get_provider_name", return_value="local"):
+        with patch("skills.core.ollama.handler._is_ollama_provider", return_value=True):
             result = handle(_ctx("help"))
         assert result == HELP_TEXT
 
     def test_unknown_subcommand(self):
-        with patch("skills.core.ollama.handler._get_provider_name", return_value="local"):
+        with patch("skills.core.ollama.handler._is_ollama_provider", return_value=True):
             result = handle(_ctx("foobar"))
         assert "Unknown subcommand: foobar" in result
         assert "Ollama commands:" in result
