@@ -43,6 +43,36 @@ ssh-add ~/.ssh/id_ed25519
 make start
 ```
 
+**Persisting a passphrase-protected key across reboots (macOS):** A plain
+`ssh-add` only lasts until the agent is emptied — and **the agent is wiped on
+every reboot**. If your key has a passphrase, after a reboot the agent is empty,
+interactive `git` falls back to prompting you for the passphrase, and Koan
+(non-interactive) fails with `Permission denied (publickey)`.
+
+To fix this permanently, store the passphrase in the macOS keychain and let SSH
+reload it automatically on every boot:
+
+```bash
+# 1. Configure SSH to read the passphrase from the keychain on demand
+cat >> ~/.ssh/config << 'EOF'
+Host github.com
+    AddKeysToAgent yes
+    UseKeychain yes
+    IdentityFile ~/.ssh/id_rsa
+EOF
+
+# 2. Load the key once, storing the passphrase in the keychain (prompts once)
+ssh-add --apple-use-keychain ~/.ssh/id_rsa
+
+# 3. Verify
+ssh-add -l            # key now listed
+ssh -T git@github.com # "Hi <user>! You've successfully authenticated..."
+```
+
+You only do this **once**. After every future reboot, `UseKeychain yes` reloads
+the key from the keychain automatically — no `ssh-add`, no passphrase prompt,
+and Koan works straight away.
+
 **Optional fallback key:** If you close the terminal, the agent may stop. To
 keep Koan working autonomously, set up a fallback key (see
 [Generating a Fallback Key](#generating-a-fallback-key) below).
@@ -261,6 +291,23 @@ SSH_AUTH_SOCK= ssh -T git@github.com
 3. **Test SSH:** `ssh -vT git@github.com` (verbose mode shows which keys are tried)
 4. **systemd:** Run `make ssh-forward` to refresh the agent socket
 5. **Docker:** Check the container logs for SSH auth messages
+
+### macOS: works until reboot, then "Permission denied (publickey)"
+
+Symptom: Koan ran fine for days, then after a reboot every git op fails with
+`Permission denied (publickey)`, while your own `git pull` prompts
+`Enter passphrase for key '~/.ssh/id_rsa'`.
+
+Cause: the SSH agent is wiped on reboot. Your passphrase-protected key is no
+longer loaded, so non-interactive Koan can't authenticate.
+
+Fix: store the passphrase in the macOS keychain so it reloads automatically —
+see [Persisting a passphrase-protected key across reboots](#scenario-1-macos--direct-run-simplest).
+
+```bash
+ssh-add -l                                  # empty? that's the problem
+ssh-add --apple-use-keychain ~/.ssh/id_rsa  # one-time, then automatic on reboot
+```
 
 ### SSH agent socket not forwarded
 
