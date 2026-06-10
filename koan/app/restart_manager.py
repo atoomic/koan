@@ -75,11 +75,13 @@ def request_restart(koan_root: str) -> None:
     silencing the other. The deprecated legacy ``.koan-restart`` is no
     longer written — nothing reads it.
     """
-    from app.utils import atomic_write
+    from app.utils import atomic_write, signal_lock
 
     body = f"restart requested at {time.strftime('%H:%M:%S')}\n"
     for fname in _WRITE_TARGETS:
-        atomic_write(Path(koan_root) / fname, body)
+        marker = Path(koan_root) / fname
+        with signal_lock(marker):
+            atomic_write(marker, body)
 
 
 def check_restart(
@@ -116,9 +118,12 @@ def clear_restart(koan_root: str, target: Optional[str] = None) -> None:
     A consumer should only clear its own marker so the other consumer
     can still observe the request on its next poll tick.
     """
-    path = _marker_path(koan_root, target)
-    with contextlib.suppress(FileNotFoundError):
-        os.remove(path)
+    from app.utils import signal_lock
+
+    marker = Path(_marker_path(koan_root, target))
+    with signal_lock(marker):
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(str(marker))
 
 
 def reexec_bridge() -> None:
