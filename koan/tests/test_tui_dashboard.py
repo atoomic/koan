@@ -321,6 +321,8 @@ def test_keepawake_toggle_lifecycle(tmp_path, monkeypatch):
         self._keepawake_finalize = None
 
     monkeypatch.setattr(tui.KoanDashboard, "_start_keepawake", fake_start)
+    monkeypatch.setattr("os.getpgid", lambda pid: pid)
+    monkeypatch.setattr("os.killpg", lambda pgid, sig: None)
     app = tui.KoanDashboard(tmp_path)
     # Exercise the helpers directly (actions need a mounted app for notify).
     assert app._keepawake_on() is False

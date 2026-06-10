@@ -617,14 +617,15 @@ class KoanDashboard(App):
         import subprocess
         if proc is None:
             return
-        with contextlib.suppress(ProcessLookupError, OSError):
-            # start_new_session=True means proc is a process group leader.
+        with contextlib.suppress(ProcessLookupError):
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         try:
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError, OSError):
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=1)
 
     def _start_keepawake(self) -> None:
         """Keep the machine awake (caffeinate on macOS, systemd-inhibit on Linux)."""
@@ -654,11 +655,13 @@ class KoanDashboard(App):
     def _stop_keepawake(self) -> None:
         if self._keepawake is None:
             return
-        self._finalize_keepawake(self._keepawake)
-        self._keepawake = None
-        if self._keepawake_finalize is not None:
-            self._keepawake_finalize.detach()
-            self._keepawake_finalize = None
+        try:
+            self._finalize_keepawake(self._keepawake)
+        finally:
+            self._keepawake = None
+            if self._keepawake_finalize is not None:
+                self._keepawake_finalize.detach()
+                self._keepawake_finalize = None
 
     def _keepawake_on(self) -> bool:
         return self._keepawake is not None and self._keepawake.poll() is None
