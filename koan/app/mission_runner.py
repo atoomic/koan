@@ -123,11 +123,8 @@ class _PipelineTracker:
         def _target():
             try:
                 container["result"] = fn(*args, **kwargs)
-            except Exception as exc:
+            except BaseException as exc:
                 if abandoned.is_set():
-                    # The caller already returned on timeout, so nobody will
-                    # read container["exc"]. Log it so the orphaned step's
-                    # failure stays observable in production.
                     _log_runner(
                         "error", f"{step} raised after being abandoned: {exc}"
                     )
@@ -141,8 +138,8 @@ class _PipelineTracker:
         while t.is_alive():
             t.join(timeout=1.0)
             if pipeline_expired.is_set():
-                elapsed = time.monotonic() - t0
                 abandoned.set()
+                elapsed = time.monotonic() - t0
                 self.record(step, "timeout", f"interrupted after {elapsed:.1f}s")
                 _log_runner(
                     "warn",
@@ -157,9 +154,15 @@ class _PipelineTracker:
             self._record_failure(step, t0, container["exc"])
             return None
 
+        if "result" not in container:
+            elapsed = time.monotonic() - t0
+            self.record(step, "fail", f"failed after {elapsed:.0f}s: no result or exception captured")
+            _log_runner("error", f"{step} finished without result or exception after {elapsed:.0f}s")
+            return None
+
         elapsed = time.monotonic() - t0
         self.record(step, "success", f"{elapsed:.1f}s")
-        return container.get("result")
+        return container["result"]
 
     def _record_failure(self, step, t0, exc):
         """Record a step failure with elapsed time and log it."""

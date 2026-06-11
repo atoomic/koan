@@ -2577,7 +2577,6 @@ class TestPipelineTracker:
         bg = threading.Thread(target=run_in_bg)
         bg.start()
         barrier.wait()  # wait for slow_fn to start
-        time.sleep(0.05)  # small buffer
         expired.set()
         bg.join(timeout=3.0)
         assert not bg.is_alive()
@@ -2601,6 +2600,18 @@ class TestPipelineTracker:
         assert tracker.steps["inline_step"]["status"] == "success"
         # Fast path runs in the caller's thread, not a spawned worker.
         assert seen["thread"] is threading.current_thread()
+
+    def test_run_step_interruptible_happy_path(self):
+        """Step completes normally through the threaded path when deadline is not set."""
+        from app.mission_runner import _PipelineTracker
+        import threading
+
+        tracker = _PipelineTracker()
+        expired = threading.Event()
+
+        result = tracker.run_step("threaded_ok", lambda: 42, pipeline_expired=expired)
+        assert result == 42
+        assert tracker.steps["threaded_ok"]["status"] == "success"
 
     def test_run_step_logs_exception_from_abandoned_thread(self):
         """An exception raised after the step is abandoned is logged, not lost."""
