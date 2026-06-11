@@ -3696,6 +3696,58 @@ class TestCreateGenericPr:
         assert result is None
         mock_submit.assert_not_called()
 
+    @patch("app.pr_submit.submit_draft_pr")
+    @patch("app.projects_config.resolve_base_branch", return_value="main")
+    @patch("app.git_utils.get_commit_subjects", return_value=["feat: add thing"])
+    @patch("app.git_utils.run_git_strict", side_effect=RuntimeError("network error"))
+    @patch("app.git_utils.get_current_branch", return_value="koan/add-thing")
+    def test_push_failure_raises(self, mock_branch, mock_git, mock_commits,
+                                 mock_base, mock_submit, tmp_path):
+        from app.mission_runner import _create_generic_pr
+
+        with pytest.raises(RuntimeError, match="Branch push failed"):
+            _create_generic_pr(
+                str(tmp_path / "instance"),
+                "proj",
+                str(tmp_path),
+                "Implement thing",
+                "claude",
+                "opus",
+                0,
+            )
+
+        mock_submit.assert_not_called()
+
+    @patch("app.utils.append_to_outbox")
+    @patch("app.pr_submit.submit_draft_pr", return_value="https://github.com/o/r/pull/1")
+    @patch("app.pr_footer.build_mission_footer", return_value="_footer_")
+    @patch("app.describe_pr.format_description", return_value="## Summary\n\n- ok")
+    @patch("app.describe_pr.describe_pr", return_value={"summary": ["ok"]})
+    @patch("app.projects_config.resolve_base_branch", return_value="main")
+    @patch("app.git_utils.run_git_strict", side_effect=[
+        RuntimeError("Everything up-to-date"), "abc1234",
+    ])
+    @patch("app.git_utils.get_commit_subjects", return_value=["feat: add thing"])
+    @patch("app.git_utils.get_current_branch", return_value="koan/add-thing")
+    def test_push_already_up_to_date_continues(
+        self, mock_branch, mock_commits, mock_git, mock_base, mock_describe,
+        mock_format, mock_footer, mock_submit, mock_outbox, tmp_path
+    ):
+        from app.mission_runner import _create_generic_pr
+
+        result = _create_generic_pr(
+            str(tmp_path / "instance"),
+            "proj",
+            str(tmp_path),
+            "Implement thing",
+            "claude",
+            "opus",
+            0,
+        )
+
+        assert result == "https://github.com/o/r/pull/1"
+        mock_submit.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # _maybe_queue_autoreview

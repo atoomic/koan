@@ -1015,7 +1015,11 @@ def _create_generic_pr(
     try:
         run_git_strict("push", "-u", "origin", branch, cwd=project_path, timeout=120)
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
-        _log_runner("warning", f"Generic PR branch push failed or already done: {exc}")
+        err_lower = str(exc).lower()
+        if "everything up-to-date" in err_lower or "already exists" in err_lower:
+            _log_runner("debug", f"Generic PR branch already pushed: {exc}")
+        else:
+            raise RuntimeError(f"Branch push failed: {exc}") from exc
 
     title_source = (mission_title or "").strip() or commits[0]
     pr_title = title_source.replace("\n", " ")[:70].rstrip() or commits[0][:70]
@@ -1056,19 +1060,19 @@ def _create_generic_pr(
     )
     if not pr_url:
         raise RuntimeError("PR submission returned no URL")
-    if pr_url:
-        try:
-            from app.notify import NotificationPriority
-            from app.utils import append_to_outbox
 
-            outbox_path = Path(instance_dir) / "outbox.md"
-            append_to_outbox(
-                outbox_path,
-                f"📬 [{project_name}] Draft PR created: {pr_url}\n",
-                priority=NotificationPriority.INFO,
-            )
-        except Exception as exc:
-            _log_runner("error", f"Generic PR outbox notification failed: {exc}")
+    try:
+        from app.notify import NotificationPriority
+        from app.utils import append_to_outbox
+
+        outbox_path = Path(instance_dir) / "outbox.md"
+        append_to_outbox(
+            outbox_path,
+            f"📬 [{project_name}] Draft PR created: {pr_url}\n",
+            priority=NotificationPriority.INFO,
+        )
+    except Exception as exc:
+        _log_runner("error", f"Generic PR outbox notification failed: {exc}")
     return pr_url
 
 
