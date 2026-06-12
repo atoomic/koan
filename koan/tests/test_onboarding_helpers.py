@@ -85,3 +85,32 @@ def test_create_instance_and_env_with_explicit_root(tmp_path):
     assert create_env_file(tmp_path) is True
     assert (tmp_path / "instance" / "config.yaml").exists()
     assert (tmp_path / ".env").read_text() == "# env\n"
+
+
+def test_reset_missions_file_overwrites_stale_missions(tmp_path):
+    from app.onboarding_helpers import reset_missions_file
+
+    # Set up instance.example with clean missions
+    ie = tmp_path / "instance.example"
+    ie.mkdir()
+    clean = "# Missions\n\n## Pending\n\n## In Progress\n\n## Done\n"
+    (ie / "missions.md").write_text(clean)
+
+    # Set up instance with stale missions
+    inst = tmp_path / "instance"
+    inst.mkdir()
+    (inst / "missions.md").write_text(
+        "# Missions\n\n## Pending\n\n- Old stale task\n\n## In Progress\n\n## Done\n"
+    )
+
+    assert reset_missions_file(tmp_path) is True
+    assert (inst / "missions.md").read_text() == clean
+
+
+def test_reset_missions_file_returns_false_without_template(tmp_path):
+    from app.onboarding_helpers import reset_missions_file
+
+    (tmp_path / "instance.example").mkdir()
+    (tmp_path / "instance").mkdir()
+
+    assert reset_missions_file(tmp_path) is False

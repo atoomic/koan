@@ -827,35 +827,44 @@ def _get_env_for_root(key: str) -> Optional[str]:
 
 
 def step_instance_init(state: OnboardingState) -> OnboardingState:
-    from app.onboarding_helpers import create_env_file, create_instance_dir, update_env_var
+    from app.onboarding_helpers import (
+        create_env_file,
+        create_instance_dir,
+        reset_missions_file,
+        update_env_var,
+    )
 
     instance_dir = _instance_dir()
     env_file = _env_file()
+    already_existed = instance_dir.exists() and env_file.exists()
 
-    if instance_dir.exists() and env_file.exists():
+    if already_existed:
         print(f"  {green('✓')} Instance directory and .env already exist.")
-        return state
+    else:
+        print("  Creating instance directory and .env file...")
 
-    print("  Creating instance directory and .env file...")
+        if not instance_dir.exists():
+            ok = create_instance_dir(KOAN_ROOT)
+            if ok:
+                print(f"  {green('✓')} Created instance/")
+            else:
+                print(f"  {red('✗')} Failed to create instance/ — is instance.example/ present?")
+                sys.exit(1)
 
-    if not instance_dir.exists():
-        ok = create_instance_dir(KOAN_ROOT)
-        if ok:
-            print(f"  {green('✓')} Created instance/")
-        else:
-            print(f"  {red('✗')} Failed to create instance/ — is instance.example/ present?")
-            sys.exit(1)
+        if not env_file.exists():
+            ok = create_env_file(KOAN_ROOT)
+            if ok:
+                print(f"  {green('✓')} Created .env")
+            else:
+                print(f"  {red('✗')} Failed to create .env — is env.example present?")
+                sys.exit(1)
 
-    if not env_file.exists():
-        ok = create_env_file(KOAN_ROOT)
-        if ok:
-            print(f"  {green('✓')} Created .env")
-        else:
-            print(f"  {red('✗')} Failed to create .env — is env.example present?")
-            sys.exit(1)
+        update_env_var("KOAN_ROOT", str(KOAN_ROOT), env_file)
+        print(f"  {green('✓')} Set KOAN_ROOT={KOAN_ROOT}")
 
-    update_env_var("KOAN_ROOT", str(KOAN_ROOT), env_file)
-    print(f"  {green('✓')} Set KOAN_ROOT={KOAN_ROOT}")
+    # Always reset missions.md to clean state — no stale missions after onboarding
+    if reset_missions_file(KOAN_ROOT):
+        print(f"  {green('✓')} Cleared missions.md (clean slate)")
 
     return state
 

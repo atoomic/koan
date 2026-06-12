@@ -147,6 +147,22 @@ def get_chat_id_from_updates(token: str) -> Optional[str]:
     return None
 
 
+def reset_missions_file(koan_root: Path | None = None) -> bool:
+    """Reset missions.md to the clean template from instance.example.
+
+    Ensures no stale pending or in-progress missions survive onboarding.
+    """
+    paths = paths_for_root(koan_root or KOAN_ROOT)
+    instance_dir = paths["instance_dir"]
+    instance_example = paths["instance_example"]
+    src = instance_example / "missions.md"
+    dst = instance_dir / "missions.md"
+    if not src.exists():
+        return False
+    shutil.copy(src, dst)
+    return True
+
+
 def has_instance(koan_root: Path) -> bool:
     """Return True when the private instance and env file exist."""
     paths = paths_for_root(koan_root)
