@@ -206,12 +206,33 @@ def scan_mission_text(text: str) -> GuardResult:
     return GuardResult(blocked=False)
 
 
-_CODE_FENCE_RE = re.compile(r'```[^\n]*\n.*?```', re.DOTALL)
-
-
 def _strip_code_fences(text: str) -> str:
-    """Remove markdown fenced code blocks before scanning for injection."""
-    return _CODE_FENCE_RE.sub('', text)
+    """Remove markdown fenced code blocks before scanning for injection.
+
+    Line-oriented parser that handles backtick and tilde fences of any length.
+    A closing fence must use the same character and be at least as long as the
+    opening fence (per CommonMark spec).
+    """
+    lines = text.split('\n')
+    result = []
+    fence_char = None
+    fence_len = 0
+    for line in lines:
+        stripped = line.lstrip()
+        if fence_char is None:
+            if stripped.startswith('```') or stripped.startswith('~~~'):
+                marker = stripped[0]
+                fence_char = marker
+                fence_len = len(stripped) - len(stripped.lstrip(marker))
+            else:
+                result.append(line)
+        else:
+            if stripped.startswith(fence_char * fence_len):
+                after_markers = stripped.lstrip(fence_char)
+                if not after_markers.strip():
+                    fence_char = None
+                    fence_len = 0
+    return '\n'.join(result)
 
 
 def scan_external_data(text: str) -> GuardResult:
@@ -221,8 +242,10 @@ def scan_external_data(text: str) -> GuardResult:
     processed even if suspicious. Instead, it returns warnings that callers
     can log for forensic visibility.
 
-    Markdown code fences are stripped before scanning to avoid false positives
-    from legitimate code examples (e.g. shell commands in PR descriptions).
+    Markdown code fences are stripped before scanning shell_injection patterns
+    to avoid false positives from legitimate code examples (e.g. shell commands
+    in PR descriptions). Non-shell categories (instruction_override, role_confusion,
+    etc.) still scan the original text for forensic visibility.
 
     Args:
         text: External content to scan (PR body, review comment, etc.)
@@ -234,15 +257,16 @@ def scan_external_data(text: str) -> GuardResult:
         return GuardResult(blocked=False)
 
     prose = _strip_code_fences(text)
-    if not prose.strip():
-        return GuardResult(blocked=False)
 
     warnings: List[str] = []
     matched_categories: List[str] = []
 
     for pattern_group in _ALL_PATTERN_GROUPS:
+        scan_text = prose if pattern_group is _SHELL_INJECTION_PATTERNS else text
+        if not scan_text.strip():
+            continue
         for pattern, description, category, _severity in pattern_group:
-            if pattern.search(prose):
+            if pattern.search(scan_text):
                 warnings.append(description)
                 if category not in matched_categories:
                     matched_categories.append(category)
