@@ -438,7 +438,7 @@ class TestBulkToggle:
         result = handle(ctx)
 
         assert "enabled" in result.lower()
-        assert "future projects" in result.lower()
+        assert "future-project default" in result.lower()
         config = _read_config(tmp_path)
         assert config["defaults"]["exploration"] is True
         assert config["projects"]["koan"]["exploration"] is True
@@ -456,7 +456,7 @@ class TestBulkToggle:
         result = handle(ctx)
 
         assert "disabled" in result.lower()
-        assert "future projects" in result.lower()
+        assert "future-project default" in result.lower()
         config = _read_config(tmp_path)
         assert config["projects"]["koan"]["exploration"] is False
         assert config["projects"]["backend"]["exploration"] is False
@@ -488,7 +488,7 @@ class TestBulkToggle:
         ctx = _make_ctx("explore", tmp_path, args="all")
         result = handle(ctx)
 
-        assert "future projects" in result.lower()
+        assert "future-project default" in result.lower()
         config = _read_config(tmp_path)
         assert config["defaults"]["exploration"] is True
 

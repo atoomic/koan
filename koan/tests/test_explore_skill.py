@@ -354,7 +354,7 @@ class TestSetAll:
              patch.object(handler, "_save_config") as mock_save:
             result = handler._set_all(str(tmp_path), config, projects, True)
 
-        assert "future projects" in result
+        assert "future-project default" in result
         mock_save.assert_called_once()
         assert config["defaults"]["exploration"] is True
 
@@ -398,7 +398,7 @@ class TestSetAll:
             result = handler._set_all(str(tmp_path), config, projects, False)
 
         assert "disabled" in result
-        assert "future projects" in result
+        assert "future-project default" in result
         mock_save.assert_called_once()
         assert config["defaults"]["exploration"] is False
 

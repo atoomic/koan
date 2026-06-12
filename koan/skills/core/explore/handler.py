@@ -155,10 +155,7 @@ def _set_all(koan_root, config, projects, enable):
             changed += 1
 
     # Set defaults.exploration so future projects inherit the choice
-    defaults = config.get("defaults")
-    if defaults is None:
-        config["defaults"] = {}
-        defaults = config["defaults"]
+    defaults = config.setdefault("defaults", {})
     default_changed = defaults.get("exploration") != enable
     defaults["exploration"] = enable
 
@@ -173,7 +170,7 @@ def _set_all(koan_root, config, projects, enable):
     if changed:
         parts.append(f"{changed} project(s)")
     if default_changed:
-        parts.append("default for future projects")
+        parts.append("future-project default")
     return f"🔭 Exploration {state} for {' + '.join(parts)}."
 
 
