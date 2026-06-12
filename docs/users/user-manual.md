@@ -426,13 +426,15 @@ The master tracking issue then synthesizes the set with three optional sections:
 
 Plans include a **File Map** (table of every file to create/modify/test), **checkbox steps** within each phase (write test → implement → verify → commit), and **actual code blocks** in steps that change code. Each code block is wrapped in a collapsible `<details>` block so the plan stays scannable — readers see step descriptions first and expand the code only when needed. A built-in self-review pass checks spec coverage, scans for placeholders, and verifies name consistency across phases before output. Multi-subsystem ideas trigger a scope check suggesting separate plans per subsystem.
 
-- **Usage:** `/plan <idea>`, `/plan <project> <idea>`, `/plan <issue-url>` (iterate on existing)
+- **Usage:** `/plan [--iterations N] <idea>`, `/plan <project> <idea>`, `/plan <issue-url>` (iterate on existing)
 - **GitHub @mention:** `@koan-bot /plan <idea>` on an issue
+- **Option:** `--iterations N` (1-5, default 1) — Run N rounds of critique+refine. A critic identifies gaps and contradictions after each generation, then the plan is regenerated with that feedback. Only the final iteration is posted. Cost scales linearly (~5× tokens at `--iterations 3`).
 
 <details>
 <summary>Use cases</summary>
 
 - `/plan Add WebSocket support for real-time notifications` — Get a phased plan before writing any code
+- `/plan --iterations 3 Add WebSocket support` — Generate a plan with 3 rounds of critic-driven refinement
 - `/plan https://github.com/org/repo/issues/42` — Iterate on an existing issue's plan
 - `/plan https://myorg.atlassian.net/browse/PROJ-123` — Iterate on a Jira issue's plan
 - `/plan https://myorg.atlassian.net/browse/PROJ-123 branch:main` — Iterate with an explicit base-branch hint

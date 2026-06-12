@@ -592,10 +592,14 @@ def _build_plan_cmd(
     instance_dir: str,
 ) -> List[str]:
     """Build plan_runner command."""
-    return _build_url_context_cmd(
+    iterations_val, args = _extract_flag(args, _ITERATIONS_RE)
+    cmd = _build_url_context_cmd(
         base_cmd, args, project_name, project_path, instance_dir,
         idea_fallback=True,
     )
+    if iterations_val and cmd:
+        cmd.extend(["--iterations", iterations_val])
+    return cmd
 
 
 _BRANCH_TOKEN_RE = re.compile(r'\bbranch:(\S+)', re.IGNORECASE)
@@ -603,6 +607,7 @@ _TAG_RE = re.compile(r'--tag\s+(\S+)')
 _PLAN_URL_RE = re.compile(r'--plan-url\s+(https://github\.com/[^\s]+)')
 _LIMIT_RE = re.compile(r'\blimit=(\d+)\b', re.IGNORECASE)
 _AUTO_FIX_RE = re.compile(r'--auto-fix(?:=(\w+))?\b', re.IGNORECASE)
+_ITERATIONS_RE = re.compile(r'--iterations(?:\s+|=)(\d+)')
 
 
 def _extract_flag(
@@ -1052,6 +1057,12 @@ def validate_skill_args(command: str, args: str) -> Optional[str]:
                 f"/{command} requires a GitHub PR or issue URL "
                 f"(e.g. https://github.com/owner/repo/pull/42)"
             )
+    elif canonical == "plan":
+        iter_match = _ITERATIONS_RE.search(args)
+        if iter_match:
+            n = int(iter_match.group(1))
+            if n < 1 or n > 5:
+                return "--iterations must be between 1 and 5"
 
     return None
 
