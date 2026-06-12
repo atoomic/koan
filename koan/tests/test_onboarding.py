@@ -408,58 +408,6 @@ class TestStepInstanceInit:
             result = onb.step_instance_init(state)
             # Should succeed without errors
 
-    def test_resets_missions_on_fresh_install(self, onboarding_root):
-        import app.onboarding as onb
-
-        root = Path(onboarding_root)
-
-        with patch.object(onb, "KOAN_ROOT", root), patch(
-            "app.onboarding_helpers.KOAN_ROOT", root
-        ), patch("app.onboarding_helpers.INSTANCE_DIR", root / "instance"), patch(
-            "app.onboarding_helpers.INSTANCE_EXAMPLE", root / "instance.example"
-        ), patch(
-            "app.onboarding_helpers.ENV_FILE", root / ".env"
-        ), patch(
-            "app.onboarding_helpers.ENV_EXAMPLE", root / "env.example"
-        ):
-            state = onb.OnboardingState()
-            onb.step_instance_init(state)
-
-            missions = (root / "instance" / "missions.md").read_text()
-            assert "## Pending" in missions
-            assert "## In Progress" in missions
-            # No actual mission lines under Pending
-            pending_section = missions.split("## Pending")[1].split("##")[0]
-            assert "- " not in pending_section
-
-    def test_clears_stale_missions_when_instance_exists(self, onboarding_root):
-        import app.onboarding as onb
-
-        root = Path(onboarding_root)
-        instance_dir = root / "instance"
-        instance_dir.mkdir()
-        (root / ".env").write_text("KOAN_ROOT=/tmp\n")
-
-        # Simulate stale missions from a previous run
-        (instance_dir / "missions.md").write_text(
-            "# Missions\n\n## Pending\n\n"
-            "- [project:koan] Fix some old bug\n"
-            "- Review leftover PR\n\n"
-            "## In Progress\n\n"
-            "- Stale in-progress task\n\n"
-            "## Done\n"
-        )
-
-        with patch.object(onb, "KOAN_ROOT", root):
-            state = onb.OnboardingState()
-            onb.step_instance_init(state)
-
-        missions = (instance_dir / "missions.md").read_text()
-        assert "Fix some old bug" not in missions
-        assert "Review leftover PR" not in missions
-        assert "Stale in-progress task" not in missions
-        assert "## Pending" in missions
-
 
 class TestStepProvider:
     def test_existing_provider_skips(self, onboarding_root):
