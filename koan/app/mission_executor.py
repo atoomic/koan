@@ -632,12 +632,12 @@ def _run_iteration(
             "Work hours active — waiting for missions (exploration suppressed)",
             f"Work hours — waiting for missions ({time.strftime('%H:%M')})",
         ),
-        "exploration_wait": lambda _: (
-            "All projects have exploration disabled — waiting for missions",
+        "exploration_wait": lambda p: (
+            p.get("decision_reason") or "All projects have exploration disabled — waiting for missions",
             f"Exploration disabled — waiting for missions ({time.strftime('%H:%M')})",
         ),
-        "pr_limit_wait": lambda _: (
-            "PR limit reached for all projects — waiting for reviews",
+        "pr_limit_wait": lambda p: (
+            p.get("decision_reason") or "PR limit reached for all projects — waiting for reviews",
             f"PR limit reached — waiting for reviews ({time.strftime('%H:%M')})",
         ),
         "branch_saturated_wait": lambda p: (
