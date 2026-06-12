@@ -662,6 +662,8 @@ def _execute_implementation(
     )
 
     attempts = loop_outcome.get("attempts", [])
+    if attempts and attempts[0].get("error"):
+        raise attempts[0]["error"]
     return attempts[0]["result"] if attempts else ""
 
 

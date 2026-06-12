@@ -1074,6 +1074,10 @@ def run_skill_loop(
         except Exception as exc:
             result = None
             error = exc
+            print(
+                f"[skill_loop] step_fn failed on attempt {attempt}: {exc}",
+                file=sys.stderr,
+            )
 
         outcome["total_step_attempts"] = attempt
         entry: dict = {"attempt": attempt, "result": result}
@@ -1314,6 +1318,8 @@ def run_ci_fix_loop(
     def _ci_should_continue_fn(_attempt: int, result: object) -> Tuple[bool, str]:
         if result and isinstance(result, dict) and "_terminal" in result:
             return False, result["_terminal"][0]
+        if result is None:
+            return False, "step_error"
         return True, ""
 
     loop_outcome: dict = {}
