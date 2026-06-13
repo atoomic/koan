@@ -226,7 +226,7 @@ class TestBackwardCompatibility:
         )
         result = start_mission(content, "New mission")
         sections = parse_sections(result)
-        # Old in-progress should be flushed to done
+        # Old in-progress should be flushed to failed
         assert len(sections["in_progress"]) == 1
         assert "New mission" in sections["in_progress"][0]
         assert any("Stale mission" in d for d in sections["failed"])

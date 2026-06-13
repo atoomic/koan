@@ -1088,7 +1088,7 @@ def _move_pending_to_section(
     return normalize_content(updated + f"\n## {header}\n\n{entry}\n")
 
 
-def _flush_in_progress_to_done(content: str) -> str:
+def _flush_in_progress_to_failed(content: str) -> str:
     """Move all stale In Progress missions to Failed with a [flushed] tag.
 
     Sanity enforcement: only one mission should be in progress at a time.
@@ -1175,7 +1175,7 @@ def start_mission(content: str, mission_text: str) -> str:
     # Under normal operation In Progress is always empty here because
     # recover.py runs at startup. This is a fallback for cases recover.py
     # misses (e.g. complex ### missions — see analysis-state-bugs.md B2).
-    updated = _flush_in_progress_to_done(updated)
+    updated = _flush_in_progress_to_failed(updated)
 
     lines = updated.splitlines()
     boundaries = find_section_boundaries(lines)

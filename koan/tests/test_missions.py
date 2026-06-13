@@ -45,7 +45,7 @@ from app.missions import (
     prune_done_section,
     prune_failed_section,
     _enforce_quarantine_cap,
-    _flush_in_progress_to_done,
+    _flush_in_progress_to_failed,
     DEFAULT_SKELETON,
 )
 
@@ -2210,11 +2210,11 @@ class TestModifyMissionsFileReturn:
 
 
 # ---------------------------------------------------------------------------
-# _flush_in_progress_to_done — sanity enforcement
+# _flush_in_progress_to_failed — sanity enforcement
 # ---------------------------------------------------------------------------
 
-class TestFlushInProgressToDone:
-    """Tests for _flush_in_progress_to_done() — stale In Progress → Failed."""
+class TestFlushInProgressToFailed:
+    """Tests for _flush_in_progress_to_failed() — stale In Progress → Failed."""
 
     def test_empty_in_progress_noop(self):
         content = (
@@ -2224,7 +2224,7 @@ class TestFlushInProgressToDone:
             "## In Progress\n\n"
             "## Done\n"
         )
-        result = _flush_in_progress_to_done(content)
+        result = _flush_in_progress_to_failed(content)
         assert result == normalize_content(content)
 
     def test_single_in_progress_moved_to_failed(self):
@@ -2235,7 +2235,7 @@ class TestFlushInProgressToDone:
             "- Stale mission\n\n"
             "## Done\n"
         )
-        result = _flush_in_progress_to_done(content)
+        result = _flush_in_progress_to_failed(content)
         sections = parse_sections(result)
         assert len(sections["in_progress"]) == 0
         # Moved to Failed (not Done) with \u274c marker and [flushed] tag
@@ -2255,7 +2255,7 @@ class TestFlushInProgressToDone:
             "- Third stale\n\n"
             "## Done\n"
         )
-        result = _flush_in_progress_to_done(content)
+        result = _flush_in_progress_to_failed(content)
         sections = parse_sections(result)
         assert len(sections["in_progress"]) == 0
         assert len(sections["failed"]) == 3
@@ -2273,7 +2273,7 @@ class TestFlushInProgressToDone:
             "- [project:koan] Stale koan mission\n\n"
             "## Done\n"
         )
-        result = _flush_in_progress_to_done(content)
+        result = _flush_in_progress_to_failed(content)
         sections = parse_sections(result)
         failed_entry = sections["failed"][0]
         assert "[project:koan]" in failed_entry
@@ -2288,7 +2288,7 @@ class TestFlushInProgressToDone:
             "## Done\n\n"
             "- Old done task\n"
         )
-        result = _flush_in_progress_to_done(content)
+        result = _flush_in_progress_to_failed(content)
         sections = parse_sections(result)
         done_text = "\n".join(sections["done"])
         assert "Old done task" in done_text
@@ -2296,14 +2296,14 @@ class TestFlushInProgressToDone:
         failed_text = "\n".join(sections["failed"])
         assert "Stale" in failed_text
 
-    def test_creates_done_section_if_missing(self):
+    def test_creates_failed_section_if_missing(self):
         content = (
             "# Missions\n\n"
             "## Pending\n\n"
             "## In Progress\n\n"
             "- Stale mission\n"
         )
-        result = _flush_in_progress_to_done(content)
+        result = _flush_in_progress_to_failed(content)
         assert "## Failed" in result
         sections = parse_sections(result)
         assert len(sections["in_progress"]) == 0
@@ -2319,7 +2319,7 @@ class TestFlushInProgressToDone:
             "- Stale mission\n\n"
             "## Done\n"
         )
-        result = _flush_in_progress_to_done(content)
+        result = _flush_in_progress_to_failed(content)
         sections = parse_sections(result)
         failed_entry = sections["failed"][0]
         assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", failed_entry)
