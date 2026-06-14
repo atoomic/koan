@@ -70,16 +70,16 @@ routing table:
       "api_key": "sk-or-...",
       "models": [
         "anthropic/claude-sonnet-4",
-        "qwen/qwen3-...",
-        "deepseek/deepseek-chat"
+        "qwen/qwen3.7-plus",
+        "minimax/minimax-m3"
       ],
       "transformer": { "use": ["openrouter"] }
     }
   ],
   "Router": {
     "default":     "openrouter,anthropic/claude-sonnet-4",
-    "background":  "openrouter,qwen/qwen3-...",
-    "think":       "openrouter,deepseek/deepseek-chat",
+    "background":  "openrouter,qwen/qwen3.7-plus",
+    "think":       "openrouter,minimax/minimax-m3",
     "longContext": "openrouter,anthropic/claude-sonnet-4"
   }
 }
@@ -198,8 +198,8 @@ projects:
   cheap-repo:
     path: "/path/to/cheap-repo"
     models:
-      mission:  "openrouter,qwen/qwen3-..."
-      fallback: "openrouter,deepseek/deepseek-chat"
+      mission:  "openrouter,qwen/qwen3.7-plus"
+      fallback: "openrouter,minimax/minimax-m3"
 ```
 
 Leaving a project's `models` empty makes the CLI send no `--model`, so CCR falls
@@ -262,12 +262,15 @@ KOAN_FOCUS=1            # or set `focus: true` in config.yaml
 
    ```bash
    ANTHROPIC_BASE_URL=http://127.0.0.1:3456 ANTHROPIC_AUTH_TOKEN=ccr ANTHROPIC_API_KEY= \
-   claude -p "Say hi, then use the Bash tool to echo ok" \
-     --model "openrouter,qwen/qwen3-..." --output-format json --allowedTools Bash
+   claude -p "Use the Bash tool to run: echo TOOLS_WORK > proof.txt . Then reply DONE." \
+     --model "openrouter,qwen/qwen3.7-plus" --output-format json \
+     --allowedTools Bash --dangerously-skip-permissions
    ```
 
-   Expect valid JSON with `is_error: false` (or `subtype: "success"`) and a tool
-   call that actually ran.
+   Expect valid JSON with `is_error: false` / `subtype: "success"`, `num_turns: 2`,
+   and a `proof.txt` that actually contains `TOOLS_WORK` — proving the tool-use
+   round-trip survived translation. This path has been verified against
+   `qwen/qwen3.7-plus` and `minimax/minimax-m3`.
 
 3. **Through the wrapper** — same prompt via `claude-openrouter` to confirm the
    env isolation works.
