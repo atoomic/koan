@@ -289,10 +289,11 @@ def recover_missions(instance_dir: str, dry_run: bool = False) -> tuple:
                 _log_recovery_event(instance_dir, header, state, "escalated", attempts,
                                     has_checkpoint=has_checkpoint)
             else:
-                # Update counter in header, move entire block (header + sub-items) to Pending
-                updated_header = _set_recovery_attempts(complex_block_header.rstrip(), attempts + 1)
-                block_with_updated_header = [updated_header] + complex_block_lines[1:]
-                recovered.extend(block_with_updated_header)
+                # Convert ### block to - item: extract_next_pending() treats ### as
+                # project sub-headers in Pending, which would fragment the block on
+                # the next mission pick. Use - format so it's picked up as a unit.
+                dash_line = _set_recovery_attempts(f"- {clean_title}", attempts + 1)
+                recovered.append(dash_line)
                 recovered_mission_texts.append(clean_title)
                 _log_recovery_event(instance_dir, header, state, "recovered", attempts + 1,
                                     has_checkpoint=has_checkpoint)

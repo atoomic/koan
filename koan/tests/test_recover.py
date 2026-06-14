@@ -182,11 +182,10 @@ class TestRecoverMissions:
         pending_idx = next(i for i, l in enumerate(lines) if l.strip().lower().startswith("## pending"))
         in_prog_idx = next(i for i, l in enumerate(lines) if l.strip().lower().startswith("## in progress"))
         pending_section = "\n".join(lines[pending_idx + 1 : in_prog_idx])
-        # Complex mission block should now be in Pending
-        assert "Complex Project" in pending_section
-        # Sub-items should be preserved
-        assert "Step 1" in pending_section
-        assert "Step 2" in pending_section
+        # Complex mission title recovered as - item (not ### block) so
+        # extract_next_pending() picks it up as a single mission, not fragments
+        assert "- Complex Project" in pending_section
+        assert "### Complex Project" not in pending_section
 
     def test_blank_line_ends_complex_block(self, instance_dir):
         """A blank line after complex mission sub-items ends the complex block.

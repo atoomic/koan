@@ -211,7 +211,7 @@ class TestRecoverComplexMissionFallback:
         )
         count, _ = recover_missions(str(instance_dir))
         # The entire ### block (header + sub-items) is recovered as one unit
-        assert count >= 1
+        assert count == 1
 
 
 # ---------------------------------------------------------------------------
