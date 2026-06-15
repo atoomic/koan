@@ -52,6 +52,7 @@ def _strip_recovery_counter(mission_line: str) -> str:
 # ---------------------------------------------------------------------------
 
 def classify_mission_state(
+    *,
     crash_count: int = 0,
     max_crash_retries: int = 3,
     has_pending_journal: bool = False,
@@ -208,6 +209,7 @@ def recover_missions(instance_dir: str, dry_run: bool = False) -> tuple:
             get_total_attempts as _get_total,
             get_crash_count as _get_crash,
             increment_crash_count as _inc_crash,
+            seed_crash_count as _seed_crash,
         )
         _stagnation_cfg = _get_stag_cfg()
         _max_total_retries = int(_stagnation_cfg.get("max_total_retries", 0))
@@ -217,6 +219,7 @@ def recover_missions(instance_dir: str, dry_run: bool = False) -> tuple:
         _get_total = None
         _get_crash = None
         _inc_crash = None
+        _seed_crash = None
         _max_total_retries = 0
         _max_crash_retries = 3
 
@@ -281,10 +284,14 @@ def recover_missions(instance_dir: str, dry_run: bool = False) -> tuple:
 
             old_r = _get_old_r_count(header)
             crash_count = _get_crash(instance_dir, clean_title) if _get_crash else 0
-            # Backward compat: if [r:N] tag has higher count, use it for
-            # classification only — the tracker is NOT seeded from the legacy tag
+            # Backward compat: if a legacy [r:N] tag carries a higher count than
+            # the tracker, seed it into the tracker so the migrated count survives
+            # this recovery cycle (without seeding, the next cycle would read only
+            # the freshly-incremented tracker value, granting one extra retry).
             if old_r > crash_count:
                 crash_count = old_r
+                if _seed_crash is not None:
+                    _seed_crash(instance_dir, clean_title, old_r)
             total = _get_total(instance_dir, clean_title) if _get_total else 0
 
             state = classify_mission_state(
@@ -353,10 +360,15 @@ def recover_missions(instance_dir: str, dry_run: bool = False) -> tuple:
 
                 # Get crash_count from tracker
                 crash_count = _get_crash(instance_dir, clean_text) if _get_crash else 0
-                # Backward compat: if [r:N] tag has higher count, use it for
-                # classification only — the tracker is NOT seeded from the legacy tag
+                # Backward compat: if a legacy [r:N] tag carries a higher count
+                # than the tracker, seed it into the tracker so the migrated count
+                # survives this recovery cycle (without seeding, the next cycle
+                # would read only the freshly-incremented tracker value, granting
+                # one extra retry).
                 if old_r > crash_count:
                     crash_count = old_r
+                    if _seed_crash is not None:
+                        _seed_crash(instance_dir, clean_text, old_r)
                 total = _get_total(instance_dir, clean_text) if _get_total else 0
 
                 # Check for a structured checkpoint for this mission

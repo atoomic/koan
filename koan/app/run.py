@@ -1779,20 +1779,27 @@ def _clear_if_cap_hit(instance: str, mission_title: str) -> None:
     cleared — the stagnation cap check in _finalize_mission depends on it.
     """
     try:
+        from app.stagnation_monitor import clear_retry_count, get_retry_info
+
+        # Hot path: this runs on every mission start, including brand-new
+        # missions that have never been retried. Read the tracker once and bail
+        # before loading config when there is no entry (all counts zero) — those
+        # missions can never have hit a cap, so there is nothing to clear.
+        info = get_retry_info(instance, mission_title)
+        stag_count = info["count"]
+        crash_count = info["crash_count"]
+        total = info["total_attempts"]
+        if not (stag_count or crash_count or total):
+            return
+
         from app.config import get_stagnation_config
-        from app.stagnation_monitor import (
-            clear_retry_count,
-            get_crash_count,
-            get_retry_count,
-            get_total_attempts,
-        )
         cfg = get_stagnation_config()
-        max_stag = int(cfg.get("max_retry_on_stagnation", 0))
-        max_crash = int(cfg.get("max_crash_retries", 3))
-        max_total = int(cfg.get("max_total_retries", 0))
-        stag_count = get_retry_count(instance, mission_title)
-        crash_count = get_crash_count(instance, mission_title)
-        total = get_total_attempts(instance, mission_title)
+        # get_stagnation_config() always returns every key, so read them directly:
+        # fallback defaults here would silently drift from the centralized config
+        # defaults if those ever change.
+        max_stag = cfg["max_retry_on_stagnation"]
+        max_crash = cfg["max_crash_retries"]
+        max_total = cfg["max_total_retries"]
 
         stag_capped = max_stag > 0 and stag_count >= max_stag
         crash_capped = crash_count >= max_crash
@@ -1972,7 +1979,7 @@ def _finalize_mission(instance: str, mission_title: str, project_name: str, exit
         # Retry cap reached (or retries disabled): mark Failed with cause tag.
         # Counter is preserved — cleared when the human retries the mission.
         if total_cap_hit:
-            cause_tag = f"stagnation:{pattern}:total_cap"
+            cause_tag = f"stagnation:{pattern}:total_cap({total}/{max_total})"
         else:
             cause_tag = f"stagnation:{pattern}"
         _notify_stagnation(mission_title, project_name, pattern, excerpt)

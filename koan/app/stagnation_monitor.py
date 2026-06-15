@@ -385,6 +385,19 @@ class StagnationMonitor:
 #     by :func:`recover.recover_missions` each time a crash is detected at startup.
 #   - Both counters are cleared on genuine success (zero exit, not stagnation).
 #
+# Counter lifetime / known limitation:
+#   Counters are intentionally PRESERVED when a mission ends in Failed (cap hit,
+#   crash escalation, or any non-stagnation, non-zero exit) so the human can
+#   inspect why it failed. They are cleared only on (a) genuine success, or
+#   (b) a deliberate human retry, detected in run._clear_if_cap_hit when a cap
+#   was previously hit. Consequently a mission that fails for a non-stagnation
+#   reason and is then *manually* removed/edited in missions.md (never going
+#   back through start_mission) leaves an orphan entry here indefinitely. There
+#   is no age-based expiry; entries are keyed by mission-title hash, so this
+#   grows at most one stale entry per such mission and is harmless beyond a
+#   slowly-growing JSON file. Reap manually by deleting .mission-retries.json
+#   (it is rebuilt lazily) if it ever grows unwieldy.
+#
 # Counters are keyed by a stable SHA-256 of the *clean* mission title —
 # stripped of lifecycle markers (timestamps, recovery counters, complexity
 # tags) — so the SAME logical mission maps to the SAME key across requeue
