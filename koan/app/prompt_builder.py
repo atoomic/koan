@@ -175,7 +175,7 @@ def _get_ponytail_section() -> str:
     try:
         from app.ponytail import get_ponytail_section
         return get_ponytail_section()
-    except Exception as e:
+    except ImportError as e:
         logger.warning("ponytail section unavailable: %s", e)
         return ""
 

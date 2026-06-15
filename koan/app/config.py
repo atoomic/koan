@@ -1734,7 +1734,7 @@ def is_ponytail_mode() -> bool:
     Default: True.
     """
     enabled = _get_ponytail_dict().get("enabled", True)
-    return bool(enabled) if isinstance(enabled, bool) else True
+    return bool(enabled)
 
 
 def _get_review_compressor_dict() -> dict:
