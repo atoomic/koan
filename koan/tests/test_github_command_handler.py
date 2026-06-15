@@ -3823,6 +3823,84 @@ class TestTryAssignmentNotification:
         assert result is True
         mock_cd.assert_not_called()
 
+    def test_review_requested_cooldown_bypassed_when_bot_still_requested(
+        self, review_notification, review_registry, tmp_path, monkeypatch,
+    ):
+        """A review re-request bypasses cooldown when bot is in requested_reviewers."""
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        missions_path = tmp_path / "instance" / "missions.md"
+        missions_path.parent.mkdir(parents=True)
+        missions_path.write_text("# Pending\n\n# In Progress\n\n# Done\n")
+
+        config = {"github": {"nickname": "koan-bot"}}
+
+        with patch("app.github_command_handler.resolve_project_from_notification",
+                    return_value=("koan", "sukria", "koan")), \
+             patch("app.github_command_handler.is_notification_stale", return_value=False), \
+             patch("app.github_command_handler.mark_notification_read"), \
+             patch("app.github_notification_tracker.is_review_on_cooldown", return_value=True), \
+             patch("app.github_command_handler._is_bot_still_requested", return_value=True), \
+             patch("app.github_notification_tracker.clear_review_cooldown") as mock_clear:
+            result = _try_assignment_notification(
+                review_notification, review_registry, config,
+            )
+
+        assert result is True
+        assert review_notification[NOTIFICATION_OUTCOME_KEY] == NOTIFICATION_OUTCOME_QUEUED
+        mock_clear.assert_called_once()
+        content = missions_path.read_text()
+        assert "/review" in content
+
+    def test_review_requested_cooldown_not_bypassed_when_bot_not_requested(
+        self, review_notification, review_registry, tmp_path, monkeypatch,
+    ):
+        """Cooldown blocks when bot is NOT in requested_reviewers."""
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        missions_path = tmp_path / "instance" / "missions.md"
+        missions_path.parent.mkdir(parents=True)
+        missions_path.write_text("# Pending\n\n# In Progress\n\n# Done\n")
+
+        config = {"github": {"nickname": "koan-bot"}}
+
+        with patch("app.github_command_handler.resolve_project_from_notification",
+                    return_value=("koan", "sukria", "koan")), \
+             patch("app.github_command_handler.is_notification_stale", return_value=False), \
+             patch("app.github_command_handler.mark_notification_read") as mock_read, \
+             patch("app.github_notification_tracker.is_review_on_cooldown", return_value=True), \
+             patch("app.github_command_handler._is_bot_still_requested", return_value=False):
+            result = _try_assignment_notification(
+                review_notification, review_registry, config,
+            )
+
+        assert result is True
+        assert review_notification[NOTIFICATION_OUTCOME_KEY] == NOTIFICATION_OUTCOME_HANDLED_NOOP
+        mock_read.assert_called_once()
+        content = missions_path.read_text()
+        assert "/review" not in content
+
+    def test_review_requested_cooldown_no_bypass_without_nickname(
+        self, review_notification, review_registry, tmp_path, monkeypatch,
+    ):
+        """Without github.nickname configured, cooldown is not bypassed."""
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        missions_path = tmp_path / "instance" / "missions.md"
+        missions_path.parent.mkdir(parents=True)
+        missions_path.write_text("# Pending\n\n# In Progress\n\n# Done\n")
+
+        config = {}
+
+        with patch("app.github_command_handler.resolve_project_from_notification",
+                    return_value=("koan", "sukria", "koan")), \
+             patch("app.github_command_handler.is_notification_stale", return_value=False), \
+             patch("app.github_command_handler.mark_notification_read") as mock_read, \
+             patch("app.github_notification_tracker.is_review_on_cooldown", return_value=True):
+            result = _try_assignment_notification(
+                review_notification, review_registry, config,
+            )
+
+        assert result is True
+        assert review_notification[NOTIFICATION_OUTCOME_KEY] == NOTIFICATION_OUTCOME_HANDLED_NOOP
+
 
 class TestFetchSubjectInfo:
     """Tests for _fetch_subject_info — the single network seam for subject state.
