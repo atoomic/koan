@@ -6976,6 +6976,22 @@ class TestHandleWaitPauseCommit:
         assert "retro failed" in error_msg
         assert "Traceback" in error_msg
 
+    @patch("app.config.is_unlimited_quota", return_value=True)
+    @patch("app.run.log")
+    def test_unlimited_quota_skips_pause(self, mock_log, mock_unlimited):
+        """unlimited_quota: true suppresses the wait pause entirely."""
+        from app.run import _handle_wait_pause
+
+        plan = {
+            "project_name": "test-proj",
+            "decision_reason": "Budget exhausted",
+            "display_lines": [],
+        }
+        _handle_wait_pause(plan, 42, "/tmp/koan", "/tmp/koan/instance")
+
+        log_calls = [c[0] for c in mock_log.call_args_list]
+        assert any("suppressed" in msg for _, msg in log_calls)
+
 
 # ---------------------------------------------------------------------------
 # Test: _run_iteration() — full execution paths
