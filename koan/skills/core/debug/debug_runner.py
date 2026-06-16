@@ -99,10 +99,10 @@ def run_debug(
         from app.notify import send_telegram
         notify_fn = send_telegram
 
-    print("[debug] Starting debug runner", flush=True)
+    logger.info("Starting debug runner")
     context_label = f" ({context})" if context else ""
     project_name = project_name or project_name_for_path(project_path)
-    print(f"[debug] Fetching tracker issue {issue_url}", flush=True)
+    logger.info("Fetching tracker issue %s", issue_url)
 
     try:
         content = fetch_issue(
@@ -130,7 +130,7 @@ def run_debug(
 
     notify_fn(f"🐛 Debugging {provider} issue {label}{context_label}...")
 
-    print("[debug] Issue fetched, building prompt", flush=True)
+    logger.info("Issue fetched, building prompt")
     if not body and not comments:
         return False, f"Issue {label} has no content."
 
@@ -141,7 +141,7 @@ def run_debug(
         project_name, project_path,
     )
 
-    print("[debug] Invoking Claude for structured debug", flush=True)
+    logger.info("Invoking Claude for structured debug")
     try:
         output = _execute_debug(
             project_path=project_path,
@@ -305,12 +305,14 @@ def _submit_debug_pr(
     try:
         return submit_draft_pr(
             project_path=project_path,
+            project_name=project_name,
             owner=owner,
             repo=repo,
-            title=f"fix: debug {issue_title[:60]}",
-            body=pr_body,
+            issue_number=issue_number,
+            pr_title=f"fix: debug {issue_title[:60]}",
+            pr_body=pr_body,
+            issue_url=issue_url,
             base_branch=base_branch,
-            project_name=project_name,
             notify_fn=notify_fn,
         )
     except Exception as e:

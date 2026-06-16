@@ -441,14 +441,14 @@ def _maybe_escalate_to_debug(
     tag_match = _PROJECT_TAG_STRIP_RE.match(cleaned)
     tag_prefix = tag_match.group(0) if tag_match else ""
 
-    from app.missions import insert_mission
-    from app.utils import atomic_write
+    from app.utils import insert_pending_mission
 
     missions_path = Path(os.path.join(instance, "missions.md"))
-    content = missions_path.read_text() if missions_path.exists() else ""
     entry = f"- {tag_prefix}/debug {fix_args}"
-    content = insert_mission(content, entry, urgent=True)
-    atomic_write(missions_path, content)
+    inserted = insert_pending_mission(missions_path, entry, urgent=True)
+
+    if not inserted:
+        return False
 
     import app.run as _run
     _run.log("koan", f"Auto-escalated failed /fix to /debug: {fix_args[:80]}")
