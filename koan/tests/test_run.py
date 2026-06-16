@@ -6229,6 +6229,91 @@ class TestUpdateMissionInFile:
         assert after != before
 
 
+class TestStartMissionSanityFlushLog:
+    """A sanity flush during start_mission() is surfaced to operators."""
+
+    def test_stale_in_progress_is_flushed_and_logged(self, tmp_path):
+        from app.run import _start_mission_in_file
+        from app.missions import parse_sections
+
+        missions = tmp_path / "instance" / "missions.md"
+        missions.parent.mkdir(parents=True)
+        # A stale In Progress mission recover.py "missed", plus the one we start.
+        missions.write_text(
+            "# Missions\n\n## Pending\n\n- /plan new work\n\n"
+            "## In Progress\n\n- /plan leftover stale ▶(2026-01-01T00:00)\n\n"
+            "## Done\n"
+        )
+
+        with patch("app.run.log") as mock_log:
+            assert _start_mission_in_file(str(missions.parent), "/plan new work") is True
+
+        # The stale mission was flushed to Failed with a [flushed] tag...
+        sections = parse_sections(missions.read_text())
+        failed_text = "\n".join(sections["failed"])
+        assert "leftover stale" in failed_text
+        assert "[flushed]" in failed_text
+        # ...and the new mission is now In Progress.
+        assert "/plan new work" in "\n".join(sections["in_progress"])
+        # ...and a warning naming the flush was emitted.
+        warnings = [
+            c.args[1] for c in mock_log.call_args_list
+            if c.args and c.args[0] == "warning"
+        ]
+        assert any("Sanity flush" in w and "leftover stale" in w for w in warnings)
+
+    def test_no_log_when_in_progress_empty(self, tmp_path):
+        from app.run import _start_mission_in_file
+
+        missions = tmp_path / "instance" / "missions.md"
+        missions.parent.mkdir(parents=True)
+        missions.write_text(
+            "# Missions\n\n## Pending\n\n- /plan only work\n\n"
+            "## In Progress\n\n## Done\n"
+        )
+        with patch("app.run.log") as mock_log:
+            assert _start_mission_in_file(str(missions.parent), "/plan only work") is True
+
+        warnings = [
+            c.args[1] for c in mock_log.call_args_list
+            if c.args and c.args[0] == "warning"
+        ]
+        assert not any("Sanity flush" in w for w in warnings)
+
+    def test_no_sanity_flush_log_when_mission_not_in_pending(self, tmp_path):
+        """False-positive guard: stale In Progress entries exist but the
+        mission isn't in Pending (e.g. a race removed it between pick and
+        start). start_mission() early-returns without flushing, so neither
+        the sanity-flush warning nor a successful transition should occur.
+        """
+        from app.run import _start_mission_in_file
+        from app.missions import parse_sections
+
+        missions = tmp_path / "instance" / "missions.md"
+        missions.parent.mkdir(parents=True)
+        # Stale In Progress entry present, but the mission we try to start
+        # is absent from Pending.
+        missions.write_text(
+            "# Missions\n\n## Pending\n\n"
+            "## In Progress\n\n- /plan leftover stale ▶(2026-01-01T00:00)\n\n"
+            "## Done\n"
+        )
+
+        with patch("app.run.log") as mock_log:
+            assert _start_mission_in_file(str(missions.parent), "/plan absent work") is False
+
+        warnings = [
+            c.args[1] for c in mock_log.call_args_list
+            if c.args and c.args[0] == "warning"
+        ]
+        # No false "Sanity flush" warning — nothing was flushed.
+        assert not any("Sanity flush" in w for w in warnings)
+        # The stale entry is untouched: still In Progress, not moved to Failed.
+        sections = parse_sections(missions.read_text())
+        assert "leftover stale" in "\n".join(sections["in_progress"])
+        assert "leftover stale" not in "\n".join(sections.get("failed", []))
+
+
 # ---------------------------------------------------------------------------
 # Test: _run_iteration returns productive/idle boolean
 # ---------------------------------------------------------------------------
