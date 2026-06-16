@@ -1343,16 +1343,20 @@ class MemoryManager:
                         fts_results = search_entries(
                             conn, project or "", query_text, max_results=max_entries,
                         )
-                        seen_ts = {e["ts"] for e in fts_results}
+                        def _dedup_key(e):
+                            return (e.get("ts", ""), (e.get("content") or "")[:80])
+
+                        seen = {_dedup_key(e) for e in fts_results}
                         remaining = max_entries - len(fts_results)
                         if remaining > 0:
                             recency = recent_entries(
                                 conn, project or "", max_results=remaining + len(fts_results),
                             )
                             for e in recency:
-                                if e["ts"] not in seen_ts:
+                                key = _dedup_key(e)
+                                if key not in seen:
                                     fts_results.append(e)
-                                    seen_ts.add(e["ts"])
+                                    seen.add(key)
                                     if len(fts_results) >= max_entries:
                                         break
                     finally:

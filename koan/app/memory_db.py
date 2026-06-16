@@ -19,6 +19,8 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 _fts5_available: Optional[bool] = None
+_insert_failure_count: int = 0
+_INSERT_FAILURE_WARN_THRESHOLD: int = 5
 
 
 def _check_fts5(conn: sqlite3.Connection) -> bool:
@@ -53,6 +55,7 @@ def ensure_db(instance: str) -> Optional[sqlite3.Connection]:
     mem_dir = Path(instance) / "memory"
     mem_dir.mkdir(parents=True, exist_ok=True)
     db_path = mem_dir / "memory.db"
+    conn = None
     try:
         conn = sqlite3.connect(str(db_path), timeout=5)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -67,13 +70,15 @@ def ensure_db(instance: str) -> Optional[sqlite3.Connection]:
         return conn
     except sqlite3.DatabaseError as e:
         logger.warning("[memory_db] ensure_db failed: %s", e)
-        with contextlib.suppress(Exception):
-            conn.close()
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.close()
         return None
 
 
 def insert_entry(conn: sqlite3.Connection, entry: Dict) -> None:
     """Insert a single JSONL-shaped dict into the FTS5 table."""
+    global _insert_failure_count
     try:
         conn.execute(
             "INSERT INTO entries(project, type, content, ts) VALUES (?, ?, ?, ?)",
@@ -85,8 +90,16 @@ def insert_entry(conn: sqlite3.Connection, entry: Dict) -> None:
             ),
         )
         conn.commit()
+        _insert_failure_count = 0
     except sqlite3.DatabaseError as e:
+        _insert_failure_count += 1
         logger.warning("[memory_db] insert_entry failed: %s", e)
+        if _insert_failure_count >= _INSERT_FAILURE_WARN_THRESHOLD:
+            logger.warning(
+                "[memory_db] %d consecutive insert failures — SQLite index may be stale; "
+                "consider deleting memory.db to rebuild",
+                _insert_failure_count,
+            )
 
 
 def search_entries(
@@ -109,27 +122,38 @@ def search_entries(
 
     try:
         project_lower = project.lower() if project else ""
-        rows = conn.execute(
-            "SELECT project, type, content, ts, rank "
-            "FROM entries "
-            "WHERE entries MATCH ? "
-            "ORDER BY rank "
-            "LIMIT ?",
-            (fts_query, max_results * 3),
-        ).fetchall()
-
         results = []
-        for proj, type_, content, ts, _rank in rows:
-            entry_proj = proj or ""
-            if entry_proj == "" or (project_lower and entry_proj.lower() == project_lower):
-                results.append({
-                    "project": proj if proj else None,
-                    "type": type_,
-                    "content": content,
-                    "ts": ts,
-                })
-                if len(results) >= max_results:
-                    break
+        limit = max_results * 3
+        hard_cap = max_results * 20
+        offset = 0
+
+        while len(results) < max_results and offset < hard_cap:
+            rows = conn.execute(
+                "SELECT project, type, content, ts, rank "
+                "FROM entries "
+                "WHERE entries MATCH ? "
+                "ORDER BY rank "
+                "LIMIT ? OFFSET ?",
+                (fts_query, limit, offset),
+            ).fetchall()
+
+            if not rows:
+                break
+
+            for proj, type_, content, ts, _rank in rows:
+                entry_proj = proj or ""
+                if entry_proj == "" or (project_lower and entry_proj.lower() == project_lower):
+                    results.append({
+                        "project": proj if proj else None,
+                        "type": type_,
+                        "content": content,
+                        "ts": ts,
+                    })
+                    if len(results) >= max_results:
+                        break
+
+            offset += limit
+
         return results
     except sqlite3.DatabaseError as e:
         logger.warning("[memory_db] search_entries failed: %s", e)
