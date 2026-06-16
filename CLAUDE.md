@@ -175,7 +175,8 @@ Extensible command plugin system. Each skill lives in `skills/<scope>/<skill-nam
 
 `instance/` (gitignored, copy from `instance.example/`) holds all runtime state:
 - `missions.md` — Task queue
-- `outbox.md` — Bot → Telegram message queue
+- `outbox.md` — Bot → Telegram message queue (written atomically by `append_to_outbox()`)
+- `outbox-sending.md` — Crash-safety staging file for outbox flush; `OutboxManager.recover_staged()` re-sends on restart
 - `config.yaml` — Per-instance configuration (tools, auto-merge rules)
 - `soul.md` — Agent personality definition
 - `memory/` — Global summary + per-project learnings/context
