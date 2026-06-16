@@ -465,6 +465,21 @@ class TestTwoPhaseRetrieval:
         joined = " ".join(contents).lower()
         assert "jwt" in joined or "authentication" in joined
 
+    def test_fts5_hit_logs_observability_line(self, instance_dir):
+        """A successful FTS5 read emits a stderr-routed usage line."""
+        from app.memory_manager import MemoryManager
+        mgr = MemoryManager(instance_dir)
+        mgr.append_memory_entry("session", "koan", "JWT authentication race condition")
+
+        with patch("app.run_log.log_safe") as mock_log:
+            mgr.read_memory_window("koan", max_entries=5, query_text="authentication JWT")
+
+        assert mock_log.called
+        msg = mock_log.call_args[0][1]
+        assert "FTS5 surfaced" in msg
+        # Must be routed to stderr so it never pollutes subprocess stdout JSON.
+        assert mock_log.call_args.kwargs.get("force_stderr") is True
+
     def test_empty_query_falls_back_to_recency(self, instance_dir):
         from app.memory_manager import MemoryManager
         mgr = MemoryManager(instance_dir)

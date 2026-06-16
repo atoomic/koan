@@ -41,6 +41,21 @@ from app.utils import PROJECT_HINT_RE, atomic_write
 
 logger = logging.getLogger(__name__)
 
+
+def _log_memory_use(message: str) -> None:
+    """Emit a memory-usage line to stderr so it lands in logs/run.log.
+
+    Routed to stderr (never stdout) because the read paths also run inside CLI
+    subprocess runners whose stdout carries JSON/transcript data. Best-effort:
+    falls back to the stdlib logger if run_log is unavailable.
+    """
+    try:
+        from app.run_log import log_safe
+        log_safe("koan", message, force_stderr=True)
+    except Exception:
+        logger.info(message)
+
+
 # Hermes-inspired anti-thrash threshold. When a compaction pass would save
 # less than this fraction of the file (predicted from current size vs
 # target), the pass is skipped — running it would burn lightweight-model
@@ -1342,6 +1357,7 @@ class MemoryManager:
                         fts_results = search_entries(
                             conn, project or "", query_text, max_results=max_entries,
                         )
+                        fts_match_count = len(fts_results)
                         def _dedup_key(e):
                             return (e.get("ts", ""), (e.get("content") or "")[:80])
 
@@ -1362,6 +1378,15 @@ class MemoryManager:
                         conn.close()
                     if fts_results:
                         fts_results.sort(key=lambda e: e.get("ts", ""))
+                        _log_memory_use(
+                            "[memory] FTS5 surfaced %d/%d entries for %s "
+                            "(%d ranked match, %d recency fill) — query=%r"
+                            % (
+                                len(fts_results), max_entries, project or "global",
+                                fts_match_count, len(fts_results) - fts_match_count,
+                                query_text[:60],
+                            )
+                        )
                         return fts_results
             except Exception as e:
                 logger.warning("[memory_manager] FTS5 retrieval failed, falling back to JSONL: %s", e)

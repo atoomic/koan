@@ -51,6 +51,22 @@ fill for remaining slots. When empty, it falls back to JSONL tail.
 Learnings filtering uses FTS5 via `search_learnings()` with Jaccard fallback
 when SQLite is unavailable.
 
+### Observability
+
+Each successful FTS5 read emits a usage line so the index is visible in normal
+operation (not only on error). These are routed to **stderr** — which the
+process launcher merges into `logs/run.log` — because the read paths also run
+inside CLI subprocess runners whose stdout carries JSON/transcript data:
+
+```
+[koan] [memory] FTS5 surfaced 5/5 entries for koan (5 ranked match, 0 recency fill) — query='...'
+[koan] [memory] FTS5 selected 3/35 learnings for koan — task='...'
+```
+
+Absence of these lines (with a clean error log) means a read happened via the
+recency/Jaccard fallback. Failures still log at `WARNING` (e.g.
+`[memory_db] search_entries failed`, `FTS5 retrieval failed, falling back to JSONL`).
+
 ## Write Paths
 
 Memory is updated by session summaries, PR review learning, post-mission

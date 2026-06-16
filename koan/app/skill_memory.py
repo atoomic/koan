@@ -163,6 +163,16 @@ def _load_filtered_learnings(
 
     if fts_selected is not None:
         selected = fts_selected
+        try:
+            from app.run_log import log_safe
+            log_safe(
+                "koan",
+                "[memory] FTS5 selected %d/%d learnings for %s — task=%r"
+                % (len(fts_selected), total, project_name, task_text[:60]),
+                force_stderr=True,
+            )
+        except Exception:
+            logger.info("[memory] FTS5 selected %d/%d learnings", len(fts_selected), total)
     else:
         selected, total, _dropped = score_and_select(
             content, task_text, max_k=max_k, recent_hedge=recent_hedge,
