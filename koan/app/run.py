@@ -1243,6 +1243,11 @@ def _handle_wait_pause(
     instance: str,
 ):
     """Enter pause mode when budget is exhausted (WAIT action)."""
+    from app.config import is_unlimited_quota
+    if is_unlimited_quota():
+        log("quota", "WAIT pause suppressed — unlimited_quota is active")
+        return
+
     project_name = plan["project_name"]
     log("quota", "Decision: WAIT mode (budget exhausted)")
     print(f"  Reason: {plan['decision_reason']}")
