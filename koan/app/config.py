@@ -1661,19 +1661,21 @@ def get_review_triage_config() -> dict:
 
 
 def get_review_verdict_config() -> dict:
-    """Get review verdict body configuration from config.yaml.
+    """Get review verdict configuration from config.yaml.
 
-    Controls the body text attached to the formal APPROVE / REQUEST_CHANGES
-    verdict submitted via the GitHub Pull Request Reviews API.
+    Controls the formal APPROVE / REQUEST_CHANGES verdict submitted via
+    the GitHub Pull Request Reviews API.
 
     Config key: review_verdict::
 
         review_verdict:
+          approved: true
           body_enabled: true
           include_blockers: true
 
     Returns:
-        Dict with keys: body_enabled (bool), include_blockers (bool).
+        Dict with keys: approved (bool), body_enabled (bool),
+        include_blockers (bool).
     """
     config = _load_config()
     section = config.get("review_verdict", {})
@@ -1685,6 +1687,7 @@ def get_review_verdict_config() -> dict:
         return bool(val) if isinstance(val, bool) else default
 
     return {
+        "approved": _bool("approved", True),
         "body_enabled": _bool("body_enabled", True),
         "include_blockers": _bool("include_blockers", True),
     }

@@ -615,6 +615,24 @@ def get_project_security_review(config: dict, project_name: str) -> dict:
     }
 
 
+def get_project_review_verdict(config: dict, project_name: str) -> dict:
+    """Get review verdict overrides for a project from projects.yaml.
+
+    Per-project review_verdict settings override global config.yaml values.
+    Only returns keys that are explicitly set — caller should merge with
+    global defaults from get_review_verdict_config().
+    """
+    project_cfg = get_project_config(config, project_name)
+    rv = project_cfg.get("review_verdict", {}) or {}
+    if not isinstance(rv, dict):
+        return {}
+    result = {}
+    for key in ("approved", "body_enabled", "include_blockers"):
+        if key in rv and isinstance(rv[key], bool):
+            result[key] = rv[key]
+    return result
+
+
 def get_project_submit_to_repository(config: dict, project_name: str) -> dict:
     """Get submit_to_repository config for a project from projects.yaml.
 
