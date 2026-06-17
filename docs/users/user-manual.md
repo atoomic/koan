@@ -515,6 +515,26 @@ Use this before `/plan` when the idea is architecturally complex, when you want 
 - `/fix https://myorg.atlassian.net/browse/PROJ-123 branch:main` — Fix a Jira ticket using a one-off target branch
 </details>
 
+**`/debug`** — Structured 4-step debugging when a previous fix attempt failed.
+
+- **Usage:** `/debug <issue-url> [additional context]`
+- **Aliases:** `/dbg`
+- **GitHub @mention:** `@koan-bot /debug` on an issue
+- **Auto-escalation:** Enable `debug_escalation.on_fix_failure: true` in `config.yaml` to automatically queue `/debug` when a `/fix` mission fails.
+
+The debug loop enforces four steps:
+1. **Reproduce** — write a minimal failing test before touching production code
+2. **Hypothesize** — form and document a specific root cause theory
+3. **Minimal fix** — apply the narrowest change that addresses the hypothesis
+4. **Verify** — run the reproduction test plus the full suite
+
+<details>
+<summary>Use cases</summary>
+
+- `/debug https://github.com/org/repo/issues/42` — Debug a failed fix
+- `/debug https://github.com/org/repo/issues/42 check the auth middleware path` — Provide extra context
+</details>
+
 **`/review`** — Queue a code review for a pull request or issue.
 
 - **Usage:** `/review <github-pr-or-issue-url> [--architecture] [--errors] [--comments] [--plan-url <issue-url>]`
@@ -1342,6 +1362,7 @@ Caveman appends a "no filler, 3–6 word sentences, direct answers" directive to
 |-------|------------------|
 | `/rebase`, `/recreate`, `/squash` | Git-plumbing skills; output is mostly status |
 | `/fix` | Focused issue-fix flow |
+| `/debug` | Structured hypothesis-driven debugging |
 | `/ci_check` | Diagnostic, action-oriented |
 | `/check` | PR/issue check report |
 | `/implement` | Mission narration during implementation |
@@ -1533,6 +1554,7 @@ Ten skills can be triggered by commenting `@koan-bot <command>` on GitHub issues
 | `/brainstorm` | `@koan-bot /brainstorm <topic>` on an issue |
 | `/implement` | `@koan-bot /implement` on an issue |
 | `/fix` | `@koan-bot /fix` on an issue |
+| `/debug` | `@koan-bot /debug` on an issue |
 | `/review` | `@koan-bot /review` on a PR |
 | `/rebase` | `@koan-bot /rebase` on a PR |
 | `/reviewrebase` | `@koan-bot /rr` on a PR |
@@ -2053,6 +2075,7 @@ All commands at a glance. **Tier:** B = Beginner, I = Intermediate, P = Power Us
 | `/deepplan <idea\|issue-url>` | `/deeplan` | I | Spec-first design: explore approaches, post spec, queue /plan |
 | `/implement <issue>` | `/impl` | I | Implement a GitHub or Jira issue |
 | `/fix <issue>` | — | I | Full bug-fix pipeline (understand → plan → test → fix → PR) |
+| `/debug <issue>` | `/dbg` | I | Structured 4-step debug loop (reproduce → hypothesize → fix → verify) |
 | `/review <PR> [--architecture] [--errors]` | `/rv` | I | Review a pull request |
 | `/explain <PR>` | `/xp` | I | Explain a PR in plain language with examples |
 | `/refactor <desc>` | `/rf` | I | Targeted refactoring mission |
@@ -2124,7 +2147,7 @@ All commands at a glance. **Tier:** B = Beginner, I = Intermediate, P = Power Us
 | `/scaffold_skill <scope> <name> <desc>` | `/scaffold`, `/new_skill` | P | Generate SKILL.md + handler.py for a new custom skill |
 | `/rtk [setup\|uninstall\|gain\|on\|off]` | — | P | Manage optional [rtk](https://github.com/rtk-ai/rtk) integration for compressed tool output (60-90 % token savings on Bash commands). See [docs/operations/rtk.md](../operations/rtk.md). |
 
-Skills marked with GitHub @mention support: `/audit`, `/doc`, `/security_audit`, `/brainstorm`, `/plan`, `/implement`, `/fix`, `/review`, `/rebase`, `/recreate`, `/refactor`, `/profile`, `/gh_request`. See [GitHub Commands](../messaging/github-commands.md) for details.
+Skills marked with GitHub @mention support: `/audit`, `/brainstorm`, `/debug`, `/doc`, `/fix`, `/implement`, `/plan`, `/profile`, `/rebase`, `/recreate`, `/refactor`, `/review`, `/security_audit`, `/gh_request`. See [GitHub Commands](../messaging/github-commands.md) for details.
 
 ---
 

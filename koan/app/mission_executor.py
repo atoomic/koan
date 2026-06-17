@@ -210,7 +210,22 @@ def _handle_skill_dispatch(
                 instance, project_name, run_num, max_runs,
                 exit_code, mission_title,
             )
+        was_stagnated = _run._last_mission_stagnated.is_set()
         _run._finalize_mission(instance, mission_title, project_name, exit_code)
+
+        if exit_code != 0:
+            stagnation_requeued = False
+            if was_stagnated:
+                from app.stagnation_monitor import get_retry_count
+                stagnation_requeued = get_retry_count(instance, mission_title) > 0
+
+            if not stagnation_requeued:
+                _maybe_escalate_to_debug(
+                    mission_title=mission_title,
+                    exit_code=exit_code,
+                    instance=instance,
+                )
+
         _run._commit_instance(instance)
 
         _run._sleep_between_runs(koan_root, instance, interval)
@@ -388,6 +403,65 @@ def _maybe_retry_mission(
     )
     log("koan", f"Mission retry exit_code={retry_exit}")
     return retry_exit, stdout_file, stderr_file
+
+
+# ---------------------------------------------------------------------------
+# Debug escalation
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_FIX_MISSION_RE = _re.compile(r"^/fix\s+(.+)", _re.IGNORECASE)
+_DEBUG_MISSION_PREFIX = "/debug"
+_PROJECT_TAG_STRIP_RE = _re.compile(r"^\[project:[^\]]+\]\s*")
+
+
+def _maybe_escalate_to_debug(
+    mission_title: str,
+    exit_code: int,
+    instance: str,
+) -> bool:
+    """Insert a /debug mission when a /fix mission fails and escalation is enabled.
+
+    Returns True if a /debug mission was inserted, False otherwise.
+    """
+    if exit_code == 0:
+        return False
+
+    cleaned = mission_title.lstrip("- ").strip()
+    cleaned_no_tag = _PROJECT_TAG_STRIP_RE.sub("", cleaned).strip()
+
+    if cleaned_no_tag.lower().startswith(_DEBUG_MISSION_PREFIX):
+        return False
+
+    from app.config import is_debug_on_fix_failure
+    if not is_debug_on_fix_failure():
+        return False
+
+    match = _FIX_MISSION_RE.match(cleaned_no_tag)
+    if not match:
+        return False
+
+    fix_args = match.group(1).strip()
+
+    # Preserve project tag if present
+    tag_match = _PROJECT_TAG_STRIP_RE.match(cleaned)
+    tag_prefix = tag_match.group(0) if tag_match else ""
+
+    from app.utils import insert_pending_mission
+
+    missions_path = Path(os.path.join(instance, "missions.md"))
+    entry = f"- {tag_prefix}/debug {fix_args}"
+    inserted = insert_pending_mission(missions_path, entry, urgent=True)
+
+    if not inserted:
+        import app.run as _run
+        _run.log("warning", f"Debug escalation skipped (duplicate): {fix_args[:80]}")
+        return False
+
+    import app.run as _run
+    _run.log("koan", f"Auto-escalated failed /fix to /debug: {fix_args[:80]}")
+    return True
 
 
 # ---------------------------------------------------------------------------
