@@ -608,10 +608,16 @@ def get_project_security_review(config: dict, project_name: str) -> dict:
     project_cfg = get_project_config(config, project_name)
     sr = project_cfg.get("security_review", {}) or {}
 
+    va = sr.get("variant_analysis", {}) or {}
+
     return {
         "enabled": bool(sr.get("enabled", False)),
         "blocking": bool(sr.get("blocking", False)),
         "severity_threshold": str(sr.get("severity_threshold", "high")).strip().lower(),
+        "variant_analysis": {
+            "enabled": bool(va.get("enabled", False)),
+            "max_variant_missions": int(va.get("max_variant_missions", 3)),
+        },
     }
 
 
