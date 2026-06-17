@@ -634,7 +634,7 @@ def execute_skill(skill: Skill, ctx: SkillContext) -> Optional[Union[str, SkillE
 def _execute_combo_skill(skill: Skill, ctx: SkillContext) -> str:
     """Expand a combo skill into pending missions via expand_combo_skill()."""
     from app.skill_dispatch import expand_combo_skill
-    from app.utils import detect_project_from_text, get_known_projects, resolve_project_alias
+    from app.utils import get_known_projects, resolve_project_alias
 
     args = ctx.args.strip()
     project = None
@@ -653,7 +653,9 @@ def _execute_combo_skill(skill: Skill, ctx: SkillContext) -> str:
     tag = f"[project:{project}] " if project else ""
     mission_text = f"{tag}/{ctx.command_name} {mission_args}".rstrip()
 
-    expand_combo_skill(mission_text, str(ctx.instance_dir))
+    expanded = expand_combo_skill(mission_text, str(ctx.instance_dir))
+    if not expanded:
+        return f"Failed to expand combo /{ctx.command_name} — skill not found in dispatch cache"
 
     sub_list = ", ".join(f"/{c}" for c in skill.sub_commands)
     ack = f"Combo /{ctx.command_name} expanded into: {sub_list}"
