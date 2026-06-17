@@ -1586,6 +1586,7 @@ def _resolve_verdict_config(project_name: Optional[str] = None) -> dict:
                     cfg.update(overrides)
         except Exception as exc:
             log("review", f"Failed to load project review_verdict overrides: {exc}")
+            cfg["approved"] = False
     return cfg
 
 

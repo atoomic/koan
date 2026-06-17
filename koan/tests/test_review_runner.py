@@ -4750,6 +4750,15 @@ class TestResolveVerdictConfig:
         assert cfg["approved"] is False
         assert cfg["body_enabled"] is True
 
+    @patch("app.review_runner.get_review_verdict_config",
+           return_value={"approved": True, "body_enabled": True, "include_blockers": True})
+    def test_fails_closed_on_config_error(self, _mock_cfg, monkeypatch):
+        from app.review_runner import _resolve_verdict_config
+        monkeypatch.setenv("KOAN_ROOT", "/tmp/test-koan")
+        with patch("app.projects_config.load_projects_config", side_effect=RuntimeError("bad config")):
+            cfg = _resolve_verdict_config("myproject")
+        assert cfg["approved"] is False
+
 
 class TestReRequestBypassesIncrementalSkip:
     """When the bot has a pending review request (re-request via Refresh),
