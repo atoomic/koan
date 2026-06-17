@@ -1427,7 +1427,8 @@ def plan_iteration(
         _budget_mode = _get_budget_mode()
     except (ImportError, OSError, ValueError) as exc:
         _log_iteration("warn", f"budget_mode resolution failed, defaulting: {exc}")
-        _budget_mode = "session_only"
+        from app.config import is_unlimited_quota
+        _budget_mode = "disabled" if is_unlimited_quota() else "session_only"
 
     # Step 1b: Warn the human when the rolling burn rate predicts a near-future
     # quota wipeout. Fires at most once per quota cycle.
