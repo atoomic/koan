@@ -28,6 +28,8 @@ from app.security_review import (
     _save_variant_tracker,
     _dispatch_variant_missions,
     _write_variant_journal_section,
+    _grep_includes_for_finding,
+    _semgrep_languages_for_finding,
     SENSITIVE_FILE_PATTERNS,
     SENSITIVE_CONTENT_PATTERNS,
     RISK_THRESHOLDS,
@@ -799,12 +801,12 @@ class TestExtractVariantPatterns:
     def test_extracts_eval_pattern(self):
         findings = [("eval() usage", "eval(x)", "result = eval(x)")]
         patterns = _extract_variant_patterns(findings)
-        assert any("eval" in p for p in patterns)
+        assert any("eval" in p for p, _desc in patterns)
 
     def test_extracts_shell_true_pattern(self):
         findings = [("shell=True subprocess", "subprocess.run(cmd, shell=True)", "subprocess.run(cmd, shell=True)")]
         patterns = _extract_variant_patterns(findings)
-        assert any("shell" in p.lower() for p in patterns)
+        assert any("shell" in p.lower() for p, _desc in patterns)
 
     def test_empty_findings_returns_empty(self):
         assert _extract_variant_patterns([]) == []
@@ -824,6 +826,14 @@ class TestExtractVariantPatterns:
         ]
         patterns = _extract_variant_patterns(findings)
         assert len(patterns) == 2
+
+    def test_returns_tuples_with_description(self):
+        findings = [("eval() usage", "eval(x)", "eval(x)")]
+        patterns = _extract_variant_patterns(findings)
+        assert len(patterns) == 1
+        pattern, desc = patterns[0]
+        assert "eval" in pattern
+        assert desc == "eval() usage"
 
 
 # ---------------------------------------------------------------------------
@@ -903,7 +913,7 @@ class TestCheckVariantsGrep:
             stdout="src/utils.py:10:result = eval(user_input)\nsrc/other.py:20:x = eval(data)\n",
         )
         hits = _check_variants_grep(
-            [r"eval\s*\("], "/project", exclude_lines=set(),
+            [(r"eval\s*\(", "eval() usage")], "/project", exclude_lines=set(),
         )
         assert len(hits) == 2
         assert hits[0] == ("src/utils.py", 10, "result = eval(user_input)")
@@ -916,7 +926,7 @@ class TestCheckVariantsGrep:
             stdout="src/utils.py:10:eval(x)\nsrc/utils.py:20:eval(y)\n",
         )
         hits = _check_variants_grep(
-            [r"eval\s*\("], "/project",
+            [(r"eval\s*\(", "eval() usage")], "/project",
             exclude_lines={("src/utils.py", 10)},
         )
         assert len(hits) == 1
@@ -925,7 +935,7 @@ class TestCheckVariantsGrep:
     @patch("app.security_review.subprocess.run")
     def test_no_matches_returns_empty(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stdout="")
-        hits = _check_variants_grep([r"eval\s*\("], "/project", exclude_lines=set())
+        hits = _check_variants_grep([(r"eval\s*\(", "eval() usage")], "/project", exclude_lines=set())
         assert hits == []
 
     @patch("app.security_review.subprocess.run")
@@ -935,20 +945,30 @@ class TestCheckVariantsGrep:
             MagicMock(returncode=0, stdout="b.py:2:os.system('cmd')\n"),
         ]
         hits = _check_variants_grep(
-            [r"eval\s*\(", r"os\.system\s*\("], "/project",
-            exclude_lines=set(),
+            [(r"eval\s*\(", "eval() usage"), (r"os\.system\s*\(", "os.system() usage")],
+            "/project", exclude_lines=set(),
         )
         assert len(hits) == 2
 
     @patch("app.security_review.subprocess.run", side_effect=FileNotFoundError)
     def test_handles_missing_grep(self, mock_run):
-        hits = _check_variants_grep([r"eval\s*\("], "/project", exclude_lines=set())
+        hits = _check_variants_grep([(r"eval\s*\(", "eval() usage")], "/project", exclude_lines=set())
         assert hits == []
 
     @patch("app.security_review.subprocess.run", side_effect=subprocess.TimeoutExpired("grep", 30))
     def test_handles_timeout(self, mock_run):
-        hits = _check_variants_grep([r"eval\s*\("], "/project", exclude_lines=set())
+        hits = _check_variants_grep([(r"eval\s*\(", "eval() usage")], "/project", exclude_lines=set())
         assert hits == []
+
+    @patch("app.security_review.subprocess.run")
+    def test_js_patterns_use_js_includes(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="app.tsx:5:el.innerHTML = x\n")
+        _check_variants_grep(
+            [(r"\.innerHTML\s*=", "potential XSS via innerHTML")],
+            "/project", exclude_lines=set(),
+        )
+        cmd = mock_run.call_args[0][0]
+        assert "--include=*.js" in cmd or "--include=*.tsx" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -960,18 +980,36 @@ class TestBuildSemgrepYaml:
     """Tests for _build_semgrep_yaml()."""
 
     def test_single_pattern(self):
-        yaml_str = _build_semgrep_yaml([r"eval\s*\("])
+        yaml_str = _build_semgrep_yaml([(r"eval\s*\(", "eval() usage")])
         assert "rules:" in yaml_str
         assert "eval" in yaml_str
         assert "pattern-regex" in yaml_str
 
     def test_multiple_patterns(self):
-        yaml_str = _build_semgrep_yaml([r"eval\s*\(", r"exec\s*\("])
+        yaml_str = _build_semgrep_yaml([
+            (r"eval\s*\(", "eval() usage"),
+            (r"exec\s*\(", "exec() usage"),
+        ])
         assert yaml_str.count("pattern-regex") == 2
 
     def test_empty_patterns(self):
         yaml_str = _build_semgrep_yaml([])
         assert "rules:" in yaml_str
+
+    def test_escapes_single_quotes(self):
+        yaml_str = _build_semgrep_yaml([
+            (r"(?:api[_-]?key|secret[_-]?key|password)\s*=\s*['\"]", "hardcoded secret"),
+        ])
+        assert "pattern-regex" in yaml_str
+        assert "rules:" in yaml_str
+
+    def test_js_pattern_uses_js_languages(self):
+        yaml_str = _build_semgrep_yaml([(r"\.innerHTML\s*=", "potential XSS via innerHTML")])
+        assert "javascript" in yaml_str
+
+    def test_python_pattern_uses_python_language(self):
+        yaml_str = _build_semgrep_yaml([(r"eval\s*\(", "eval() usage")])
+        assert "python" in yaml_str
 
 
 class TestCheckVariantsSemgrep:
@@ -985,7 +1023,7 @@ class TestCheckVariantsSemgrep:
             stdout='{"results":[{"path":"src/utils.py","start":{"line":10},"extra":{"lines":"result = eval(user_input)"}}]}',
         )
         hits = _check_variants_semgrep(
-            [r"eval\s*\("], "/project", exclude_lines=set(),
+            [(r"eval\s*\(", "eval() usage")], "/project", exclude_lines=set(),
         )
         assert len(hits) == 1
         assert hits[0] == ("src/utils.py", 10, "result = eval(user_input)")
@@ -998,29 +1036,36 @@ class TestCheckVariantsSemgrep:
             stdout='{"results":[{"path":"src/utils.py","start":{"line":10},"extra":{"lines":"eval(x)"}},{"path":"src/utils.py","start":{"line":20},"extra":{"lines":"eval(y)"}}]}',
         )
         hits = _check_variants_semgrep(
-            [r"eval\s*\("], "/project",
+            [(r"eval\s*\(", "eval() usage")], "/project",
             exclude_lines={("src/utils.py", 10)},
         )
         assert len(hits) == 1
         assert hits[0][1] == 20
 
     @patch("app.security_review.shutil.which", return_value=None)
-    def test_returns_empty_when_semgrep_missing(self, mock_which):
-        hits = _check_variants_semgrep([r"eval\s*\("], "/project", exclude_lines=set())
-        assert hits == []
+    def test_returns_none_when_semgrep_missing(self, mock_which):
+        result = _check_variants_semgrep([(r"eval\s*\(", "eval() usage")], "/project", exclude_lines=set())
+        assert result is None
 
     @patch("app.security_review.shutil.which", return_value="/usr/bin/semgrep")
     @patch("app.security_review.subprocess.run", side_effect=subprocess.TimeoutExpired("semgrep", 60))
-    def test_handles_timeout(self, mock_run, mock_which):
-        hits = _check_variants_semgrep([r"eval\s*\("], "/project", exclude_lines=set())
-        assert hits == []
+    def test_returns_none_on_timeout(self, mock_run, mock_which):
+        result = _check_variants_semgrep([(r"eval\s*\(", "eval() usage")], "/project", exclude_lines=set())
+        assert result is None
 
     @patch("app.security_review.shutil.which", return_value="/usr/bin/semgrep")
     @patch("app.security_review.subprocess.run")
-    def test_handles_invalid_json(self, mock_run, mock_which):
+    def test_returns_none_on_invalid_json(self, mock_run, mock_which):
         mock_run.return_value = MagicMock(returncode=0, stdout="not json")
-        hits = _check_variants_semgrep([r"eval\s*\("], "/project", exclude_lines=set())
-        assert hits == []
+        result = _check_variants_semgrep([(r"eval\s*\(", "eval() usage")], "/project", exclude_lines=set())
+        assert result is None
+
+    @patch("app.security_review.shutil.which", return_value="/usr/bin/semgrep")
+    @patch("app.security_review.subprocess.run")
+    def test_returns_none_on_nonzero_exit(self, mock_run, mock_which):
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+        result = _check_variants_semgrep([(r"eval\s*\(", "eval() usage")], "/project", exclude_lines=set())
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -1032,27 +1077,39 @@ class TestCheckVariantsRouter:
     """Tests for _check_variants() routing logic."""
 
     @patch("app.security_review._check_variants_semgrep")
-    @patch("app.security_review.shutil.which", return_value="/usr/bin/semgrep")
-    def test_prefers_semgrep_when_available(self, mock_which, mock_semgrep):
+    def test_prefers_semgrep_when_available(self, mock_semgrep):
         mock_semgrep.return_value = [("a.py", 1, "eval(x)")]
-        hits = _check_variants([r"eval\s*\("], "/project", exclude_lines=set())
+        patterns = [(r"eval\s*\(", "eval() usage")]
+        hits = _check_variants(patterns, "/project", exclude_lines=set())
         assert len(hits) == 1
         mock_semgrep.assert_called_once()
 
     @patch("app.security_review._check_variants_grep")
-    @patch("app.security_review.shutil.which", return_value=None)
-    def test_falls_back_to_grep(self, mock_which, mock_grep):
+    @patch("app.security_review._check_variants_semgrep", return_value=None)
+    def test_falls_back_to_grep_when_semgrep_missing(self, mock_semgrep, mock_grep):
         mock_grep.return_value = [("a.py", 1, "eval(x)")]
-        hits = _check_variants([r"eval\s*\("], "/project", exclude_lines=set())
+        patterns = [(r"eval\s*\(", "eval() usage")]
+        hits = _check_variants(patterns, "/project", exclude_lines=set())
         assert len(hits) == 1
         mock_grep.assert_called_once()
 
     @patch("app.security_review._check_variants_grep")
     @patch("app.security_review._check_variants_semgrep")
-    @patch("app.security_review.shutil.which", return_value="/usr/bin/semgrep")
-    def test_semgrep_empty_is_valid(self, mock_which, mock_semgrep, mock_grep):
+    def test_falls_back_to_grep_on_semgrep_failure(self, mock_semgrep, mock_grep):
+        mock_semgrep.return_value = None
+        mock_grep.return_value = [("a.py", 1, "eval(x)")]
+        patterns = [(r"eval\s*\(", "eval() usage")]
+        hits = _check_variants(patterns, "/project", exclude_lines=set())
+        assert len(hits) == 1
+        mock_semgrep.assert_called_once()
+        mock_grep.assert_called_once()
+
+    @patch("app.security_review._check_variants_grep")
+    @patch("app.security_review._check_variants_semgrep")
+    def test_semgrep_empty_is_valid(self, mock_semgrep, mock_grep):
         mock_semgrep.return_value = []
-        hits = _check_variants([r"eval\s*\("], "/project", exclude_lines=set())
+        patterns = [(r"eval\s*\(", "eval() usage")]
+        hits = _check_variants(patterns, "/project", exclude_lines=set())
         assert hits == []
         mock_grep.assert_not_called()
 
@@ -1126,7 +1183,7 @@ class TestDispatchVariantMissions:
     @patch("app.security_review._load_variant_tracker")
     @patch("app.utils.insert_pending_mission", return_value=True)
     def test_skips_already_dispatched(self, mock_insert, mock_load, mock_save, tmp_path):
-        fp = hashlib.sha256("src/a.py:10".encode()).hexdigest()[:12]
+        fp = hashlib.sha256("myapp:src/a.py:10".encode()).hexdigest()[:12]
         mock_load.return_value = {fp: True}
         hits = [
             ("src/a.py", 10, "eval(x)"),
@@ -1284,3 +1341,69 @@ class TestCheckSecurityReviewWithVariants:
         assert result.variant_hits == []
         mock_variant_journal.assert_not_called()
         mock_dispatch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Language-aware helpers
+# ---------------------------------------------------------------------------
+
+
+class TestGrepIncludesForFinding:
+    """Tests for _grep_includes_for_finding()."""
+
+    def test_python_pattern(self):
+        includes = _grep_includes_for_finding("eval() usage")
+        assert includes == ["--include=*.py"]
+
+    def test_js_pattern(self):
+        includes = _grep_includes_for_finding("potential XSS via innerHTML")
+        assert "--include=*.js" in includes
+        assert "--include=*.tsx" in includes
+
+    def test_universal_pattern(self):
+        includes = _grep_includes_for_finding("hardcoded secret")
+        assert includes == []
+
+
+class TestSemgrepLanguagesForFinding:
+    """Tests for _semgrep_languages_for_finding()."""
+
+    def test_python_pattern(self):
+        langs = _semgrep_languages_for_finding("eval() usage")
+        assert langs == ["python"]
+
+    def test_js_pattern(self):
+        langs = _semgrep_languages_for_finding("React XSS risk")
+        assert "javascript" in langs
+        assert "typescript" in langs
+
+    def test_universal_pattern(self):
+        langs = _semgrep_languages_for_finding("hardcoded secret")
+        assert "python" in langs
+        assert "javascript" in langs
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint cross-project isolation
+# ---------------------------------------------------------------------------
+
+
+class TestFingerprintIsolation:
+    """Tests that variant fingerprints include project_name."""
+
+    @patch("app.security_review._save_variant_tracker")
+    @patch("app.security_review._load_variant_tracker", return_value={})
+    @patch("app.utils.insert_pending_mission", return_value=True)
+    def test_different_projects_different_fingerprints(self, mock_insert, mock_load, mock_save, tmp_path):
+        hits = [("src/a.py", 10, "eval(x)")]
+        _dispatch_variant_missions(str(tmp_path), "project_a", hits, max_missions=3)
+        tracker_a = mock_save.call_args[0][1]
+
+        mock_load.return_value = {}
+        mock_save.reset_mock()
+        _dispatch_variant_missions(str(tmp_path), "project_b", hits, max_missions=3)
+        tracker_b = mock_save.call_args[0][1]
+
+        keys_a = set(tracker_a.keys())
+        keys_b = set(tracker_b.keys())
+        assert keys_a != keys_b

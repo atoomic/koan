@@ -106,11 +106,48 @@ _VARIANT_PATTERN_MAP = {
     "React XSS risk": r"dangerouslySetInnerHTML",
 }
 
+_JS_PATTERNS = {"potential XSS via innerHTML", "React XSS risk", "wildcard CORS"}
+_UNIVERSAL_PATTERNS = {
+    "hardcoded secret", "SSL/TLS verification disabled",
+    "overly permissive file permissions", "verification bypass",
+}
+
+_GREP_INCLUDES_BY_FINDING = {
+    "py": ["--include=*.py"],
+    "js": ["--include=*.js", "--include=*.jsx", "--include=*.ts", "--include=*.tsx"],
+    "all": [],
+}
+
+
+def _grep_includes_for_finding(description: str) -> list:
+    """Return grep --include flags appropriate for finding type."""
+    if description in _JS_PATTERNS:
+        return list(_GREP_INCLUDES_BY_FINDING["js"])
+    if description in _UNIVERSAL_PATTERNS:
+        return list(_GREP_INCLUDES_BY_FINDING["all"])
+    return list(_GREP_INCLUDES_BY_FINDING["py"])
+
+
+_SEMGREP_LANGUAGES_BY_FINDING = {
+    "py": ["python"],
+    "js": ["javascript", "typescript"],
+    "all": ["python", "javascript", "typescript"],
+}
+
+
+def _semgrep_languages_for_finding(description: str) -> list:
+    """Return semgrep language list appropriate for finding type."""
+    if description in _JS_PATTERNS:
+        return list(_SEMGREP_LANGUAGES_BY_FINDING["js"])
+    if description in _UNIVERSAL_PATTERNS:
+        return list(_SEMGREP_LANGUAGES_BY_FINDING["all"])
+    return list(_SEMGREP_LANGUAGES_BY_FINDING["py"])
+
 
 def _extract_variant_patterns(
     findings: List[Tuple[str, str, str]],
 ) -> list:
-    """Extract deduplicated grep-ready patterns from content findings."""
+    """Extract deduplicated (pattern, description) pairs from content findings."""
     seen = set()
     patterns = []
     for description, _match, _context in findings:
@@ -119,7 +156,7 @@ def _extract_variant_patterns(
         seen.add(description)
         pattern = _VARIANT_PATTERN_MAP.get(description)
         if pattern:
-            patterns.append(pattern)
+            patterns.append((pattern, description))
     return patterns
 
 
@@ -166,10 +203,11 @@ def _check_variants_grep(
 ) -> List[Tuple[str, int, str]]:
     """Scan project for variant occurrences using grep."""
     hits = []
-    for pattern in patterns:
+    for pattern, description in patterns:
+        includes = _grep_includes_for_finding(description)
         try:
             result = subprocess.run(
-                ["grep", "-rn", "-E", "--include=*.py", pattern, "."],
+                ["grep", "-rn", "-E", *includes, pattern, "."],
                 capture_output=True, text=True,
                 cwd=project_path, timeout=30,
                 stdin=subprocess.DEVNULL,
@@ -196,14 +234,17 @@ def _check_variants_grep(
 
 
 def _build_semgrep_yaml(patterns: list) -> str:
-    """Build a semgrep YAML rules file from regex patterns."""
+    """Build a semgrep YAML rules file from (pattern, description) pairs."""
     rules = []
-    for i, pattern in enumerate(patterns):
+    for i, (pattern, description) in enumerate(patterns):
+        escaped = pattern.replace("\\", "\\\\").replace("'", "''")
+        langs = _semgrep_languages_for_finding(description)
+        lang_str = ", ".join(langs)
         rules.append(
             f"  - id: variant-{i}\n"
-            f"    pattern-regex: '{pattern}'\n"
+            f"    pattern-regex: '{escaped}'\n"
             f"    message: Variant of security finding\n"
-            f"    languages: [python]\n"
+            f"    languages: [{lang_str}]\n"
             f"    severity: WARNING"
         )
     return "rules:\n" + "\n".join(rules) if rules else "rules: []"
@@ -214,13 +255,14 @@ def _check_variants_semgrep(
     project_path: str,
     *,
     exclude_lines: set,
-) -> List[Tuple[str, int, str]]:
+) -> Optional[List[Tuple[str, int, str]]]:
     """Scan project for variant occurrences using semgrep.
 
-    Returns empty list if semgrep is not installed.
+    Returns None on failure (caller should fall back to grep).
+    Returns empty list when semgrep succeeds but finds nothing.
     """
     if not shutil.which("semgrep"):
-        return []
+        return None
 
     yaml_content = _build_semgrep_yaml(patterns)
     hits = []
@@ -238,19 +280,33 @@ def _check_variants_semgrep(
                 stdin=subprocess.DEVNULL,
             )
             if result.returncode != 0:
-                return []
+                stderr_sample = (result.stderr or "")[:200]
+                print(
+                    f"[security_review] semgrep failed (rc={result.returncode})"
+                    f"{': ' + stderr_sample if stderr_sample else ''}, falling back to grep",
+                    file=sys.stderr,
+                )
+                return None
             try:
                 data = _json.loads(result.stdout)
             except (ValueError, _json.JSONDecodeError):
-                return []
+                print(
+                    "[security_review] semgrep returned invalid JSON, falling back to grep",
+                    file=sys.stderr,
+                )
+                return None
             for item in data.get("results", []):
                 filepath = item.get("path", "")
                 lineno = item.get("start", {}).get("line", 0)
                 snippet = item.get("extra", {}).get("lines", "").strip()
                 if (filepath, lineno) not in exclude_lines:
                     hits.append((filepath, lineno, snippet))
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return []
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        print(
+            f"[security_review] semgrep error: {exc}, falling back to grep",
+            file=sys.stderr,
+        )
+        return None
     return hits
 
 
@@ -262,15 +318,17 @@ def _check_variants(
 ) -> List[Tuple[str, int, str]]:
     """Scan project for variant occurrences of security patterns.
 
-    Prefers semgrep (AST-level precision) when available; falls back to grep.
+    Prefers semgrep (AST-level precision) when available; falls back to grep
+    on semgrep failure or absence.
     """
     if not patterns:
         return []
 
-    if shutil.which("semgrep"):
-        return _check_variants_semgrep(
-            patterns, project_path, exclude_lines=exclude_lines,
-        )
+    result = _check_variants_semgrep(
+        patterns, project_path, exclude_lines=exclude_lines,
+    )
+    if result is not None:
+        return result
     return _check_variants_grep(
         patterns, project_path, exclude_lines=exclude_lines,
     )
@@ -286,7 +344,11 @@ def _load_variant_tracker(instance_dir: str) -> dict:
         return {}
     try:
         return _json.loads(path.read_text())
-    except (_json.JSONDecodeError, OSError):
+    except (_json.JSONDecodeError, OSError) as exc:
+        print(
+            f"[security_review] Corrupt variant tracker {path}: {exc}",
+            file=sys.stderr,
+        )
         return {}
 
 
@@ -317,7 +379,9 @@ def _dispatch_variant_missions(
         if dispatched >= max_missions:
             break
 
-        fingerprint = hashlib.sha256(f"{filepath}:{lineno}".encode()).hexdigest()[:12]
+        fingerprint = hashlib.sha256(
+            f"{project_name}:{filepath}:{lineno}".encode()
+        ).hexdigest()[:12]
         if fingerprint in tracker:
             continue
 
@@ -331,6 +395,11 @@ def _dispatch_variant_missions(
         if inserted:
             tracker[fingerprint] = True
             dispatched += 1
+        else:
+            print(
+                f"[security_review] Failed to insert variant mission for {filepath}:{lineno}",
+                file=sys.stderr,
+            )
 
     if dispatched > 0:
         _save_variant_tracker(instance_dir, tracker)
