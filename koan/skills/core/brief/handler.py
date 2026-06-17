@@ -100,10 +100,14 @@ def _add_journal_highlights(parts, instance_dir):
     except ImportError:
         return
 
-    yesterday = date.today() - timedelta(days=1)
-    content = read_all_journals(instance_dir, yesterday)
-    if not content.strip():
-        content = read_all_journals(instance_dir, date.today())
+    try:
+        yesterday = date.today() - timedelta(days=1)
+        content = read_all_journals(instance_dir, yesterday)
+        if not content.strip():
+            content = read_all_journals(instance_dir, date.today())
+    except OSError:
+        parts.append("  Journal: unavailable")
+        return
 
     if not content.strip():
         return
