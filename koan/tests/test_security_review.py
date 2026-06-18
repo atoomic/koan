@@ -1378,7 +1378,7 @@ class TestSemgrepLanguagesForFinding:
 
     def test_python_pattern(self):
         langs = _semgrep_languages_for_finding("eval() usage")
-        assert langs == ["python"]
+        assert langs == ["python", "javascript", "typescript"]
 
     def test_js_pattern(self):
         langs = _semgrep_languages_for_finding("React XSS risk")
