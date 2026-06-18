@@ -805,6 +805,17 @@ auto_update:
 # review_reflect:
 #   threshold: 5            # Min score to keep a finding (0-10, default: 5)
 
+# Review bot comment triage — triage inline comments from code-review bots
+# (CodeRabbit, GitHub Copilot Review, Sourcery) and post replies to actionable
+# findings. Off by default; enable globally here or per-review with --bot-comments.
+# Some bots use regular user accounts (not GitHub App bot accounts), so user_type
+# alone misses them — add their usernames to bot_usernames.
+# review_bot_triage:
+#   enabled: false              # Master switch (default: false)
+#   bot_usernames:              # Extra usernames to treat as bots (case-insensitive)
+#     - coderabbitai
+#     - sourcery-ai
+
 # Review verdict — controls the formal APPROVE / REQUEST_CHANGES verdict
 # submitted via the GitHub Pull Request Reviews API.
 # Can also be overridden per-project in projects.yaml.

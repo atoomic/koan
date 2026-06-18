@@ -27,7 +27,7 @@ from typing import List, Optional, Tuple
 from urllib.parse import quote
 
 from app.claude_step import resolve_pr_location
-from app.config import get_review_reply_config, get_review_verdict_config, is_review_compressor_enabled
+from app.config import get_review_bot_triage_config, get_review_reply_config, get_review_verdict_config, is_review_compressor_enabled
 from app.run_log import log
 from app.diff_compressor import compress_diff
 from app.github import run_gh, sanitize_github_comment, find_bot_comment
@@ -91,6 +91,27 @@ def _is_bot_user(item: dict, bot_username: str) -> bool:
     if bot_username and item.get("user", "").lower() == bot_username.lower():
         return True
     return False
+
+
+_BOT_NOISE_PATTERNS = [
+    re.compile(r"https?://[\w.-]*deploy[\w.-]*\.(netlify|vercel|herokuapp|surge)", re.I),
+    re.compile(r"coverage[:\s]+\d+(\.\d+)?%", re.I),
+    re.compile(r"^##\s+(summary|walkthrough|changelog)\b", re.I | re.M),
+    re.compile(r"^\s*\|.*\|.*\|.*\|\s*$", re.M),
+]
+
+
+def _pre_filter_bot_noise(comments: List[dict]) -> List[dict]:
+    """Drop bot comments that are known meta-noise (deployments, coverage, summaries)."""
+    filtered = []
+    for c in comments:
+        body = (c.get("body") or "").strip()
+        if not body:
+            continue
+        if any(pat.search(body) for pat in _BOT_NOISE_PATTERNS):
+            continue
+        filtered.append(c)
+    return filtered
 
 
 def _filter_threads(
@@ -182,18 +203,9 @@ def _exclude_replied_issue_comments(
     return filtered
 
 
-def _fetch_inline_review_comments(
-    full_repo: str, pr_number: str, bot_username: str = "",
-    max_thread_depth: int = 0,
-) -> List[dict]:
-    """Fetch inline review comments (code-level) for a PR.
-
-    When ``bot_username`` is set, threads where the bot was the last poster
-    (with no human follow-up) are excluded.  When ``max_thread_depth`` > 0,
-    threads with that many or more total comments are excluded entirely.
-    """
+def _fetch_raw_inline_items(full_repo: str, pr_number: str) -> List[dict]:
+    """Fetch raw inline review comment items from the GitHub API."""
     all_items: list = []
-    human_comments: List[dict] = []
     try:
         raw = run_gh(
             "api", f"repos/{full_repo}/pulls/{pr_number}/comments",
@@ -203,27 +215,85 @@ def _fetch_inline_review_comments(
         if raw.strip():
             for line in raw.strip().split("\n"):
                 try:
-                    item = json.loads(line)
-                    all_items.append(item)
-                    if _is_bot_user(item, bot_username):
-                        continue
-                    human_comments.append({
-                        "id": item["id"],
-                        "type": "review_comment",
-                        "user": item["user"],
-                        "body": item["body"],
-                        "path": item.get("path", ""),
-                        "line": item.get("line"),
-                        "in_reply_to_id": item.get("in_reply_to_id"),
-                    })
+                    all_items.append(json.loads(line))
                 except (json.JSONDecodeError, KeyError):
                     continue
     except RuntimeError:
         pass
+    return all_items
+
+
+def _partition_inline_comments(
+    items: List[dict],
+    bot_username: str,
+    extra_bot_usernames: Optional[List[str]] = None,
+) -> tuple:
+    """Partition parsed API items into (human, bot) comment lists.
+
+    Self-bot comments (matching ``bot_username``) are excluded from BOTH
+    lists to prevent reply loops.  Comments from users in
+    ``extra_bot_usernames`` are treated as bot-authored even when
+    ``user_type`` is ``"User"``.
+    """
+    extra_lower = {u.lower() for u in (extra_bot_usernames or [])}
+    human: List[dict] = []
+    bot: List[dict] = []
+    for item in items:
+        entry = {
+            "id": item["id"],
+            "type": "review_comment",
+            "user": item["user"],
+            "body": item["body"],
+            "path": item.get("path", ""),
+            "line": item.get("line"),
+            "in_reply_to_id": item.get("in_reply_to_id"),
+        }
+        user_lower = item.get("user", "").lower()
+        if bot_username and user_lower == bot_username.lower():
+            continue
+        if item.get("user_type") == "Bot" or user_lower in extra_lower:
+            bot.append(entry)
+        else:
+            human.append(entry)
+    return human, bot
+
+
+def _fetch_inline_review_comments(
+    full_repo: str, pr_number: str, bot_username: str = "",
+    max_thread_depth: int = 0,
+) -> List[dict]:
+    """Fetch inline review comments (code-level) for a PR.
+
+    Returns only human-authored comments.  Bot comments are partitioned
+    out.  When ``bot_username`` is set, threads where the bot was the last
+    poster (with no human follow-up) are excluded.  When
+    ``max_thread_depth`` > 0, threads with that many or more total comments
+    are excluded entirely.
+    """
+    all_items = _fetch_raw_inline_items(full_repo, pr_number)
+    human_comments, _ = _partition_inline_comments(all_items, bot_username)
 
     if bot_username or max_thread_depth > 0:
         return _filter_threads(human_comments, all_items, bot_username, max_thread_depth)
     return human_comments
+
+
+def _fetch_bot_inline_comments(
+    full_repo: str,
+    pr_number: str,
+    bot_username: str = "",
+    extra_bot_usernames: Optional[List[str]] = None,
+) -> List[dict]:
+    """Fetch inline review comments authored by bots, with noise pre-filtered.
+
+    Returns structured dicts for bot comments that pass the noise filter.
+    Self-bot comments are excluded.
+    """
+    all_items = _fetch_raw_inline_items(full_repo, pr_number)
+    _, bot_comments = _partition_inline_comments(
+        all_items, bot_username, extra_bot_usernames,
+    )
+    return _pre_filter_bot_noise(bot_comments)
 
 
 def _fetch_issue_comments(
@@ -802,6 +872,83 @@ def _format_error_hunter_findings(
         lines.append("")
 
     return "\n".join(lines).rstrip()
+
+
+def _format_bot_comments_for_prompt(comments: List[dict]) -> str:
+    """Format bot comments for inclusion in the triage prompt."""
+    lines = []
+    for c in comments:
+        path = c.get("path", "")
+        line_num = c.get("line", "?")
+        lines.append(f"### Comment ID: {c['id']} ({path}:{line_num})")
+        lines.append(c.get("body", ""))
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _run_bot_comment_triage(
+    bot_comments: List[dict],
+    diff: str,
+    skill_dir: Optional[Path],
+) -> List[dict]:
+    """Run Claude triage on bot inline comments.
+
+    Returns a list of ``{comment_id, reply}`` dicts for actionable comments,
+    compatible with ``_post_comment_replies()``.
+    """
+    if not bot_comments:
+        return []
+
+    try:
+        formatted_comments = _format_bot_comments_for_prompt(bot_comments)
+        max_diff = 12_000
+        truncated_diff = diff[:max_diff] + "\n...(truncated)" if len(diff) > max_diff else diff
+
+        if skill_dir is not None:
+            prompt = load_skill_prompt(
+                skill_dir, "bot-review-triage",
+                diff=truncated_diff, bot_comments=formatted_comments,
+            )
+        else:
+            prompt = load_prompt(
+                "bot-review-triage",
+                diff=truncated_diff, bot_comments=formatted_comments,
+            )
+    except Exception as e:
+        print(f"[review_runner] failed to load bot-review-triage prompt: {e}", file=sys.stderr)
+        return []
+
+    try:
+        raw_output, error = _run_claude_review(prompt, "")
+        if not raw_output:
+            print(f"[review_runner] bot comment triage failed: {error}", file=sys.stderr)
+            return []
+    except Exception as e:
+        print(f"[review_runner] bot comment triage failed: {e}", file=sys.stderr)
+        return []
+
+    try:
+        stripped = raw_output.strip()
+        if stripped.startswith("```"):
+            lines = stripped.split("\n")
+            stripped = "\n".join(lines[1:-1]) if len(lines) > 2 else stripped
+        entries = json.loads(stripped)
+        if not isinstance(entries, list):
+            return []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    replies = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("classification") != "actionable":
+            continue
+        reply = entry.get("reply", "").strip()
+        comment_id = entry.get("comment_id")
+        if reply and comment_id:
+            replies.append({"comment_id": comment_id, "reply": reply})
+    return replies
 
 
 def _extract_review_body(raw_output: str) -> Optional[str]:
@@ -1734,6 +1881,7 @@ def run_review(
     comments: bool = False,
     ultra: bool = False,
     force: bool = False,
+    bot_comments: bool = False,
 ) -> Tuple[bool, str, Optional[dict]]:
     """Execute a read-only code review on a PR.
 
@@ -1759,6 +1907,9 @@ def run_review(
             errors=True; provided as a single semantic switch for the
             /ultrareview skill.
         force: If True, review even if the PR is closed/merged.
+        bot_comments: If True, run an additional pass to triage inline
+            comments from code-review bots and post replies to actionable
+            findings.
 
     Returns:
         (success, summary, review_data) tuple. review_data is the validated
@@ -2013,6 +2164,31 @@ def run_review(
                 file=sys.stderr,
             )
 
+    # Step 6b: Bot comment triage pass (optional)
+    bot_triage_cfg = get_review_bot_triage_config()
+    bot_triage_enabled = bot_comments or bot_triage_cfg["enabled"]
+    extra_bot_usernames = bot_triage_cfg["bot_usernames"]
+
+    if bot_triage_enabled:
+        full_repo = f"{owner}/{repo}"
+        bot_inline = _fetch_bot_inline_comments(
+            full_repo, pr_number, bot_username, extra_bot_usernames,
+        )
+        if bot_inline:
+            notify_fn(f"Triaging {len(bot_inline)} bot comment(s) on PR #{pr_number}...")
+            triage_replies = _run_bot_comment_triage(
+                bot_inline, context.get("diff", ""), skill_dir,
+            )
+            if triage_replies:
+                bot_reply_results = _post_comment_replies(
+                    owner, repo, pr_number, triage_replies, bot_inline,
+                )
+                if bot_reply_results:
+                    print(
+                        f"[review_runner] posted {len(bot_reply_results)} bot triage reply(ies)",
+                        file=sys.stderr,
+                    )
+
     # Step 6a: Silent-failure-hunter pass (explicit flag or auto-detected)
     diff = context.get("diff", "")
     run_error_hunter = errors or _should_run_error_hunter(diff)
@@ -2211,6 +2387,11 @@ def main(argv=None):
         "--force", action="store_true",
         help="Review even if the PR is closed or merged.",
     )
+    parser.add_argument(
+        "--bot-comments", action="store_true",
+        help="Run an additional pass to triage inline comments from code-review bots "
+             "(CodeRabbit, Copilot Review, Sourcery).",
+    )
     cli_args = parser.parse_args(argv)
 
     try:
@@ -2231,6 +2412,7 @@ def main(argv=None):
         comments=cli_args.comments,
         ultra=cli_args.ultra,
         force=cli_args.force,
+        bot_comments=cli_args.bot_comments,
     )
     print(summary)
     return 0 if success else 1
