@@ -894,7 +894,9 @@ class TestCheckAutoMergeWithQuality:
     def test_merges_when_no_quality_report(self, mock_git, mock_prefix, mock_merge):
         from app.mission_runner import check_auto_merge
 
-        config = {"projects": {"test": {"git_auto_merge": {"enabled": True}}}}
+        config = {"projects": {"test": {"git_auto_merge": {
+            "enabled": True, "rules": [{"pattern": "koan/*", "auto_merge": True}],
+        }}}}
         result = check_auto_merge("/tmp/instance", "test", "/tmp/project", projects_config=config)
         assert result == "koan/feature"
         mock_merge.assert_called_once()
@@ -920,7 +922,7 @@ class TestCheckAutoMergeWithQuality:
     @patch("app.pr_quality.post_quality_comment")
     @patch("app.pr_quality.should_block_auto_merge", return_value=False)
     @patch("app.mission_runner._get_quality_gate_mode", return_value="warn")
-    @patch("app.projects_config.get_project_auto_merge", return_value={"enabled": True})
+    @patch("app.projects_config.get_project_auto_merge", return_value={"enabled": True, "rules": [{"pattern": "koan/*", "auto_merge": True}]})
     @patch("app.projects_config.load_projects_config", return_value={"projects": {}})
     @patch("app.config.get_branch_prefix", return_value="koan/")
     @patch("app.git_sync.run_git", return_value="koan/feature")

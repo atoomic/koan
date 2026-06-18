@@ -291,7 +291,9 @@ class TestMissionRunnerBranchPrefix:
     def test_auto_merge_matches_custom_prefix(self, mock_git, mock_prefix, mock_merge):
         """check_auto_merge processes branches matching prefix."""
         from app.mission_runner import check_auto_merge
-        config = {"projects": {"proj": {"git_auto_merge": {"enabled": True}}}}
+        config = {"projects": {"proj": {"git_auto_merge": {
+            "enabled": True, "rules": [{"pattern": "mybot/*", "auto_merge": True}],
+        }}}}
         result = check_auto_merge("/inst", "proj", "/path", projects_config=config)
         assert result == "mybot/fix-thing"
 
