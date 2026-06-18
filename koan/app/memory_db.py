@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -46,11 +47,27 @@ def _check_fts5(conn: sqlite3.Connection) -> bool:
         return False
 
 
+_EXPECTED_COLUMNS = {"project", "type", "content", "ts", "source_skill", "tags", "confidence", "expires_at"}
+
+
+def _table_has_expected_columns(conn: sqlite3.Connection) -> bool:
+    """Check whether the entries FTS5 table has all expected columns."""
+    try:
+        row = conn.execute("SELECT * FROM entries LIMIT 0").description
+        if row is None:
+            return False
+        existing = {col[0] for col in row}
+        return _EXPECTED_COLUMNS.issubset(existing)
+    except sqlite3.DatabaseError:
+        return False
+
+
 def ensure_db(instance: str) -> Optional[sqlite3.Connection]:
     """Open (or create) ``instance/memory/memory.db`` with WAL mode.
 
     Returns a connection, or ``None`` when FTS5 is unavailable or
-    the database cannot be opened.
+    the database cannot be opened.  Detects old 4-column schema and
+    recreates the FTS5 table with metadata columns.
     """
     mem_dir = Path(instance) / "memory"
     mem_dir.mkdir(parents=True, exist_ok=True)
@@ -62,9 +79,21 @@ def ensure_db(instance: str) -> Optional[sqlite3.Connection]:
         if not _check_fts5(conn):
             conn.close()
             return None
+
+        # Check if existing table needs schema upgrade
+        try:
+            conn.execute("SELECT * FROM entries LIMIT 0")
+            if not _table_has_expected_columns(conn):
+                conn.execute("DROP TABLE entries")
+                conn.commit()
+                logger.info("[memory_db] Dropped old entries table for schema upgrade")
+        except sqlite3.OperationalError:
+            pass  # table doesn't exist yet
+
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS entries "
-            "USING fts5(project, type, content, ts UNINDEXED)"
+            "USING fts5(project, type, content, ts UNINDEXED, "
+            "source_skill, tags, confidence UNINDEXED, expires_at UNINDEXED)"
         )
         conn.commit()
         return conn
@@ -79,14 +108,24 @@ def ensure_db(instance: str) -> Optional[sqlite3.Connection]:
 def insert_entry(conn: sqlite3.Connection, entry: Dict) -> None:
     """Insert a single JSONL-shaped dict into the FTS5 table."""
     global _insert_failure_count
+    tags_raw = entry.get("tags")
+    tags_str = json.dumps(tags_raw) if tags_raw else ""
+    confidence_raw = entry.get("confidence")
+    confidence_str = str(confidence_raw) if confidence_raw is not None else ""
     try:
         conn.execute(
-            "INSERT INTO entries(project, type, content, ts) VALUES (?, ?, ?, ?)",
+            "INSERT INTO entries(project, type, content, ts, "
+            "source_skill, tags, confidence, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 entry.get("project") or "",
                 entry.get("type") or "",
                 entry.get("content") or "",
                 entry.get("ts") or "",
+                entry.get("source_skill") or "",
+                tags_str,
+                confidence_str,
+                entry.get("expires_at") or "",
             ),
         )
         conn.commit()
@@ -102,6 +141,27 @@ def insert_entry(conn: sqlite3.Connection, entry: Dict) -> None:
             )
 
 
+def _build_entry_dict(proj, type_, content, ts, skill, tags_str, conf_str, exp):
+    """Build a result dict from FTS5 row columns, including optional metadata."""
+    entry = {
+        "project": proj if proj else None,
+        "type": type_,
+        "content": content,
+        "ts": ts,
+    }
+    if skill:
+        entry["source_skill"] = skill
+    if tags_str:
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            entry["tags"] = json.loads(tags_str)
+    if conf_str:
+        with contextlib.suppress(ValueError, TypeError):
+            entry["confidence"] = float(conf_str)
+    if exp:
+        entry["expires_at"] = exp
+    return entry
+
+
 def search_entries(
     conn: sqlite3.Connection,
     project: str,
@@ -112,13 +172,15 @@ def search_entries(
 
     Accepts raw natural-language ``query_text`` — sanitization is handled
     internally via ``build_fts5_query()``.  Returns empty list when query
-    produces no usable tokens.
+    produces no usable tokens.  Expired entries are excluded.
     """
     from app.memory_recall import build_fts5_query
 
     fts_query = build_fts5_query(query_text)
     if not fts_query:
         return []
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     try:
         project_lower = project.lower() if project else ""
@@ -129,7 +191,8 @@ def search_entries(
 
         while len(results) < max_results and offset < hard_cap:
             rows = conn.execute(
-                "SELECT project, type, content, ts, rank "
+                "SELECT project, type, content, ts, source_skill, tags, "
+                "confidence, expires_at, rank "
                 "FROM entries "
                 "WHERE entries MATCH ? "
                 "ORDER BY rank "
@@ -140,15 +203,12 @@ def search_entries(
             if not rows:
                 break
 
-            for proj, type_, content, ts, _rank in rows:
+            for proj, type_, content, ts, skill, tags_str, conf_str, exp, _rank in rows:
+                if exp and exp < now_iso:
+                    continue
                 entry_proj = proj or ""
                 if entry_proj == "" or (project_lower and entry_proj.lower() == project_lower):
-                    results.append({
-                        "project": proj if proj else None,
-                        "type": type_,
-                        "content": content,
-                        "ts": ts,
-                    })
+                    results.append(_build_entry_dict(proj, type_, content, ts, skill, tags_str, conf_str, exp))
                     if len(results) >= max_results:
                         break
 
@@ -225,27 +285,26 @@ def recent_entries(
     project: str,
     max_results: int = 20,
 ) -> List[Dict]:
-    """Recency-only fallback, ordered by ts DESC.
+    """Recency-only fallback, ordered by ts DESC.  Excludes expired entries.
 
     Since ``ts`` is UNINDEXED in FTS5, we do a full scan sorted by ts.
     """
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         project_lower = project.lower() if project else ""
         rows = conn.execute(
-            "SELECT project, type, content, ts FROM entries ORDER BY ts DESC LIMIT ?",
+            "SELECT project, type, content, ts, source_skill, tags, "
+            "confidence, expires_at FROM entries ORDER BY ts DESC LIMIT ?",
             (max_results * 5,),
         ).fetchall()
 
         results = []
-        for proj, type_, content, ts in rows:
+        for proj, type_, content, ts, skill, tags_str, conf_str, exp in rows:
+            if exp and exp < now_iso:
+                continue
             entry_proj = proj or ""
             if entry_proj == "" or (project_lower and entry_proj.lower() == project_lower):
-                results.append({
-                    "project": proj if proj else None,
-                    "type": type_,
-                    "content": content,
-                    "ts": ts,
-                })
+                results.append(_build_entry_dict(proj, type_, content, ts, skill, tags_str, conf_str, exp))
                 if len(results) >= max_results:
                     break
         results.reverse()
@@ -316,18 +375,28 @@ def migrate_jsonl_to_sqlite(instance: str) -> int:
                 continue
             try:
                 obj = json.loads(line)
+                tags_raw = obj.get("tags")
+                tags_str = json.dumps(tags_raw) if tags_raw else ""
+                conf_raw = obj.get("confidence")
+                conf_str = str(conf_raw) if conf_raw is not None else ""
                 entries.append((
                     obj.get("project") or "",
                     obj.get("type") or "",
                     obj.get("content") or "",
                     obj.get("ts") or "",
+                    obj.get("source_skill") or "",
+                    tags_str,
+                    conf_str,
+                    obj.get("expires_at") or "",
                 ))
             except json.JSONDecodeError:
                 continue
 
         if entries:
             conn.executemany(
-                "INSERT INTO entries(project, type, content, ts) VALUES (?, ?, ?, ?)",
+                "INSERT INTO entries(project, type, content, ts, "
+                "source_skill, tags, confidence, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 entries,
             )
             conn.commit()

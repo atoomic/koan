@@ -67,6 +67,29 @@ Absence of these lines (with a clean error log) means a read happened via the
 recency/Jaccard fallback. Failures still log at `WARNING` (e.g.
 `[memory_db] search_entries failed`, `FTS5 retrieval failed, falling back to JSONL`).
 
+## Entry Schema
+
+Each JSONL entry has four required and four optional fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ts` | ISO8601 string | yes | UTC timestamp of entry creation |
+| `type` | string | yes | Entry type: `"session"`, `"learning"` |
+| `project` | string or null | yes | Project name, or null for global entries |
+| `content` | string | yes | Entry text (capped at 2000 chars) |
+| `source_skill` | string | no | Skill that produced this entry (e.g. `"review"`, `"fix"`) |
+| `tags` | list of strings | no | Freeform classification tags |
+| `confidence` | float 0.0–1.0 | no | Confidence level of the observation |
+| `expires_at` | ISO8601 string | no | Auto-expiry timestamp; entry is pruned after this time |
+
+Optional fields are omitted from the JSON when not set (not stored as null).
+Existing entries without the new fields work unchanged — they get empty defaults
+in SQLite and are treated as having no skill, no tags, no expiry.
+
+`source_skill` enables skill-aware retrieval: `read_memory_window(current_skill="review")`
+boosts entries from the same skill. `expires_at` is enforced by both `prune_memory_log()`
+(JSONL side) and `search_entries()`/`recent_entries()` (SQLite side).
+
 ## Write Paths
 
 Memory is updated by session summaries, PR review learning, post-mission

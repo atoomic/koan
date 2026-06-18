@@ -526,6 +526,170 @@ class TestFtsLearningsFilter:
         assert result is not None
         assert "authentication" in result.lower() or "race" in result.lower()
 
+
+class TestMetadataColumns:
+
+    def test_insert_and_search_with_metadata(self, instance_dir):
+        from app.memory_db import ensure_db, insert_entry, search_entries
+        conn = ensure_db(instance_dir)
+        assert conn is not None
+        insert_entry(conn, {
+            "project": "koan",
+            "type": "learning",
+            "content": "always validate JWT tokens before trusting claims",
+            "ts": "2026-06-01T00:00:00Z",
+            "source_skill": "review",
+            "tags": ["security", "auth"],
+            "confidence": 0.9,
+            "expires_at": "2026-12-01T00:00:00Z",
+        })
+        results = search_entries(conn, "koan", "JWT tokens validate", max_results=5)
+        assert len(results) >= 1
+        assert results[0]["source_skill"] == "review"
+        assert results[0]["tags"] == ["security", "auth"]
+        assert results[0]["confidence"] == 0.9
+        assert results[0]["expires_at"] == "2026-12-01T00:00:00Z"
+        conn.close()
+
+    def test_insert_without_metadata_returns_defaults(self, instance_dir):
+        from app.memory_db import ensure_db, insert_entry, recent_entries
+        conn = ensure_db(instance_dir)
+        assert conn is not None
+        insert_entry(conn, {
+            "project": "koan",
+            "type": "session",
+            "content": "plain session entry",
+            "ts": "2026-06-01T00:00:00Z",
+        })
+        results = recent_entries(conn, "koan", max_results=5)
+        assert len(results) >= 1
+        assert results[0].get("source_skill") is None
+        assert results[0].get("tags") is None
+        assert results[0].get("confidence") is None
+        assert results[0].get("expires_at") is None
+        conn.close()
+
+    def test_expired_entries_excluded_from_search(self, instance_dir):
+        from app.memory_db import ensure_db, insert_entry, search_entries
+        conn = ensure_db(instance_dir)
+        assert conn is not None
+        insert_entry(conn, {
+            "project": "koan",
+            "type": "learning",
+            "content": "temporary workaround for authentication bug",
+            "ts": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-02-01T00:00:00Z",
+        })
+        insert_entry(conn, {
+            "project": "koan",
+            "type": "learning",
+            "content": "permanent authentication best practice",
+            "ts": "2026-01-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z",
+        })
+        results = search_entries(conn, "koan", "authentication", max_results=10)
+        contents = [r["content"] for r in results]
+        assert "temporary workaround for authentication bug" not in contents
+        assert "permanent authentication best practice" in contents
+        conn.close()
+
+    def test_expired_entries_excluded_from_recent(self, instance_dir):
+        from app.memory_db import ensure_db, insert_entry, recent_entries
+        conn = ensure_db(instance_dir)
+        assert conn is not None
+        insert_entry(conn, {
+            "project": "koan",
+            "type": "learning",
+            "content": "expired entry content",
+            "ts": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-02-01T00:00:00Z",
+        })
+        insert_entry(conn, {
+            "project": "koan",
+            "type": "learning",
+            "content": "valid entry content",
+            "ts": "2026-01-02T00:00:00Z",
+        })
+        results = recent_entries(conn, "koan", max_results=10)
+        contents = [r["content"] for r in results]
+        assert "expired entry content" not in contents
+        assert "valid entry content" in contents
+        conn.close()
+
+
+class TestSchemaUpgrade:
+
+    def test_old_schema_gets_upgraded(self, instance_dir):
+        """Pre-existing 4-column DB gets upgraded to 8-column schema."""
+        from app.memory_db import ensure_db, insert_entry, entry_count
+        import app.memory_db as mdb
+
+        mem_dir = Path(instance_dir) / "memory"
+        db_file = mem_dir / "memory.db"
+
+        # Create a legacy 4-column table
+        conn = sqlite3.connect(str(db_file), timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            "CREATE VIRTUAL TABLE entries "
+            "USING fts5(project, type, content, ts UNINDEXED)"
+        )
+        conn.execute(
+            "INSERT INTO entries(project, type, content, ts) VALUES (?, ?, ?, ?)",
+            ("koan", "session", "old schema entry", "2026-01-01T00:00:00Z"),
+        )
+        conn.commit()
+        conn.close()
+
+        # Reset FTS5 flag so ensure_db re-checks
+        mdb._fts5_available = None
+
+        # ensure_db should detect old schema, drop, and recreate
+        conn = ensure_db(instance_dir)
+        assert conn is not None
+        # Old data is gone (will be re-indexed from JSONL on next startup)
+        assert entry_count(conn) == 0
+        # New columns work
+        insert_entry(conn, {
+            "project": "koan",
+            "type": "learning",
+            "content": "new schema entry",
+            "ts": "2026-06-01T00:00:00Z",
+            "source_skill": "review",
+            "tags": ["test"],
+            "confidence": 0.8,
+        })
+        assert entry_count(conn) == 1
+        conn.close()
+
+
+class TestSkillAwareBoosting:
+
+    def test_matching_skill_entries_ranked_first(self, instance_dir):
+        from app.memory_manager import MemoryManager
+        mgr = MemoryManager(instance_dir)
+        mgr.append_memory_entry(
+            "learning", "koan", "fix: always check auth tokens on login",
+            source_skill="fix",
+        )
+        mgr.append_memory_entry(
+            "learning", "koan", "review: validate auth header format",
+            source_skill="review",
+        )
+        mgr.append_memory_entry(
+            "learning", "koan", "review: auth tokens must be rotated",
+            source_skill="review",
+        )
+        results = mgr.read_memory_window(
+            "koan", max_entries=10,
+            query_text="authentication tokens",
+            current_skill="review",
+        )
+        review_indices = [i for i, r in enumerate(results) if r.get("source_skill") == "review"]
+        fix_indices = [i for i, r in enumerate(results) if r.get("source_skill") == "fix"]
+        if review_indices and fix_indices:
+            assert max(review_indices) < min(fix_indices)
+
     def test_recall_full_bypasses_fts(self, instance_dir):
         from app.skill_memory import _load_filtered_learnings
         proj_dir = Path(instance_dir) / "memory" / "projects" / "koan"

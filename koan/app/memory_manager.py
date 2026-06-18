@@ -1298,12 +1298,19 @@ class MemoryManager:
         project: Optional[str],
         content: str,
         ts: Optional[str] = None,
+        source_skill: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        confidence: Optional[float] = None,
+        expires_at: Optional[str] = None,
     ) -> None:
         """Append one entry to memory/log.jsonl (append-only truth log).
 
         Uses O(1) file append with ``fcntl.flock(LOCK_EX)`` so concurrent
         callers never lose entries.  Content is capped at 2000 chars to
         prevent runaway diffs from inflating the log.
+
+        Optional metadata fields are only included when non-None to keep
+        existing entries compact and backward-compatible.
         """
         entry = {
             "ts": ts or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1311,6 +1318,14 @@ class MemoryManager:
             "project": project,
             "content": content[:2000],
         }
+        if source_skill:
+            entry["source_skill"] = source_skill
+        if tags:
+            entry["tags"] = tags
+        if confidence is not None:
+            entry["confidence"] = confidence
+        if expires_at:
+            entry["expires_at"] = expires_at
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         new_line = json.dumps(entry, ensure_ascii=False) + "\n"
         with open(self._log_path, "a", encoding="utf-8") as f:
@@ -1334,6 +1349,7 @@ class MemoryManager:
         project: Optional[str],
         max_entries: int = 20,
         query_text: str = "",
+        current_skill: Optional[str] = None,
     ) -> List[dict]:
         """Return the most relevant ``max_entries`` log entries for a project.
 
@@ -1341,6 +1357,9 @@ class MemoryManager:
         (1) FTS5-matched entries ranked by BM25, (2) recency fill for
         remaining slots.  When ``query_text`` is empty or SQLite is
         unavailable, falls back to JSONL tail (recency only).
+
+        When ``current_skill`` is provided, entries from the matching skill
+        are boosted to appear before others (preserving ts order within groups).
 
         Includes entries where ``project`` matches (case-insensitive) OR where
         ``project`` is null/absent (global entries).  Malformed lines are
@@ -1376,13 +1395,23 @@ class MemoryManager:
                     finally:
                         conn.close()
                     if fts_results:
-                        fts_results.sort(key=lambda e: e.get("ts", ""))
+                        if current_skill:
+                            skill_matched = [e for e in fts_results if e.get("source_skill") == current_skill]
+                            others = [e for e in fts_results if e.get("source_skill") != current_skill]
+                            skill_matched.sort(key=lambda e: e.get("ts", ""))
+                            others.sort(key=lambda e: e.get("ts", ""))
+                            fts_results = skill_matched + others
+                            skill_match_count = len(skill_matched)
+                        else:
+                            fts_results.sort(key=lambda e: e.get("ts", ""))
+                            skill_match_count = 0
                         _log_memory_use(
                             "[memory] FTS5 surfaced %d/%d entries for %s "
-                            "(%d ranked match, %d recency fill) — query=%r"
+                            "(%d ranked match, %d recency fill, %d skill-matched) — query=%r"
                             % (
                                 len(fts_results), max_entries, project or "global",
                                 fts_match_count, len(fts_results) - fts_match_count,
+                                skill_match_count,
                                 query_text[:60],
                             )
                         )
@@ -1434,7 +1463,8 @@ class MemoryManager:
             fcntl.flock(f, fcntl.LOCK_EX)
             raw = f.read()
 
-            cutoff = datetime.now(timezone.utc) - timedelta(days=horizon_days)
+            now_utc = datetime.now(timezone.utc)
+            cutoff = now_utc - timedelta(days=horizon_days)
             kept = []
             removed = 0
             for line in raw.splitlines():
@@ -1452,6 +1482,16 @@ class MemoryManager:
                             continue
                     except ValueError:
                         pass
+                    # Check explicit expires_at
+                    expires_str = obj.get("expires_at", "")
+                    if expires_str:
+                        try:
+                            exp_dt = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                            if exp_dt < now_utc:
+                                removed += 1
+                                continue
+                        except ValueError:
+                            pass
                     kept.append(line)
                 except json.JSONDecodeError:
                     kept.append(line)  # preserve malformed lines rather than lose them
@@ -1633,9 +1673,19 @@ def append_memory_entry(
     project: Optional[str],
     content: str,
     ts: Optional[str] = None,
+    source_skill: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    confidence: Optional[float] = None,
+    expires_at: Optional[str] = None,
 ) -> None:
     """Append one entry to memory/log.jsonl."""
-    MemoryManager(instance_dir).append_memory_entry(type_, project, content, ts)
+    MemoryManager(instance_dir).append_memory_entry(
+        type_, project, content, ts,
+        source_skill=source_skill,
+        tags=tags,
+        confidence=confidence,
+        expires_at=expires_at,
+    )
 
 
 def read_memory_window(
@@ -1643,10 +1693,11 @@ def read_memory_window(
     project: Optional[str],
     max_entries: int = 20,
     query_text: str = "",
+    current_skill: Optional[str] = None,
 ) -> List[dict]:
     """Return the most relevant log entries for a project."""
     return MemoryManager(instance_dir).read_memory_window(
-        project, max_entries, query_text=query_text,
+        project, max_entries, query_text=query_text, current_skill=current_skill,
     )
 
 
