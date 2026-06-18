@@ -1129,6 +1129,33 @@ class TestTrackerRuntimeErrorIsolation:
         content = missions.read_text()
         assert "[r:1]" in content
 
+    def test_real_tracker_write_failure_falls_back_to_inline(self, instance_dir):
+        """Real OSError from locked_json_modify propagates through increment_crash_count."""
+        missions = instance_dir / "missions.md"
+        missions.write_text(_missions(in_progress="- Write-fail task"))
+
+        with patch("app.stagnation_monitor.locked_json_modify",
+                   side_effect=OSError("Permission denied")):
+            count, _ = recover_missions(str(instance_dir))
+
+        assert count == 1
+        content = missions.read_text()
+        assert "[r:1]" in content
+
+    def test_safe_wrappers_log_warnings_on_failure(self, instance_dir, capsys):
+        """All _safe_* wrappers emit stderr warnings when tracker calls fail."""
+        missions = instance_dir / "missions.md"
+        missions.write_text(_missions(in_progress="- Logged task"))
+
+        with patch("app.stagnation_monitor.get_crash_count",
+                   side_effect=OSError("read failed")):
+            count, _ = recover_missions(str(instance_dir))
+
+        assert count == 1
+        captured = capsys.readouterr()
+        assert "tracker get_crash failed" in captured.err
+        assert "Logged task" in captured.err
+
 
 class TestCheckpointAwareRecovery:
     """Tests for checkpoint integration in recovery."""

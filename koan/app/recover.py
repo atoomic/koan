@@ -328,7 +328,9 @@ def recover_missions(
                 return 0
             try:
                 return _get_crash(instance_dir, title)
-            except Exception:
+            except Exception as e:
+                print(f"[recover] Warning: tracker get_crash failed for "
+                      f"{title!r}, using 0: {e}", file=sys.stderr)
                 return 0
 
         def _safe_get_total(title: str) -> int:
@@ -336,14 +338,20 @@ def recover_missions(
                 return 0
             try:
                 return _get_total(instance_dir, title)
-            except Exception:
+            except Exception as e:
+                print(f"[recover] Warning: tracker get_total failed for "
+                      f"{title!r}, using 0: {e}", file=sys.stderr)
                 return 0
 
         def _safe_seed_crash(title: str, value: int) -> None:
             if _seed_crash is None:
                 return
-            with contextlib.suppress(Exception):
+            try:
                 _seed_crash(instance_dir, title, value)
+            except Exception as e:
+                print(f"[recover] Warning: tracker seed_crash failed for "
+                      f"{title!r}, legacy [r:{value}] may be lost: {e}",
+                      file=sys.stderr)
 
         def _safe_inc_crash(title: str) -> bool:
             """Try to increment via tracker. Returns True on success."""
@@ -352,7 +360,10 @@ def recover_missions(
             try:
                 _inc_crash(instance_dir, title)
                 return True
-            except Exception:
+            except Exception as e:
+                print(f"[recover] Warning: tracker inc_crash failed for "
+                      f"{title!r}, falling back to inline [r:N]: {e}",
+                      file=sys.stderr)
                 return False
 
         def _get_old_r_count(line: str) -> int:
