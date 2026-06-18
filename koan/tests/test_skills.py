@@ -645,6 +645,7 @@ class TestCollectComboSkills:
 
     def test_maps_command_and_aliases_to_sub_commands(self):
         from app.skills import (
+            ComboSkill,
             Skill,
             SkillCommand,
             SkillRegistry,
@@ -659,8 +660,8 @@ class TestCollectComboSkills:
         ))
         mapping = collect_combo_skills(reg)
         assert mapping == {
-            "reviewrebase": ["review", "rebase"],
-            "rr": ["review", "rebase"],
+            "reviewrebase": ComboSkill(["review", "rebase"], False),
+            "rr": ComboSkill(["review", "rebase"], False),
         }
 
     def test_skips_skills_without_sub_commands(self):
@@ -685,6 +686,89 @@ class TestCollectComboSkills:
         mapping = collect_combo_skills(reg)
         assert "plan" not in mapping
         assert "rr" in mapping
+
+    def test_returns_combo_skill_namedtuple(self):
+        """collect_combo_skills returns ComboSkill namedtuples."""
+        from app.skills import (
+            ComboSkill,
+            Skill,
+            SkillCommand,
+            SkillRegistry,
+            collect_combo_skills,
+        )
+        reg = SkillRegistry()
+        reg._register(Skill(
+            name="review_rebase",
+            scope="core",
+            sub_commands=["review", "rebase"],
+            commands=[SkillCommand(name="reviewrebase", aliases=["rr"])],
+        ))
+        result = collect_combo_skills(reg)
+        assert "rr" in result
+        assert isinstance(result["rr"], ComboSkill)
+        assert result["rr"].commands == ["review", "rebase"]
+        assert result["rr"].parallel is False
+
+    def test_parallel_flag_propagated(self):
+        """parallel: true in Skill should set ComboSkill.parallel."""
+        from app.skills import (
+            Skill,
+            SkillCommand,
+            SkillRegistry,
+            collect_combo_skills,
+        )
+        reg = SkillRegistry()
+        reg._register(Skill(
+            name="audit_all",
+            scope="core",
+            group="code",
+            sub_commands=["security_audit", "dead_code"],
+            parallel_sub_commands=True,
+            commands=[SkillCommand(name="audit_all")],
+        ))
+        result = collect_combo_skills(reg)
+        assert result["audit_all"].parallel is True
+        assert result["audit_all"].commands == ["security_audit", "dead_code"]
+
+    def test_parallel_parsed_from_skill_md(self, tmp_path):
+        """parallel: true in SKILL.md should set parallel_sub_commands."""
+        from app.skills import parse_skill_md
+
+        skill_md = tmp_path / "SKILL.md"
+        skill_md.write_text(
+            "---\n"
+            "name: audit_all\n"
+            "scope: core\n"
+            "group: code\n"
+            "parallel: true\n"
+            "sub_commands: [security_audit, dead_code, profile]\n"
+            "commands:\n"
+            "  - name: audit_all\n"
+            "    aliases: [aa]\n"
+            "---\n"
+        )
+        skill = parse_skill_md(skill_md)
+        assert skill is not None
+        assert skill.parallel_sub_commands is True
+        assert skill.sub_commands == ["security_audit", "dead_code", "profile"]
+
+    def test_parallel_defaults_to_false(self, tmp_path):
+        """Without parallel flag, parallel_sub_commands should be False."""
+        from app.skills import parse_skill_md
+
+        skill_md = tmp_path / "SKILL.md"
+        skill_md.write_text(
+            "---\n"
+            "name: review_rebase\n"
+            "scope: core\n"
+            "sub_commands: [review, rebase]\n"
+            "commands:\n"
+            "  - name: reviewrebase\n"
+            "---\n"
+        )
+        skill = parse_skill_md(skill_md)
+        assert skill is not None
+        assert skill.parallel_sub_commands is False
 
     def test_sub_commands_parsed_from_skill_md(self, tmp_path):
         from app.skills import parse_skill_md
@@ -1889,10 +1973,13 @@ class TestCoreSkillsComplete:
         assert expected.issubset(actual), f"Missing: {expected - actual}"
 
     def test_all_core_skills_have_handlers(self):
-        """Every core skill should have a handler.py."""
+        """Every core skill should have a handler.py or sub_commands."""
         registry = build_registry()
         for skill in registry.list_by_scope("core"):
-            assert skill.has_handler(), f"Skill {skill.name} missing handler.py"
+            has_execution_path = skill.has_handler() or skill.sub_commands
+            assert has_execution_path, (
+                f"Skill {skill.name} missing handler.py and has no sub_commands"
+            )
 
     def test_chat_skill_is_worker(self):
         """Chat skill should be worker=true (handle_chat blocks on Claude call)."""

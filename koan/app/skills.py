@@ -106,6 +106,7 @@ class Skill:
     # skill is triggered.  Combo skills (e.g. /rr → /review + /rebase) declare
     # their expansion in SKILL.md frontmatter rather than in a hardcoded dict.
     sub_commands: List[str] = field(default_factory=list)
+    parallel_sub_commands: bool = False
     requirements: List[str] = field(default_factory=list)
     # ``model_key`` — optional key used to resolve the model name shown in PR
     # footers (e.g. "mission"). When set, the agent loop forwards it to the
@@ -310,6 +311,9 @@ def parse_skill_md(path: Path) -> Optional[Skill]:
         sub_commands_raw = [sub_commands_raw] if sub_commands_raw else []
     sub_commands = [s for s in sub_commands_raw if s]
 
+    # Parse parallel flag (for combo skills batch insertion)
+    parallel_sub_commands = _parse_bool_flag(meta, "parallel")
+
     # Parse model_key (for PR footer model resolution)
     model_key = str(meta.get("model_key", "") or "").strip()
 
@@ -333,6 +337,7 @@ def parse_skill_md(path: Path) -> Optional[Skill]:
         forward_result_enabled=forward_result_enabled,
         title_markers=title_markers,
         sub_commands=sub_commands,
+        parallel_sub_commands=parallel_sub_commands,
         requirements=requirements,
         model_key=model_key,
         iterative=iterative,
@@ -566,24 +571,28 @@ def collect_forward_result_markers(registry: "SkillRegistry") -> List[str]:
     return sorted(markers)
 
 
-def collect_combo_skills(registry: "SkillRegistry") -> Dict[str, List[str]]:
-    """Build a mapping of command names/aliases to sub-command lists for combo skills.
+ComboSkill = namedtuple("ComboSkill", ["commands", "parallel"], defaults=[False])
+
+
+def collect_combo_skills(registry: "SkillRegistry") -> Dict[str, "ComboSkill"]:
+    """Build a mapping of command names/aliases to combo skill info.
 
     Iterates all skills with ``sub_commands`` defined in their SKILL.md
-    frontmatter and maps every command name + alias to the expansion list.
+    frontmatter and maps every command name + alias to the expansion info.
 
     Returns:
-        Dict mapping command name or alias to the ordered list of sub-commands.
-        Example: {"rr": ["review", "rebase"], "reviewrebase": ["review", "rebase"]}
+        Dict mapping command name or alias to ComboSkill(commands, parallel).
+        Example: {"rr": ComboSkill(["review", "rebase"], False)}
     """
-    mapping: Dict[str, List[str]] = {}
+    mapping: Dict[str, ComboSkill] = {}
     for skill in registry.list_all():
         if not skill.sub_commands:
             continue
+        combo = ComboSkill(commands=skill.sub_commands, parallel=skill.parallel_sub_commands)
         for cmd in skill.commands:
-            mapping[cmd.name] = skill.sub_commands
+            mapping[cmd.name] = combo
             for alias in cmd.aliases:
-                mapping[alias] = skill.sub_commands
+                mapping[alias] = combo
     return mapping
 
 
@@ -608,6 +617,7 @@ def execute_skill(skill: Skill, ctx: SkillContext) -> Optional[Union[str, SkillE
 
     Handler-based skills: imports handler.py and calls handle(ctx).
     Prompt-based skills: returns the prompt body (caller sends to Claude).
+    Combo skills (sub_commands, no handler): expands into pending missions.
 
     Returns:
         Response text, SkillError on handler crash, or None if no handler.
@@ -616,7 +626,42 @@ def execute_skill(skill: Skill, ctx: SkillContext) -> Optional[Union[str, SkillE
         return _execute_handler(skill, ctx)
     if skill.prompt_body:
         return _execute_prompt(skill, ctx)
+    if skill.sub_commands:
+        return _execute_combo_skill(skill, ctx)
     return None
+
+
+def _execute_combo_skill(skill: Skill, ctx: SkillContext) -> str:
+    """Expand a combo skill into pending missions via expand_combo_skill()."""
+    from app.skill_dispatch import expand_combo_skill
+    from app.utils import get_known_projects, resolve_project_alias
+
+    args = ctx.args.strip()
+    project = None
+    mission_args = args
+
+    words = args.split(None, 1)
+    if words:
+        known_map = {name.lower(): name for name, _ in get_known_projects()}
+        matched = known_map.get(words[0].lower())
+        if not matched:
+            matched = resolve_project_alias(words[0])
+        if matched:
+            project = matched
+            mission_args = words[1] if len(words) > 1 else ""
+
+    tag = f"[project:{project}] " if project else ""
+    mission_text = f"{tag}/{ctx.command_name} {mission_args}".rstrip()
+
+    expanded = expand_combo_skill(mission_text, str(ctx.instance_dir))
+    if not expanded:
+        return f"Failed to expand combo /{ctx.command_name} — skill not found in dispatch cache"
+
+    sub_list = ", ".join(f"/{c}" for c in skill.sub_commands)
+    ack = f"Combo /{ctx.command_name} expanded into: {sub_list}"
+    if project:
+        ack += f" (project: {project})"
+    return ack
 
 
 # Captured at import time so first-time observations in
