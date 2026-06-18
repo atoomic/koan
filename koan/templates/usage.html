@@ -348,11 +348,22 @@
                 <th class="text-right">Cache Hit %</th>
                 <th class="text-right">Success</th>
                 <th class="text-right">Trend</th>
+                <th class="text-right" title="Estimated fraction of tokens spent on non-productive sessions (proportional approximation)">Waste %</th>
             </tr>
         </thead>
         <tbody></tbody>
     </table>
     </div>
+</div>
+
+<h2>Efficiency</h2>
+<p style="color:var(--text-muted);font-size:0.85rem;margin:-0.5rem 0 0.75rem;">
+    Tokens per productive outcome by project (lower is better).
+    Token split is proportional — not per-session attribution.
+</p>
+<div class="card" id="efficiency-card">
+    <canvas id="efficiency-chart" height="200"></canvas>
+    <div class="empty-state" id="efficiency-empty" style="display:none;">No efficiency data available.</div>
 </div>
 
 <h2>By Model</h2>
@@ -383,6 +394,7 @@ let outcomeChart = null;
 let typeChart = null;
 let modeChart = null;
 let lastActionChart = null;
+let efficiencyChart = null;
 let currentProject = '';
 let windowOffset = 0;
 
@@ -1098,6 +1110,72 @@ document.addEventListener('mousemove', function(e) {
     if (_heatTipVisible) _positionHeatTip(e);
 });
 
+function renderEfficiencyChart(effData) {
+    const canvas = document.getElementById('efficiency-chart');
+    const emptyEl = document.getElementById('efficiency-empty');
+    if (efficiencyChart) { efficiencyChart.destroy(); efficiencyChart = null; }
+
+    const projects = Object.entries(effData.by_project || {})
+        .filter(([, v]) => v.tokens_per_productive_outcome !== null && v.productive_count > 0)
+        .sort((a, b) => a[1].tokens_per_productive_outcome - b[1].tokens_per_productive_outcome);
+
+    if (projects.length === 0) {
+        canvas.style.display = 'none';
+        emptyEl.style.display = '';
+        return;
+    }
+    canvas.style.display = '';
+    emptyEl.style.display = 'none';
+
+    canvas.height = Math.max(200, projects.length * 36);
+
+    efficiencyChart = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: projects.map(([name]) => name),
+            datasets: [{
+                label: 'Tokens per productive outcome',
+                data: projects.map(([, v]) => v.tokens_per_productive_outcome),
+                backgroundColor: projects.map(([, v]) => {
+                    const waste = v.waste_pct || 0;
+                    const hue = Math.max(0, 120 - waste * 120);
+                    return 'hsla(' + hue + ',70%,55%,0.75)';
+                }),
+                borderWidth: 0,
+            }],
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            const v = projects[ctx.dataIndex][1];
+                            return fmtTokens(ctx.raw) + ' tokens/productive (' +
+                                v.productive_count + ' productive, ' +
+                                (v.empty_count + v.blocked_count) + ' wasted)';
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    beginAtZero: true,
+                    ticks: { callback: v => fmtTokens(v), color: 'var(--text-secondary)' },
+                    grid: { color: 'rgba(128,128,128,0.1)' },
+                },
+                y: {
+                    ticks: { color: 'var(--text-primary)' },
+                    grid: { display: false },
+                },
+            },
+        },
+    });
+}
+
 function heatColor(intensity) {
     // intensity 0 → green, 0.33 → yellow, 0.66 → orange, 1 → red
     const stops = [
@@ -1312,7 +1390,7 @@ function loadAll() {
             const projects = Object.entries(data.by_project)
                 .sort((a, b) => (b[1].input_tokens + b[1].output_tokens) - (a[1].input_tokens + a[1].output_tokens));
             if (projects.length === 0) {
-                pTbody.innerHTML = '<tr><td colspan="9" class="empty-state">No data</td></tr>';
+                pTbody.innerHTML = '<tr><td colspan="10" class="empty-state">No data</td></tr>';
             }
             const hasPricing = data.has_pricing;
             for (const [name, p] of projects) {
@@ -1335,6 +1413,7 @@ function loadAll() {
                     '<td class="text-right">' + cacheHitPct + '</td>' +
                     '<td class="text-right">' + successCell + '</td>' +
                     '<td class="text-right">' + trendCell + '</td>' +
+                    '<td class="text-right waste-cell" data-project="' + name + '">-</td>' +
                     '</tr>';
             }
 
@@ -1387,6 +1466,25 @@ function loadAll() {
                     }
                 });
             }
+        })
+        .catch(() => {});
+
+    // Fetch efficiency data and populate Waste % column
+    fetch('/api/efficiency?days=' + days + projParam + offsetParam)
+        .then(r => r.json())
+        .then(eff => {
+            document.querySelectorAll('#by-project tbody .waste-cell').forEach(cell => {
+                const proj = cell.dataset.project;
+                const pe = eff.by_project && eff.by_project[proj];
+                if (!pe || pe.waste_pct === null || pe.waste_pct === undefined) {
+                    cell.textContent = '-';
+                    return;
+                }
+                const pct = (pe.waste_pct * 100).toFixed(0);
+                const hue = Math.max(0, 120 - pe.waste_pct * 120);
+                cell.innerHTML = '<span style="color:hsl(' + hue + ',70%,45%)">' + pct + '%</span>';
+            });
+            renderEfficiencyChart(eff);
         })
         .catch(() => {});
 }
