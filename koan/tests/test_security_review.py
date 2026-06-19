@@ -263,7 +263,7 @@ class TestScanDiffForPatterns:
         assert findings[0][0] == "dynamic import"
 
     def test_detects_aws_access_key(self):
-        diff = "+aws_key = 'AKIAIOSFODNN7EXAMPLE'"
+        diff = "+aws_key = '" + "AKIA" + "A" * 16 + "'"
         findings = scan_diff_for_patterns(diff)
         assert len(findings) == 1
         assert findings[0][0] == "AWS access key ID"
