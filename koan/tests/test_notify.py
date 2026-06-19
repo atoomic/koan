@@ -8,7 +8,8 @@ import pytest
 
 from app.notify import (
     send_telegram, format_and_send, reset_flood_state,
-    send_typing, TypingIndicator,
+    send_typing, stop_typing, TypingIndicator, THINKING_PHRASES,
+    set_reply_context, clear_reply_context,
     _send_raw_bypass_flood, _direct_send,
     invalidate_file_cache, _file_cache,
     NotificationPriority, NOTIFICATION_SUPPRESSED,
@@ -389,6 +390,32 @@ class TestSendTyping:
     def test_returns_false_on_system_exit(self, mock_get_provider):
         assert send_typing() is False
 
+    @patch("app.messaging.get_messaging_provider")
+    def test_passes_reply_to_and_status(self, mock_get_provider):
+        mock_provider = MagicMock()
+        mock_provider.send_typing.return_value = True
+        mock_get_provider.return_value = mock_provider
+        send_typing(reply_to=7, status="Thinking…")
+        mock_provider.send_typing.assert_called_once_with(
+            reply_to_message_id=7, status="Thinking…"
+        )
+
+
+class TestStopTyping:
+    """Tests for the stop_typing() facade."""
+
+    @patch("app.messaging.get_messaging_provider")
+    def test_delegates_to_provider(self, mock_get_provider):
+        mock_provider = MagicMock()
+        mock_provider.stop_typing.return_value = True
+        mock_get_provider.return_value = mock_provider
+        assert stop_typing(7) is True
+        mock_provider.stop_typing.assert_called_once_with(reply_to_message_id=7)
+
+    @patch("app.messaging.get_messaging_provider", side_effect=SystemExit(1))
+    def test_returns_false_on_system_exit(self, mock_get_provider):
+        assert stop_typing() is False
+
 
 class TestTypingIndicator:
     """Tests for TypingIndicator context manager."""
@@ -400,6 +427,34 @@ class TestTypingIndicator:
             with TypingIndicator():
                 time.sleep(0.02)
             mock_provider.send_typing.assert_called()
+
+    def test_clears_status_on_exit(self):
+        mock_provider = MagicMock()
+        mock_provider.send_typing.return_value = True
+        with patch("app.messaging.get_messaging_provider", return_value=mock_provider):
+            with TypingIndicator():
+                time.sleep(0.02)
+        mock_provider.stop_typing.assert_called()
+
+    def test_captures_reply_context_and_rotates_phrases(self):
+        mock_provider = MagicMock()
+        mock_provider.send_typing.return_value = True
+        with patch("app.messaging.get_messaging_provider", return_value=mock_provider):
+            set_reply_context(42)
+            try:
+                with TypingIndicator(interval=0.05):
+                    time.sleep(0.15)
+            finally:
+                clear_reply_context()
+        statuses = [c.kwargs.get("status") for c in mock_provider.send_typing.call_args_list]
+        reply_tos = {c.kwargs.get("reply_to_message_id") for c in mock_provider.send_typing.call_args_list}
+        # Reply context captured at enter and reused on the background thread.
+        assert reply_tos == {42}
+        # Phrases come from the rotating set, and at least two distinct ones used.
+        assert all(s in THINKING_PHRASES for s in statuses)
+        assert len(set(statuses)) >= 2
+        # Status cleared for the same thread on exit.
+        mock_provider.stop_typing.assert_called_with(reply_to_message_id=42)
 
     def test_stops_sending_on_exit(self):
         mock_provider = MagicMock()

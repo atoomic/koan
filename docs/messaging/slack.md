@@ -6,7 +6,19 @@ This guide covers setting up Kōan with Slack as the messaging provider. Slack u
 
 - A Slack workspace where you have permission to install apps (or can request admin approval)
 
-## Step 1: Create a Slack App
+## Fast path: create the app from a manifest
+
+The quickest setup is to create the app from the ready-made manifest, which
+pre-configures Socket Mode, scopes, and event subscriptions in one shot:
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**
+2. Select your workspace
+3. Paste the contents of [`slack-app-manifest.json`](./slack-app-manifest.json) and create the app
+4. Generate the tokens it needs (Steps 2 and 4 below) and skip the manual scope/event setup (Steps 3)
+
+Then continue from Step 4 (Install to Workspace) to collect your tokens.
+
+## Step 1: Create a Slack App (manual alternative)
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps)
 2. Click **Create New App** → **From scratch**
@@ -29,7 +41,8 @@ This guide covers setting up Kōan with Slack as the messaging provider. Slack u
 
    | Scope | Purpose |
    |-------|---------|
-   | `chat:write` | Send messages |
+   | `chat:write` | Send messages and set the "thinking" status |
+   | `assistant:write` | Show the assistant "thinking" status (optional; `chat:write` also works) |
    | `channels:history` | Read messages in public channels |
    | `groups:history` | Read messages in private channels |
    | `im:history` | Read direct messages |
@@ -41,6 +54,8 @@ This guide covers setting up Kōan with Slack as the messaging provider. Slack u
    - `message.groups`
    - `message.im`
    - `app_mention`
+   - `assistant_thread_started` (optional — for the Assistant "thinking" status)
+   - `assistant_thread_context_changed` (optional)
 
 ## Step 4: Install App to Workspace
 
@@ -78,7 +93,9 @@ pip install 'slack-sdk>=3.27'
 Edit your `.env` file:
 
 ```bash
-# Messaging provider
+# Messaging provider — REQUIRED. Without this, Kōan defaults to Telegram and
+# ignores the KOAN_SLACK_* credentials entirely (the #1 "Slack isn't working"
+# cause). Setting only the three tokens below is not enough.
 KOAN_MESSAGING_PROVIDER=slack
 
 # Slack credentials (all required)
@@ -93,6 +110,8 @@ Or in `instance/config.yaml`:
 messaging:
   provider: "slack"
 ```
+
+The env var takes precedence over `config.yaml`.
 
 ## Step 9: Start Kōan
 
@@ -120,17 +139,69 @@ You should see in the logs:
 - Make sure Socket Mode is enabled (Step 2)
 - The `connections:write` scope must be on the App-Level Token
 
+### Bot connects but never replies
+
+- **Confirm the provider is actually Slack.** Run `make logs` and look for
+  `Messaging provider: SLACK`. If it says `TELEGRAM`, `KOAN_MESSAGING_PROVIDER=slack`
+  is not set — setting only the `KOAN_SLACK_*` tokens is not enough.
+- **You must @mention the bot.** Kōan ignores un-addressed channel chatter by
+  design. Ping `@Koan ...` to start; after that you can keep replying in the
+  thread without re-mentioning.
+
 ### Bot not receiving messages
 
 - Make sure the bot is invited to the channel (`/invite @koan`)
 - Verify the `KOAN_SLACK_CHANNEL_ID` matches the channel
 - Check that event subscriptions are enabled (Step 3)
-- Messages from other bots and message subtypes (edits, joins) are filtered out
+- Messages from other bots, the bot's own messages, and message subtypes (edits, joins) are filtered out
 
 ### Messages not delivered or rate limiting
 
 - Slack limits `chat.postMessage` to ~1 message/second. Kōan handles this automatically with built-in rate limiting.
 - Long messages are chunked to 4000 characters per message.
+
+## How Kōan behaves in Slack
+
+- **Mention to start**: In the configured channel, Kōan stays quiet until you
+  @mention it (or it receives an `app_mention`). Ordinary channel chatter is
+  ignored, so the bot is safe to drop into a shared channel.
+- **Replies go in a thread**: When you @mention Kōan on a channel-root message,
+  it replies in a **thread** under your message rather than cluttering the
+  channel.
+- **Threads continue without re-mentioning**: Once Kōan is engaged in a thread,
+  you can keep replying in that thread without @mentioning it each time — it
+  recognizes threads it is already participating in and keeps answering there.
+- **De-duplication**: Slack delivers both an `app_mention` and a `message` event
+  for the same channel mention; Kōan acts on it exactly once.
+- **"Thinking" status**: While Kōan works on a chat reply, it shows a rotating
+  status (greyed italic text under the bot name — "Thinking…", "Reading the
+  code…", …) via Slack's assistant status API. It clears automatically when the
+  reply posts. This is best-effort: if the API call fails it is silently skipped
+  and never affects the reply itself. See "Thinking status" below.
+
+## Thinking status
+
+When you @mention Kōan, it shows a live status in the thread while it works,
+then replaces it with the answer — the same idea as Slack's own assistant
+"thinking" indicator.
+
+- **How it works**: Kōan calls `assistant.threads.setStatus` with a rotating
+  phrase, refreshed every few seconds, and clears it when the reply is sent.
+- **Scope**: this uses the `chat:write` scope the app already has — no extra
+  setup is strictly required. (`assistant:write` is also accepted and is
+  included in the manifest for the richest experience.)
+- **Where it renders**: Slack renders this status most reliably inside
+  **Assistant threads**; on a plain channel @mention it may not show, depending
+  on your workspace. Reinstalling with the updated manifest (which enables the
+  `assistant:write` scope and the Assistant feature) gives it the best chance of
+  rendering on channel threads. If it still doesn't appear, that's a Slack
+  rendering limitation, not a failure — the reply is unaffected.
+- **Scope note**: Kōan currently listens and replies **only in the configured
+  channel** (`KOAN_SLACK_CHANNEL_ID`). It does not yet hold conversations in the
+  Assistant pane / DMs, so enabling the Assistant feature affects status
+  rendering only, not where Kōan responds.
+- **Safe by design**: a failed status update is logged at most once to stderr
+  and never blocks or alters the actual reply.
 
 ## Architecture Notes
 
@@ -138,3 +209,10 @@ You should see in the logs:
 - **Event buffering**: Incoming messages are buffered in a thread-safe queue and processed on each poll cycle
 - **Single channel**: Kōan only listens and responds in the configured channel (ignores DMs and other channels)
 - **@mention stripping**: When you @mention the bot, the mention prefix is automatically removed before processing
+- **Threading internals**: Slack threads are keyed by `thread_ts`. Kōan emits
+  inbound events in the same Telegram-shaped envelope every provider uses, with
+  an integer token as the `message_id`; that token maps back to the message's
+  `thread_ts` so the bridge's existing reply-context plumbing routes replies into
+  the right thread without any Slack-specific code in the main loop. Asynchronous
+  agent notifications (mission updates from the outbox) have no reply context and
+  post to the channel root.

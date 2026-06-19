@@ -143,12 +143,29 @@ def _write_suppressed_to_journal(text: str, priority: NotificationPriority):
         log.warning("Failed to write suppressed message to journal: %s", e)
 
 
-class TypingIndicator:
-    """Context manager that sends typing indicators at regular intervals.
+# Rotating "thinking" phrases. Providers that render status text (Slack) cycle
+# through these; providers with a generic indicator (Telegram, Matrix) ignore
+# the text. Cosmetic UI strings — not LLM prompts.
+THINKING_PHRASES = (
+    "Thinking…",
+    "Reading the code…",
+    "Working on it…",
+    "Putting it together…",
+)
 
-    Telegram's typing indicator expires after ~5 seconds. This keeps
-    re-sending it every `interval` seconds in a background thread until
-    the context exits.
+
+class TypingIndicator:
+    """Context manager that sends typing / "thinking" indicators periodically.
+
+    Telegram's typing indicator expires after ~5 seconds, so this re-sends it
+    every `interval` seconds in a background thread until the context exits.
+    For providers with a sticky, text-bearing status (Slack's assistant
+    status), it rotates through `THINKING_PHRASES` and clears the status on
+    exit.
+
+    The reply context (which thread to target) is captured from the *entering*
+    thread, because the background loop thread has no thread-local reply
+    context of its own.
 
     Usage:
         with TypingIndicator():
@@ -159,9 +176,12 @@ class TypingIndicator:
         self._interval = interval
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._reply_to: int = 0
+        self._phrase_idx: int = 0
 
     def __enter__(self):
-        send_typing()  # Send immediately
+        self._reply_to = get_reply_context()
+        self._tick()  # Send immediately
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         return self
@@ -170,19 +190,35 @@ class TypingIndicator:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=2)
+        stop_typing(self._reply_to)
         return False
+
+    def _tick(self):
+        phrase = THINKING_PHRASES[self._phrase_idx % len(THINKING_PHRASES)]
+        self._phrase_idx += 1
+        send_typing(reply_to=self._reply_to, status=phrase)
 
     def _loop(self):
         while not self._stop_event.wait(self._interval):
-            send_typing()
+            self._tick()
 
 
-def send_typing() -> bool:
-    """Send a typing indicator via the active messaging provider."""
+def send_typing(reply_to: int = 0, status: str = "") -> bool:
+    """Send a typing / "thinking" indicator via the active messaging provider."""
     try:
         from app.messaging import get_messaging_provider
         provider = get_messaging_provider()
-        return provider.send_typing()
+        return provider.send_typing(reply_to_message_id=reply_to, status=status)
+    except SystemExit:
+        return False
+
+
+def stop_typing(reply_to: int = 0) -> bool:
+    """Clear a persistent "thinking" indicator via the active provider."""
+    try:
+        from app.messaging import get_messaging_provider
+        provider = get_messaging_provider()
+        return provider.stop_typing(reply_to_message_id=reply_to)
     except SystemExit:
         return False
 

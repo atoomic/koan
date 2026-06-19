@@ -202,5 +202,7 @@ def _has_koan_remote(path: Path) -> bool:
         return False
     if result.returncode != 0:
         return False
-    remotes = result.stdout.lower()
+    # Normalize SSH form (git@github.com:owner/repo) to the HTTPS path form
+    # so both remote styles match the expected repository.
+    remotes = result.stdout.lower().replace("github.com:", "github.com/")
     return "github.com/anantys-oss/koan" in remotes
