@@ -15,6 +15,8 @@ from app.ci_dispatch import (
     fetch_failing_check_runs,
     fetch_koan_open_prs,
     fetch_check_run_log_snippet,
+    _prune_tracker,
+    _entry_ts,
 )
 
 
@@ -227,8 +229,9 @@ class TestCheckAndDispatchCiFixes:
             {"id": 1, "name": "test-suite", "conclusion": "failure", "html_url": "u"},
         ]
 
+        import time
         fingerprint = compute_ci_fingerprint(42, "sha123", "test-suite", "1")
-        mock_load.return_value = {f"owner/repo#{fingerprint}": fingerprint}
+        mock_load.return_value = {f"owner/repo#{fingerprint}": {"fingerprint": fingerprint, "ts": time.time()}}
 
         with patch("app.projects_config.load_projects_config") as mock_pc, \
              patch("app.projects_config.get_projects_from_config") as mock_gp:
@@ -300,3 +303,50 @@ class TestCheckAndDispatchCiFixes:
             count = check_and_dispatch_ci_fixes("/instance", "/root")
 
         assert count == 0
+
+
+class TestPruneTracker:
+    def test_removes_entries_older_than_max_age(self):
+        import time
+        old_ts = time.time() - 31 * 86400
+        data = {
+            "owner/repo#abc": {"fingerprint": "abc", "ts": old_ts},
+            "owner/repo#def": {"fingerprint": "def", "ts": time.time()},
+            "cooldown:proj": time.time(),
+        }
+        removed = _prune_tracker(data, max_age_days=30)
+        assert removed == 1
+        assert "owner/repo#abc" not in data
+        assert "owner/repo#def" in data
+        assert "cooldown:proj" in data
+
+    def test_prunes_legacy_string_entries(self):
+        data = {
+            "owner/repo#old": "some-fingerprint",
+            "owner/repo#new": {"fingerprint": "fp", "ts": 9999999999},
+        }
+        removed = _prune_tracker(data, max_age_days=30)
+        assert removed == 1
+        assert "owner/repo#old" not in data
+        assert "owner/repo#new" in data
+
+    def test_preserves_cooldown_entries(self):
+        data = {"cooldown:proj": 0}
+        removed = _prune_tracker(data, max_age_days=1)
+        assert removed == 0
+        assert "cooldown:proj" in data
+
+    def test_empty_tracker_noop(self):
+        data = {}
+        assert _prune_tracker(data) == 0
+
+
+class TestEntryTs:
+    def test_dict_with_ts(self):
+        assert _entry_ts({"ts": 12345}) == 12345
+
+    def test_dict_without_ts(self):
+        assert _entry_ts({"fingerprint": "x"}) == 0
+
+    def test_string_value(self):
+        assert _entry_ts("some-string") == 0

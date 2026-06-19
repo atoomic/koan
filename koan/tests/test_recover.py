@@ -45,8 +45,10 @@ def _write_crash_count(instance_dir, mission_title: str, crash_count: int) -> No
     entry = data.get(key, {})
     if not isinstance(entry, dict):
         entry = {}
+    import time
     entry["crash_count"] = crash_count
     entry["total_attempts"] = entry.get("total_attempts", 0) or crash_count
+    entry["updated_at"] = time.time()
     data[key] = entry
     tracker.write_text(json.dumps(data))
 

@@ -11,6 +11,7 @@ from app.check_tracker import (
     has_changed,
     mark_checked,
     _load,
+    _prune_stale,
     _tracker_path,
 )
 
@@ -153,3 +154,33 @@ class TestHasChanged:
     def test_different_urls_independent(self, instance_dir):
         mark_checked(instance_dir, "url-a", "ts-1")
         assert has_changed(instance_dir, "url-b", "ts-1") is True
+
+
+class TestPruneStale:
+    def test_removes_old_entries(self):
+        data = {
+            "url-old": {"updated_at": "2020-01-01T00:00:00+00:00", "checked_at": "2020-01-01T00:00:00+00:00"},
+            "url-new": {"updated_at": "2099-01-01T00:00:00+00:00", "checked_at": "2099-01-01T00:00:00+00:00"},
+        }
+        _prune_stale(data, max_age_days=30)
+        assert "url-old" not in data
+        assert "url-new" in data
+
+    def test_handles_missing_checked_at(self):
+        data = {"url-x": {"updated_at": "2020-01-01T00:00:00+00:00"}}
+        _prune_stale(data, max_age_days=30)
+        assert "url-x" not in data
+
+    def test_empty_data_noop(self):
+        data = {}
+        _prune_stale(data)
+        assert data == {}
+
+    def test_prune_during_mark_checked(self, instance_dir):
+        _save(instance_dir, {
+            "url-stale": {"updated_at": "2020-01-01T00:00:00+00:00", "checked_at": "2020-01-01T00:00:00+00:00"},
+        })
+        mark_checked(instance_dir, "url-fresh", "2099-01-01T00:00:00+00:00")
+        data = _load(instance_dir)
+        assert "url-stale" not in data
+        assert "url-fresh" in data
