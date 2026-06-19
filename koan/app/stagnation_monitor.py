@@ -408,7 +408,7 @@ class StagnationMonitor:
 # in missions.py (S2) so there is one definition of "stable mission identity".
 
 
-_migration_checked: set = set()
+_migration_checked: set[str] = set()
 
 
 def _migrate_tracker_filename(instance_dir: str) -> None:

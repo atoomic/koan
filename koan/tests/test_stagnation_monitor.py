@@ -1191,25 +1191,32 @@ class TestRetryTrackerConcurrency:
 class TestMigrationTrackerCache:
     """_migrate_tracker_filename caches after first check per instance_dir."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_migration_cache(self):
+        yield
+        from app.stagnation_monitor import _migration_checked
+        _migration_checked.clear()
+
     def test_migration_stat_only_once(self, tmp_path):
         """After first call, subsequent calls skip the filesystem check."""
-        from app.stagnation_monitor import _migrate_tracker_filename, _migration_checked
+        from app.stagnation_monitor import (
+            _RETRY_TRACKER_OLD_FILENAME,
+            _migrate_tracker_filename,
+            _migration_checked,
+        )
 
         instance = str(tmp_path)
         _migration_checked.discard(instance)
 
-        with patch("app.stagnation_monitor.Path") as mock_path:
-            mock_old = mock_path.return_value.__truediv__.return_value
-            mock_old.exists.return_value = False
+        old_path = tmp_path / _RETRY_TRACKER_OLD_FILENAME
 
-            _migrate_tracker_filename(instance)
-            first_call_count = mock_old.exists.call_count
+        _migrate_tracker_filename(instance)
+        assert instance in _migration_checked
 
-            _migrate_tracker_filename(instance)
-            _migrate_tracker_filename(instance)
-            assert mock_old.exists.call_count == first_call_count
-
-        _migration_checked.discard(instance)
+        old_path.write_text('{"late": 1}')
+        _migrate_tracker_filename(instance)
+        _migrate_tracker_filename(instance)
+        assert old_path.exists()
 
     def test_migration_performs_rename_then_caches(self, tmp_path):
         """When old file exists, rename happens once, then cache prevents re-check."""
@@ -1232,8 +1239,6 @@ class TestMigrationTrackerCache:
         assert not old_path.exists()
         assert instance in _migration_checked
 
-        _migration_checked.discard(instance)
-
     def test_different_instance_dirs_checked_independently(self, tmp_path):
         """Each instance_dir gets its own cache entry."""
         from app.stagnation_monitor import _migrate_tracker_filename, _migration_checked
@@ -1251,6 +1256,3 @@ class TestMigrationTrackerCache:
 
         _migrate_tracker_filename(dir_b)
         assert dir_b in _migration_checked
-
-        _migration_checked.discard(dir_a)
-        _migration_checked.discard(dir_b)
