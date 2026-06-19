@@ -360,6 +360,19 @@ def _write_compact_state(path: Path, content_hash: str, compacted_lines: int) ->
         atomic_write(path, json.dumps(payload) + "\n")
 
 
+def _extract_file_header(lines: List[str]) -> List[str]:
+    """Return leading # header lines and immediately following blank lines."""
+    header: List[str] = []
+    for line in lines:
+        if line.startswith("#") or (not line.strip() and not header):
+            header.append(line)
+        elif not line.strip() and header:
+            header.append(line)
+        else:
+            break
+    return header
+
+
 # ---------------------------------------------------------------------------
 # MemoryManager class — encapsulates instance_dir state
 # ---------------------------------------------------------------------------
@@ -731,15 +744,7 @@ class MemoryManager:
         else:
             learnings_input = content
 
-        # Extract header for preservation
-        header_lines = []
-        for line in lines:
-            if line.startswith("#") or (not line.strip() and not header_lines):
-                header_lines.append(line)
-            elif line.strip() == "" and header_lines:
-                header_lines.append(line)
-            else:
-                break
+        header_lines = _extract_file_header(lines)
 
         # Call Claude CLI for semantic compaction
         try:
@@ -874,14 +879,7 @@ class MemoryManager:
         compacted_count = len(compacted_lines)
         today = date.today().isoformat()
 
-        header_lines = []
-        for line in lines:
-            if line.startswith("#") or (not line.strip() and not header_lines):
-                header_lines.append(line)
-            elif line.strip() == "" and header_lines:
-                header_lines.append(line)
-            else:
-                break
+        header_lines = _extract_file_header(lines)
 
         result_parts = header_lines if header_lines else ["# Security Intelligence", ""]
         result_parts.append(
