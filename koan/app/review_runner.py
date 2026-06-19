@@ -287,12 +287,27 @@ def _fetch_bot_inline_comments(
     """Fetch inline review comments authored by bots, with noise pre-filtered.
 
     Returns structured dicts for bot comments that pass the noise filter.
-    Self-bot comments are excluded.
+    Self-bot comments are excluded, and bot comments whose thread already
+    contains a reply from ``bot_username`` are dropped to prevent duplicate
+    replies on reruns.
     """
     all_items = _fetch_raw_inline_items(full_repo, pr_number)
     _, bot_comments = _partition_inline_comments(
         all_items, bot_username, extra_bot_usernames,
     )
+
+    if bot_username and bot_comments:
+        bot_lower = bot_username.lower()
+        replied_roots: set = set()
+        for item in all_items:
+            if item.get("user", "").lower() == bot_lower:
+                root_id = item.get("in_reply_to_id") or item["id"]
+                replied_roots.add(root_id)
+        bot_comments = [
+            c for c in bot_comments
+            if (c.get("in_reply_to_id") or c["id"]) not in replied_roots
+        ]
+
     return _pre_filter_bot_noise(bot_comments)
 
 
@@ -890,6 +905,7 @@ def _run_bot_comment_triage(
     bot_comments: List[dict],
     diff: str,
     skill_dir: Optional[Path],
+    project_path: str = "",
 ) -> List[dict]:
     """Run Claude triage on bot inline comments.
 
@@ -919,7 +935,7 @@ def _run_bot_comment_triage(
         return []
 
     try:
-        raw_output, error = _run_claude_review(prompt, "")
+        raw_output, error = _run_claude_review(prompt, project_path)
         if not raw_output:
             print(f"[review_runner] bot comment triage failed: {error}", file=sys.stderr)
             return []
@@ -2178,6 +2194,7 @@ def run_review(
             notify_fn(f"Triaging {len(bot_inline)} bot comment(s) on PR #{pr_number}...")
             triage_replies = _run_bot_comment_triage(
                 bot_inline, context.get("diff", ""), skill_dir,
+                project_path=project_path,
             )
             if triage_replies:
                 bot_reply_results = _post_comment_replies(
