@@ -1100,25 +1100,37 @@ def api_efficiency():
 
     days = request.args.get("days", "30", type=str)
     selected_project = request.args.get("project", "")
+    offset_raw = request.args.get("offset", "0", type=str)
     try:
         days = int(days)
         days = max(1, min(days, 365))
     except (ValueError, TypeError):
         days = 30
+    try:
+        offset = int(offset_raw)
+        offset = max(0, offset)
+    except (ValueError, TypeError):
+        offset = 0
+
+    today = date.today()
+    end = today - timedelta(days=offset * days)
+    start = end - timedelta(days=days - 1)
 
     # --- Outcome counts by project ---
     outcomes_path = INSTANCE_DIR / "session_outcomes.json"
     all_outcomes = load_outcomes(outcomes_path)
-    cutoff = datetime.now() - timedelta(days=days)
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt = datetime.combine(end + timedelta(days=1), datetime.min.time())
 
     outcome_counts: dict[str, dict[str, int]] = {}
     for o in all_outcomes:
         ts = o.get("timestamp", "")
         try:
-            if datetime.fromisoformat(ts) < cutoff:
-                continue
+            ts_dt = datetime.fromisoformat(ts)
         except (ValueError, TypeError):
-            pass
+            continue
+        if ts_dt < start_dt or ts_dt >= end_dt:
+            continue
         proj = o.get("project", "")
         if not proj or (selected_project and proj != selected_project):
             continue
@@ -1129,9 +1141,7 @@ def api_efficiency():
             outcome_counts[proj][outcome] += 1
 
     # --- Token totals by project ---
-    today = date.today()
-    start = today - timedelta(days=days - 1)
-    summary = summarize_range(INSTANCE_DIR, start, today)
+    summary = summarize_range(INSTANCE_DIR, start, end)
     cost_by_project = summary.get("by_project", {})
     if selected_project:
         cost_by_project = {k: v for k, v in cost_by_project.items() if k == selected_project}
