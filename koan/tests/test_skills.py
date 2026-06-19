@@ -1,5 +1,6 @@
 """Tests for app/skills.py — SKILL.md parsing, registry, and skill execution."""
 
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -3187,3 +3188,28 @@ class TestValidateSkillMetadata:
         assert skill is not None
         # ...but the typo is surfaced in the logs.
         assert any("descrption" in r.message for r in caplog.records)
+
+    def test_all_core_skills_pass_validation(self):
+        """Every core SKILL.md must produce zero validation warnings."""
+        skills_dir = get_default_skills_dir()
+        core_dir = skills_dir / "core"
+        assert core_dir.is_dir(), f"Core skills dir not found: {core_dir}"
+
+        failures = []
+        for skill_md in sorted(core_dir.rglob("SKILL.md")):
+            content = skill_md.read_text()
+            match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+            if not match:
+                continue
+            meta = _parse_yaml_lite(match.group(1))
+            if "name" not in meta:
+                continue
+            warnings = validate_skill_metadata(meta, skill_md)
+            if warnings:
+                name = skill_md.parent.name
+                failures.extend(f"{name}: {w}" for w in warnings)
+
+        assert not failures, (
+            f"Core skills with validation warnings:\n"
+            + "\n".join(f"  - {f}" for f in failures)
+        )
