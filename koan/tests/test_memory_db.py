@@ -642,25 +642,29 @@ class TestSchemaUpgrade:
         conn.close()
 
         # Reset FTS5 flag so ensure_db re-checks
-        mdb._fts5_available = None
+        saved_fts5 = mdb._fts5_available
+        try:
+            mdb._fts5_available = None
 
-        # ensure_db should detect old schema, drop, and recreate
-        conn = ensure_db(instance_dir)
-        assert conn is not None
-        # Old data is gone (will be re-indexed from JSONL on next startup)
-        assert entry_count(conn) == 0
-        # New columns work
-        insert_entry(conn, {
-            "project": "koan",
-            "type": "learning",
-            "content": "new schema entry",
-            "ts": "2026-06-01T00:00:00Z",
-            "source_skill": "review",
-            "tags": ["test"],
-            "confidence": 0.8,
-        })
-        assert entry_count(conn) == 1
-        conn.close()
+            # ensure_db should detect old schema, drop, and recreate
+            conn = ensure_db(instance_dir)
+            assert conn is not None
+            # Old data is gone (will be re-indexed from JSONL on next startup)
+            assert entry_count(conn) == 0
+            # New columns work
+            insert_entry(conn, {
+                "project": "koan",
+                "type": "learning",
+                "content": "new schema entry",
+                "ts": "2026-06-01T00:00:00Z",
+                "source_skill": "review",
+                "tags": ["test"],
+                "confidence": 0.8,
+            })
+            assert entry_count(conn) == 1
+            conn.close()
+        finally:
+            mdb._fts5_available = saved_fts5
 
 
 class TestSkillAwareBoosting:

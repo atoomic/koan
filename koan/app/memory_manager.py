@@ -1439,8 +1439,13 @@ class MemoryManager:
             except json.JSONDecodeError:
                 continue
             expires = obj.get("expires_at", "")
-            if expires and expires < now_iso:
-                continue
+            if expires:
+                try:
+                    datetime.strptime(expires, "%Y-%m-%dT%H:%M:%SZ")
+                    if expires < now_iso:
+                        continue
+                except ValueError:
+                    logger.warning("[memory] Malformed expires_at=%r in entry, treating as not expired", expires)
             entry_project = obj.get("project")
             if entry_project is None:
                 entries.append(obj)

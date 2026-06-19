@@ -84,8 +84,10 @@ def ensure_db(instance: str) -> Optional[sqlite3.Connection]:
         # Check if existing table needs schema upgrade
         try:
             conn.execute("SELECT * FROM entries LIMIT 0")
-        except sqlite3.OperationalError:
-            pass  # table doesn't exist yet
+        except sqlite3.OperationalError as e:
+            if "no such table" not in str(e):
+                logger.warning("[memory_db] Unexpected error checking entries table: %s", e)
+            # table doesn't exist yet — will be created below
         else:
             if not _table_has_expected_columns(conn):
                 try:
@@ -146,6 +148,18 @@ def insert_entry(conn: sqlite3.Connection, entry: Dict) -> None:
                 "consider deleting memory.db to rebuild",
                 _insert_failure_count,
             )
+
+
+def _is_expired(exp_str: str, now_iso: str) -> bool:
+    """Check if expires_at indicates expiry. Malformed values default to not-expired."""
+    if not exp_str:
+        return False
+    try:
+        datetime.strptime(exp_str, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        logger.warning("[memory_db] Malformed expires_at=%r, treating as not expired", exp_str)
+        return False
+    return exp_str < now_iso
 
 
 def _build_entry_dict(proj, type_, content, ts, skill, tags_str, conf_str, exp):
@@ -215,7 +229,7 @@ def search_entries(
                 break
 
             for proj, type_, content, ts, skill, tags_str, conf_str, exp, _rank in rows:
-                if exp and exp < now_iso:
+                if _is_expired(exp, now_iso):
                     continue
                 entry_proj = proj or ""
                 if entry_proj == "" or (project_lower and entry_proj.lower() == project_lower):
