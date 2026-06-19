@@ -471,7 +471,7 @@ def _prune_tracker(data: dict, max_age_days: int = _DEFAULT_TRACKER_MAX_AGE_DAYS
     cutoff = time.time() - max_age_days * 86400
     stale = [
         k for k, v in data.items()
-        if isinstance(v, dict) and v.get("updated_at", 0) < cutoff
+        if not isinstance(v, dict) or v.get("updated_at", 0) < cutoff
     ]
     for k in stale:
         del data[k]
@@ -693,6 +693,7 @@ def clear_retry_count(instance_dir: str, mission_title: str, *, clear_total: boo
             if crash:
                 preserved["crash_count"] = crash
             if preserved:
+                preserved["updated_at"] = time.time()
                 data[key] = preserved
             else:
                 data.pop(key, None)

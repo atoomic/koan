@@ -1279,6 +1279,16 @@ class TestPruneTracker:
         assert removed == 1
         assert "hash_legacy" not in data
 
+    def test_prunes_legacy_scalar_entries(self):
+        data = {
+            "hash_int": 3,
+            "hash_dict": {"count": 1, "updated_at": time.time()},
+        }
+        removed = _prune_tracker(data, max_age_days=30)
+        assert removed == 1
+        assert "hash_int" not in data
+        assert "hash_dict" in data
+
     def test_empty_data_noop(self):
         assert _prune_tracker({}) == 0
 
@@ -1296,3 +1306,13 @@ class TestPruneTracker:
         data = json.loads(tracker_path.read_text())
         key = _mission_key("test mission")
         assert "updated_at" in data[key]
+
+    def test_clear_partial_preserves_updated_at(self, tmp_path):
+        d = str(tmp_path)
+        increment_crash_count(d, "test mission")
+        clear_retry_count(d, "test mission", clear_total=False)
+        tracker_path = tmp_path / ".mission-retries.json"
+        data = json.loads(tracker_path.read_text())
+        key = _mission_key("test mission")
+        assert "updated_at" in data[key]
+        assert data[key]["updated_at"] > 0
