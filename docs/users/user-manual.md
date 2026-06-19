@@ -1690,18 +1690,26 @@ Use `/models` to inspect the resolved values for the active provider at any time
 - `/shutdown` — Gracefully stop everything (e.g., before system maintenance)
 </details>
 
-**`/update`** — Finish the current mission, pull updates, and restart.
+**`/update`** — Update to the latest commit on main, then restart.
 
 - **Aliases:** `/upgrade`
-- Graceful update: waits for the current mission to complete before pulling and restarting.
+- Pulls the latest code from upstream/main (fast-forward only) and restarts.
+- Waits for the current mission to complete before pulling.
 - If the update fails, Kōan still restarts (you asked for it).
 - Use `/restart` if you just need a fresh start without pulling code.
+
+**`/update_last_release`** — Update to the most recent release tag, then restart.
+
+- Checks out the latest release tag instead of pulling the latest commit on main.
+- Recommended when you want a stable, tagged release rather than the bleeding edge.
+- When a new release tag is detected, Kōan's notification suggests this command.
 
 <details>
 <summary>Use cases</summary>
 
-- `/update` — "Finish what you're doing, update yourself, and come back"
+- `/update` — "Pull the latest code from main and restart"
 - `/upgrade` — Same as `/update`
+- `/update_last_release` — "Switch to the most recent tagged release"
 </details>
 
 **`/reset`** — Reset the run counter to 0 without restarting. If Kōan is paused because it reached `max_runs`, `/reset` also resumes execution.
@@ -1792,7 +1800,7 @@ ci_dispatch:
 
 ### Auto-Update
 
-Kōan notifies you via Telegram when a new release tag appears upstream (throttled to 48 h). Run `/update` to pull at your convenience.
+Kōan notifies you via Telegram when a new release tag appears upstream (throttled to 48 h). Run `/update_last_release` to switch to the tagged release, or `/update` to pull the latest commit on main.
 
 Optionally, you can enable automatic pulling in `config.yaml`:
 
@@ -2169,7 +2177,8 @@ All commands at a glance. **Tier:** B = Beginner, I = Intermediate, P = Power Us
 | `/pause` | `/sleep` | P | Pause mission processing |
 | `/resume` | `/work`, `/awake`, `/run`, `/start` | P | Resume mission processing |
 | `/shutdown` | — | P | Shutdown all processes |
-| `/update` | `/upgrade` | P | Finish mission, update, restart |
+| `/update` | `/upgrade` | P | Update to latest commit on main, restart |
+| `/update_last_release` | — | P | Update to most recent release tag, restart |
 | `/reset` | — | P | Reset run counter to 0 |
 | `/restart` | — | P | Restart processes (no code pull) |
 | `/snapshot` | — | P | Export memory state |

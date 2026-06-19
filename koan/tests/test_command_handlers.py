@@ -81,7 +81,7 @@ class TestHandleCommandRouting:
         assert cycle_file.exists()
         assert cycle_file.read_text() == "CYCLE"
         mock_send.assert_called_once()
-        assert "Update requested" in mock_send.call_args[0][0]
+        assert "Update to latest main requested" in mock_send.call_args[0][0]
 
     def test_upgrade_alias_creates_cycle_file(self, patch_bridge_state, mock_send):
         from app.command_handlers import handle_command
@@ -90,7 +90,7 @@ class TestHandleCommandRouting:
         assert cycle_file.exists()
         assert cycle_file.read_text() == "CYCLE"
         mock_send.assert_called_once()
-        assert "Update requested" in mock_send.call_args[0][0]
+        assert "Update to latest main requested" in mock_send.call_args[0][0]
 
     def test_stop_message_mentions_mission_when_in_progress(self, patch_bridge_state, mock_send):
         from app.command_handlers import handle_command

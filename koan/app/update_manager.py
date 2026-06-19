@@ -153,6 +153,138 @@ def check_update_safety(koan_root: Path) -> Optional[str]:
     )
 
 
+def _get_latest_tag(koan_root: Path) -> Optional[str]:
+    """Get the latest tag by version sort order."""
+    result = _run_git(["tag", "--sort=-version:refname"], koan_root)
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return result.stdout.strip().splitlines()[0]
+
+
+def checkout_latest_tag(koan_root: Path, timeout: int = 120) -> UpdateResult:
+    """Update to the most recent release tag.
+
+    Similar to pull_upstream() but checks out the latest tag instead of
+    fast-forwarding main.  Shares the same stash/restore lifecycle.
+
+    Args:
+        koan_root: Path to the koan repository.
+        timeout: Total wall-clock timeout in seconds (default: 120).
+
+    Returns an UpdateResult with success/failure info.
+    """
+    deadline = time.monotonic() + timeout
+
+    def _remaining_timeout() -> int:
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            return 0
+        return min(60, remaining)
+
+    old_sha = _get_short_sha(koan_root)
+    stashed = False
+
+    remote = find_upstream_remote(koan_root)
+    if remote is None:
+        return UpdateResult(
+            success=False, old_commit=old_sha, new_commit=old_sha,
+            commits_pulled=0, error="No git remote found",
+        )
+
+    # Stash dirty work if needed
+    if _is_dirty(koan_root):
+        cmd_timeout = _remaining_timeout()
+        if cmd_timeout <= 0:
+            return UpdateResult(
+                success=False, old_commit=old_sha, new_commit=old_sha,
+                commits_pulled=0, error="Update operation timed out",
+            )
+        result = _run_git(["stash", "push", "-m", "koan-update-auto-stash"], koan_root, timeout=cmd_timeout)
+        if result.returncode != 0:
+            return UpdateResult(
+                success=False, old_commit=old_sha, new_commit=old_sha,
+                commits_pulled=0, error=f"Failed to stash: {result.stderr.strip()}",
+            )
+        stashed = True
+
+    # Fetch upstream (including tags)
+    cmd_timeout = _remaining_timeout()
+    if cmd_timeout <= 0:
+        if stashed:
+            _run_git(["stash", "pop"], koan_root)
+        return UpdateResult(
+            success=False, old_commit=old_sha, new_commit=old_sha,
+            commits_pulled=0, error="Update operation timed out", stashed=stashed,
+        )
+    result = _run_git(["fetch", remote, "--tags"], koan_root, timeout=cmd_timeout)
+    if result.returncode != 0:
+        if stashed:
+            _run_git(["stash", "pop"], koan_root)
+        return UpdateResult(
+            success=False, old_commit=old_sha, new_commit=old_sha,
+            commits_pulled=0, error=f"Failed to fetch {remote}: {result.stderr.strip()}",
+            stashed=stashed,
+        )
+
+    # Find latest tag
+    latest_tag = _get_latest_tag(koan_root)
+    if latest_tag is None:
+        if stashed:
+            _run_git(["stash", "pop"], koan_root)
+        return UpdateResult(
+            success=False, old_commit=old_sha, new_commit=old_sha,
+            commits_pulled=0, error="No release tags found upstream",
+            stashed=stashed,
+        )
+
+    # Check if already on this tag
+    head_on_tag = _run_git(["merge-base", "--is-ancestor", latest_tag, "HEAD"], koan_root)
+    tag_on_head = _run_git(["merge-base", "--is-ancestor", "HEAD", latest_tag], koan_root)
+    if head_on_tag.returncode == 0 and tag_on_head.returncode == 0:
+        if stashed:
+            _run_git(["stash", "pop"], koan_root)
+        return UpdateResult(
+            success=True, old_commit=old_sha, new_commit=old_sha,
+            commits_pulled=0, stashed=stashed,
+        )
+
+    # Checkout the tag (detached HEAD)
+    cmd_timeout = _remaining_timeout()
+    if cmd_timeout <= 0:
+        if stashed:
+            _run_git(["stash", "pop"], koan_root)
+        return UpdateResult(
+            success=False, old_commit=old_sha, new_commit=old_sha,
+            commits_pulled=0, error="Update operation timed out", stashed=stashed,
+        )
+    result = _run_git(["checkout", latest_tag], koan_root, timeout=cmd_timeout)
+    if result.returncode != 0:
+        if stashed:
+            _run_git(["stash", "pop"], koan_root)
+        return UpdateResult(
+            success=False, old_commit=old_sha, new_commit=old_sha,
+            commits_pulled=0,
+            error=f"Failed to checkout tag {latest_tag}: {result.stderr.strip()}",
+            stashed=stashed,
+        )
+
+    new_sha = _get_short_sha(koan_root)
+    commits = _count_commits_between(koan_root, old_sha, new_sha) if old_sha != new_sha else 0
+
+    if stashed:
+        _run_git(["stash", "pop"], koan_root)
+
+    log("update", f"Checked out release tag {latest_tag} ({new_sha})")
+
+    return UpdateResult(
+        success=True,
+        old_commit=old_sha,
+        new_commit=new_sha,
+        commits_pulled=commits,
+        stashed=stashed,
+    )
+
+
 def pull_upstream(koan_root: Path, timeout: int = 120) -> UpdateResult:
     """Pull the latest code from upstream/main.
 

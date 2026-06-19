@@ -1,11 +1,11 @@
-"""Tests for the /update command (hardcoded in command_handlers, writes CYCLE_FILE)."""
+"""Tests for /update and /update_last_release commands (hardcoded in command_handlers)."""
 
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-from app.signals import CYCLE_FILE
+from app.signals import CYCLE_FILE, CYCLE_RELEASE_FILE
 
 
 class TestUpdateCommand:
@@ -70,3 +70,46 @@ class TestSkillRegistration:
         from app.skills import build_registry
         registry = build_registry()
         assert registry.find_by_command("update") is None
+
+
+class TestUpdateLastReleaseCommand:
+    """Tests for /update_last_release via hardcoded command handler."""
+
+    @patch("app.command_handlers.send_telegram")
+    @patch("app.command_handlers.atomic_write")
+    def test_writes_cycle_release_file(self, mock_write, mock_send):
+        from app.command_handlers import handle_command
+        handle_command("/update_last_release")
+        args = mock_write.call_args[0]
+        assert str(args[0]).endswith(CYCLE_RELEASE_FILE)
+        assert args[1] == "CYCLE_RELEASE"
+
+    @patch("app.command_handlers.send_telegram")
+    @patch("app.command_handlers.atomic_write")
+    def test_sends_confirmation_with_release_tag_mention(self, mock_write, mock_send):
+        from app.command_handlers import handle_command
+        handle_command("/update_last_release")
+        mock_send.assert_called_once()
+        msg = mock_send.call_args[0][0]
+        assert "release tag" in msg.lower()
+
+    @patch("app.command_handlers.send_telegram")
+    @patch("app.command_handlers.atomic_write")
+    def test_update_last_release_is_in_core_commands(self, mock_write, mock_send):
+        from app.command_handlers import CORE_COMMANDS
+        assert "update_last_release" in CORE_COMMANDS
+
+    @patch("app.command_handlers.send_telegram")
+    @patch("app.command_handlers.atomic_write")
+    def test_does_not_dispatch_skill(self, mock_write, mock_send):
+        from app.command_handlers import handle_command
+        with patch("app.command_handlers._dispatch_skill") as mock_dispatch:
+            handle_command("/update_last_release")
+        mock_dispatch.assert_not_called()
+
+    @patch("app.command_handlers.send_telegram")
+    @patch("app.command_handlers.atomic_write")
+    def test_update_last_release_not_found_in_skill_registry(self, mock_write, mock_send):
+        from app.skills import build_registry
+        registry = build_registry()
+        assert registry.find_by_command("update_last_release") is None

@@ -59,6 +59,7 @@ from app.run_log import (  # noqa: F401 — re-exported for backward compat
 from app.shutdown_manager import is_shutdown_requested, clear_shutdown
 from app.signals import (
     CYCLE_FILE,
+    CYCLE_RELEASE_FILE,
     PAUSE_FILE,
     PROJECT_FILE,
     RESET_COUNTER_FILE,
@@ -711,6 +712,38 @@ def _handle_update(koan_root: str, instance: str, count: int) -> bool:
     return True
 
 
+def _handle_update_release(koan_root: str, instance: str, count: int) -> bool:
+    """Handle /update_last_release: checkout latest release tag, then restart.
+
+    Returns True if the update was performed (caller should restart),
+    False if no tags found or safety check failed.
+    """
+    from app.update_manager import check_update_safety, checkout_latest_tag
+    from app.restart_manager import request_restart
+    from app.pause_manager import remove_pause
+
+    safety_msg = check_update_safety(Path(koan_root))
+    if safety_msg:
+        log("koan", "Release update refused: diverged from upstream")
+        _notify(instance, safety_msg)
+        return False
+
+    result = checkout_latest_tag(Path(koan_root))
+    if not result.success:
+        log("koan", f"Release update failed: {result.error}")
+        _notify(instance, f"🔄 Release update failed ({result.error}), restarting anyway.")
+    elif result.changed:
+        log("koan", f"Release update: {result.summary()}")
+        _notify(instance, f"🔄 Release update complete after {count} runs. {result.summary()} Restarting...")
+    else:
+        log("koan", "Release update: already on latest release tag.")
+        _notify(instance, "🔄 Already on latest release tag. Restarting...")
+
+    remove_pause(koan_root)
+    request_restart(koan_root)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Pause mode handler
 # ---------------------------------------------------------------------------
@@ -804,6 +837,9 @@ def handle_pause(
             if Path(koan_root, CYCLE_FILE).exists():
                 log("pause", "Update signal detected while paused")
                 break
+            if Path(koan_root, CYCLE_RELEASE_FILE).exists():
+                log("pause", "Release update signal detected while paused")
+                break
             if check_restart(koan_root, target="run"):
                 break
             _check_inbox_during_pause(koan_root, instance)
@@ -855,6 +891,7 @@ def main_loop():
     Path(koan_root, STOP_FILE).unlink(missing_ok=True)
     Path(koan_root, SHUTDOWN_FILE).unlink(missing_ok=True)
     Path(koan_root, CYCLE_FILE).unlink(missing_ok=True)
+    Path(koan_root, CYCLE_RELEASE_FILE).unlink(missing_ok=True)
     Path(koan_root, ABORT_FILE).unlink(missing_ok=True)
     Path(koan_root, RESET_COUNTER_FILE).unlink(missing_ok=True)
     clear_restart(koan_root, target="run")
@@ -922,6 +959,14 @@ def main_loop():
                 log("koan", "Update requested. Updating and restarting...")
                 cycle_file.unlink(missing_ok=True)
                 if _handle_update(koan_root, instance, count):
+                    sys.exit(RESTART_EXIT_CODE)
+
+            # --- Release update check (checkout latest tag → restart) ---
+            cycle_release_file = Path(koan_root, CYCLE_RELEASE_FILE)
+            if cycle_release_file.exists():
+                log("koan", "Release update requested. Checking out latest tag...")
+                cycle_release_file.unlink(missing_ok=True)
+                if _handle_update_release(koan_root, instance, count):
                     sys.exit(RESTART_EXIT_CODE)
 
             # --- Shutdown check (stops both agent loop and bridge) ---

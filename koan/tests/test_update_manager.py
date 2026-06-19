@@ -9,6 +9,7 @@ import pytest
 from app.update_manager import (
     UpdateResult,
     pull_upstream,
+    checkout_latest_tag,
     check_update_safety,
     _run_git,
     _get_current_branch,
@@ -439,3 +440,109 @@ class TestCheckUpdateSafety:
     def test_safe_when_branch_detection_fails(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stdout="")
         assert check_update_safety(Path("/repo")) is None
+
+
+class TestCheckoutLatestTag:
+    """Tests for checkout_latest_tag() — release-based update."""
+
+    @patch("app.update_manager._run_git")
+    def test_successful_checkout(self, mock_run):
+        """Happy path: clean repo, tag found, checkout succeeds."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="abc1234\n"),       # _get_short_sha (old)
+            MagicMock(returncode=0, stdout="upstream\n"),       # find_upstream_remote
+            MagicMock(returncode=0, stdout=""),                  # _is_dirty (clean)
+            MagicMock(returncode=0, stdout=""),                  # fetch --tags
+            MagicMock(returncode=0, stdout="v2.0.0\nv1.9.0\n"), # _get_latest_tag
+            MagicMock(returncode=1, stdout=""),                  # merge-base HEAD includes tag? No
+            MagicMock(returncode=0, stdout=""),                  # merge-base tag includes HEAD? (irrelevant since first failed)
+            MagicMock(returncode=0, stdout=""),                  # checkout v2.0.0
+            MagicMock(returncode=0, stdout="def5678\n"),         # _get_short_sha (new)
+            MagicMock(returncode=0, stdout="5\n"),               # _count_commits_between
+        ]
+
+        result = checkout_latest_tag(Path("/repo"))
+        assert result.success is True
+        assert result.commits_pulled == 5
+        assert result.old_commit == "abc1234"
+        assert result.new_commit == "def5678"
+
+    @patch("app.update_manager._run_git")
+    def test_already_on_tag(self, mock_run):
+        """Already at the latest tag — no change."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="abc1234\n"),       # _get_short_sha
+            MagicMock(returncode=0, stdout="upstream\n"),       # find_upstream_remote
+            MagicMock(returncode=0, stdout=""),                  # _is_dirty
+            MagicMock(returncode=0, stdout=""),                  # fetch --tags
+            MagicMock(returncode=0, stdout="v2.0.0\n"),          # _get_latest_tag
+            MagicMock(returncode=0, stdout=""),                  # merge-base --is-ancestor tag HEAD (yes)
+            MagicMock(returncode=0, stdout=""),                  # merge-base --is-ancestor HEAD tag (yes)
+        ]
+
+        result = checkout_latest_tag(Path("/repo"))
+        assert result.success is True
+        assert result.changed is False
+
+    @patch("app.update_manager._run_git")
+    def test_no_tags_found(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="abc1234\n"),
+            MagicMock(returncode=0, stdout="upstream\n"),
+            MagicMock(returncode=0, stdout=""),
+            MagicMock(returncode=0, stdout=""),                  # fetch
+            MagicMock(returncode=0, stdout=""),                  # no tags
+        ]
+
+        result = checkout_latest_tag(Path("/repo"))
+        assert result.success is False
+        assert "No release tags" in result.error
+
+    @patch("app.update_manager._run_git")
+    def test_no_remote(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="abc1234\n"),
+            MagicMock(returncode=1, stdout=""),
+        ]
+
+        result = checkout_latest_tag(Path("/repo"))
+        assert result.success is False
+        assert "No git remote" in result.error
+
+    @patch("app.update_manager._run_git")
+    def test_stashes_dirty_work(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="abc1234\n"),        # sha
+            MagicMock(returncode=0, stdout="upstream\n"),        # remote
+            MagicMock(returncode=0, stdout=" M dirty.py\n"),     # dirty
+            MagicMock(returncode=0, stdout=""),                   # stash push
+            MagicMock(returncode=0, stdout=""),                   # fetch --tags
+            MagicMock(returncode=0, stdout="v3.0.0\n"),           # latest tag
+            MagicMock(returncode=1, stdout=""),                   # not ancestor
+            MagicMock(returncode=0, stdout=""),                   # irrelevant
+            MagicMock(returncode=0, stdout=""),                   # checkout tag
+            MagicMock(returncode=0, stdout="def5678\n"),          # new sha
+            MagicMock(returncode=0, stdout="3\n"),                # count
+            MagicMock(returncode=0, stdout=""),                   # stash pop
+        ]
+
+        result = checkout_latest_tag(Path("/repo"))
+        assert result.success is True
+        assert result.stashed is True
+
+    @patch("app.update_manager._run_git")
+    def test_checkout_failure(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="abc1234\n"),
+            MagicMock(returncode=0, stdout="upstream\n"),
+            MagicMock(returncode=0, stdout=""),
+            MagicMock(returncode=0, stdout=""),                   # fetch
+            MagicMock(returncode=0, stdout="v2.0.0\n"),
+            MagicMock(returncode=1, stdout=""),                   # not ancestor
+            MagicMock(returncode=0, stdout=""),
+            MagicMock(returncode=1, stdout="", stderr="checkout error"),
+        ]
+
+        result = checkout_latest_tag(Path("/repo"))
+        assert result.success is False
+        assert "checkout" in result.error.lower()
