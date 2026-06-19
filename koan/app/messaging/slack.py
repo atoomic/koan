@@ -72,6 +72,8 @@ class SlackProvider(MessagingProvider):
         # Slack delivers both ``app_mention`` and ``message`` for a channel
         # mention; dedup by event ts so we only act once.
         self._seen_ts: "OrderedDict[str, None]" = OrderedDict()
+        # Warn only once if the assistant status API is unavailable.
+        self._status_warned: bool = False
 
     # -- MessagingProvider interface ------------------------------------------
 
@@ -191,7 +193,56 @@ class SlackProvider(MessagingProvider):
                 break
         return updates
 
+    def send_typing(self, reply_to_message_id: int = 0, status: str = "") -> bool:
+        """Show a "thinking" status in the message's thread.
+
+        Uses Slack's assistant status API (``assistant.threads.setStatus``),
+        which renders greyed italic text under the bot name. It accepts the
+        ``chat:write`` scope the app already has and needs only the channel and
+        a ``thread_ts``. Slack auto-clears the status when the bot posts its
+        reply; ``stop_typing()`` covers error/early-exit paths.
+
+        Failures (e.g. the thread is not assistant-enabled) are swallowed: the
+        status is best-effort UX and must never affect the actual reply.
+        """
+        thread_ts = self._thread_for_token(reply_to_message_id)
+        if not thread_ts or not self._web_client:
+            return True
+        return self._set_status(thread_ts, status or "is thinking…")
+
+    def stop_typing(self, reply_to_message_id: int = 0) -> bool:
+        """Clear the assistant status for the message's thread."""
+        thread_ts = self._thread_for_token(reply_to_message_id)
+        if not thread_ts or not self._web_client:
+            return True
+        return self._set_status(thread_ts, "")
+
     # -- Internal helpers -----------------------------------------------------
+
+    def _thread_for_token(self, token: int) -> str:
+        """Resolve an inbound message token back to its Slack thread_ts."""
+        if not token:
+            return ""
+        with self._state_lock:
+            return self._thread_by_token.get(token, "")
+
+    def _set_status(self, thread_ts: str, status: str) -> bool:
+        """Best-effort assistant status update; swallow API/SDK errors."""
+        try:
+            self._web_client.assistant_threads_setStatus(
+                channel_id=self._channel_id,
+                thread_ts=thread_ts,
+                status=status,
+            )
+            return True
+        except Exception as e:
+            # Common when the thread is not assistant-enabled — non-fatal.
+            # Warn once per process so a 4s refresh loop doesn't spam stderr.
+            if not self._status_warned:
+                self._status_warned = True
+                print(f"[slack] assistant status unavailable (skipping): {e}",
+                      file=sys.stderr)
+            return True
 
     def _apply_rate_limit(self):
         """Sleep if needed to comply with Slack's rate limit (~1 msg/sec)."""

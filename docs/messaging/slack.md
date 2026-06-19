@@ -41,7 +41,8 @@ Then continue from Step 4 (Install to Workspace) to collect your tokens.
 
    | Scope | Purpose |
    |-------|---------|
-   | `chat:write` | Send messages |
+   | `chat:write` | Send messages and set the "thinking" status |
+   | `assistant:write` | Show the assistant "thinking" status (optional; `chat:write` also works) |
    | `channels:history` | Read messages in public channels |
    | `groups:history` | Read messages in private channels |
    | `im:history` | Read direct messages |
@@ -53,6 +54,8 @@ Then continue from Step 4 (Install to Workspace) to collect your tokens.
    - `message.groups`
    - `message.im`
    - `app_mention`
+   - `assistant_thread_started` (optional — for the Assistant "thinking" status)
+   - `assistant_thread_context_changed` (optional)
 
 ## Step 4: Install App to Workspace
 
@@ -170,6 +173,30 @@ You should see in the logs:
   recognizes threads it is already participating in and keeps answering there.
 - **De-duplication**: Slack delivers both an `app_mention` and a `message` event
   for the same channel mention; Kōan acts on it exactly once.
+- **"Thinking" status**: While Kōan works on a chat reply, it shows a rotating
+  status (greyed italic text under the bot name — "Thinking…", "Reading the
+  code…", …) via Slack's assistant status API. It clears automatically when the
+  reply posts. This is best-effort: if the API call fails it is silently skipped
+  and never affects the reply itself. See "Thinking status" below.
+
+## Thinking status
+
+When you @mention Kōan, it shows a live status in the thread while it works,
+then replaces it with the answer — the same idea as Slack's own assistant
+"thinking" indicator.
+
+- **How it works**: Kōan calls `assistant.threads.setStatus` with a rotating
+  phrase, refreshed every few seconds, and clears it when the reply is sent.
+- **Scope**: this uses the `chat:write` scope the app already has — no extra
+  setup is strictly required. (`assistant:write` is also accepted and is
+  included in the manifest for the richest experience.)
+- **Where it renders**: Slack shows this status most reliably inside **Assistant
+  threads** (the AI-apps pane / DMs with the app). On a plain channel @mention it
+  may not render, depending on your workspace. If you don't see it in a channel,
+  reinstall the app with the updated manifest (which enables the Assistant
+  feature) or chat with Kōan in the Assistant pane.
+- **Safe by design**: a failed status update is logged at most once to stderr
+  and never blocks or alters the actual reply.
 
 ## Architecture Notes
 

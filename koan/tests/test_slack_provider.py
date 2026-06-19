@@ -309,6 +309,58 @@ class TestThreadedSend:
         )
 
 
+class TestTypingStatus:
+    """Slack 'thinking' status via assistant.threads.setStatus."""
+
+    def _register_token(self, provider, token, thread_ts):
+        provider._thread_by_token[token] = thread_ts
+
+    def test_send_typing_sets_status_in_thread(self, provider):
+        self._register_token(provider, 5, "100.5")
+        provider._web_client.assistant_threads_setStatus.return_value = {"ok": True}
+        assert provider.send_typing(reply_to_message_id=5, status="Thinking…") is True
+        provider._web_client.assistant_threads_setStatus.assert_called_once_with(
+            channel_id="C123", thread_ts="100.5", status="Thinking…"
+        )
+
+    def test_send_typing_defaults_status_text(self, provider):
+        self._register_token(provider, 5, "100.5")
+        provider._web_client.assistant_threads_setStatus.return_value = {"ok": True}
+        provider.send_typing(reply_to_message_id=5)
+        _, kwargs = provider._web_client.assistant_threads_setStatus.call_args
+        assert kwargs["status"]  # non-empty fallback
+
+    def test_send_typing_unknown_token_is_noop(self, provider):
+        assert provider.send_typing(reply_to_message_id=999, status="Thinking…") is True
+        provider._web_client.assistant_threads_setStatus.assert_not_called()
+
+    def test_send_typing_zero_token_is_noop(self, provider):
+        assert provider.send_typing(reply_to_message_id=0, status="Thinking…") is True
+        provider._web_client.assistant_threads_setStatus.assert_not_called()
+
+    def test_stop_typing_clears_status(self, provider):
+        self._register_token(provider, 5, "100.5")
+        provider._web_client.assistant_threads_setStatus.return_value = {"ok": True}
+        assert provider.stop_typing(reply_to_message_id=5) is True
+        provider._web_client.assistant_threads_setStatus.assert_called_once_with(
+            channel_id="C123", thread_ts="100.5", status=""
+        )
+
+    def test_api_errors_are_swallowed(self, provider):
+        self._register_token(provider, 5, "100.5")
+        provider._web_client.assistant_threads_setStatus.side_effect = Exception("nope")
+        # Best-effort UX: never propagate, never block the reply.
+        assert provider.send_typing(reply_to_message_id=5, status="Thinking…") is True
+        assert provider.stop_typing(reply_to_message_id=5) is True
+
+    def test_not_configured_is_noop(self):
+        from app.messaging.slack import SlackProvider
+        p = SlackProvider()
+        p._thread_by_token[5] = "100.5"
+        assert p.send_typing(reply_to_message_id=5, status="Thinking…") is True
+        assert p.stop_typing(reply_to_message_id=5) is True
+
+
 class TestSendRaw:
     def test_send_raw(self, provider):
         provider._web_client.chat_postMessage.return_value = {"ok": True}

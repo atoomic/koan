@@ -357,8 +357,13 @@ class TelegramProvider(MessagingProvider):
             self._last_message_ids.append(msg_id)
         return True
 
-    def send_typing(self) -> bool:
-        """Send 'typing...' indicator to the Telegram chat."""
+    def send_typing(self, reply_to_message_id: int = 0, status: str = "") -> bool:
+        """Send 'typing...' indicator to the Telegram chat.
+
+        Telegram has a single chat-wide typing action with no custom text, so
+        ``reply_to_message_id`` and ``status`` are accepted for interface
+        compatibility but ignored.
+        """
         if not self._bot_token or not self._chat_id:
             return False
         try:

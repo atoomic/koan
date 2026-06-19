@@ -303,8 +303,13 @@ class MatrixProvider(MessagingProvider):
             print(f"[matrix] Send error after retries: {e}", file=sys.stderr)
             return False
 
-    def send_typing(self) -> bool:
-        """Send a typing indicator to the room (auto-expires after ~10s)."""
+    def send_typing(self, reply_to_message_id: int = 0, status: str = "") -> bool:
+        """Send a typing indicator to the room (auto-expires after ~10s).
+
+        Matrix has a single room-wide typing indicator with no custom text, so
+        ``reply_to_message_id`` and ``status`` are accepted for interface
+        compatibility but ignored.
+        """
         if not self._access_token or not self._room_id or not self._user_id:
             return False
         url = (
