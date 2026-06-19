@@ -26,6 +26,7 @@ from app.memory_manager import (
     _extract_session_digest,
     _balanced_select,
     _should_skip_compaction,
+    _extract_file_header,
 )
 
 
@@ -895,6 +896,44 @@ class TestCapLearnings:
         assert len(marker_lines) == 1
         # The marker should be a clean line, not contain embedded \n
         assert marker_lines[0].strip() == "_(oldest 15 entries archived)_"
+
+
+# ---------------------------------------------------------------------------
+# _extract_file_header (shared header extraction for compaction methods)
+# ---------------------------------------------------------------------------
+
+class TestExtractFileHeader:
+
+    def test_basic_header_with_blank(self):
+        lines = ["# Learnings", "", "- item 1", "- item 2"]
+        assert _extract_file_header(lines) == ["# Learnings", ""]
+
+    def test_multi_level_headers(self):
+        lines = ["# Title", "## Subtitle", "", "content"]
+        assert _extract_file_header(lines) == ["# Title", "## Subtitle", ""]
+
+    def test_no_header(self):
+        lines = ["- item 1", "- item 2"]
+        assert _extract_file_header(lines) == []
+
+    def test_empty_input(self):
+        assert _extract_file_header([]) == []
+
+    def test_leading_blank_lines_skipped(self):
+        lines = ["", "", "# Title", "", "content"]
+        assert _extract_file_header(lines) == ["", "", "# Title", ""]
+
+    def test_header_only_file(self):
+        lines = ["# Title", ""]
+        assert _extract_file_header(lines) == ["# Title", ""]
+
+    def test_header_no_trailing_blank(self):
+        lines = ["# Title", "content"]
+        assert _extract_file_header(lines) == ["# Title"]
+
+    def test_multiple_blank_lines_after_header(self):
+        lines = ["# Title", "", "", "content"]
+        assert _extract_file_header(lines) == ["# Title", "", ""]
 
 
 # ---------------------------------------------------------------------------
