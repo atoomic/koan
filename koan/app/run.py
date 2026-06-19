@@ -718,15 +718,9 @@ def _handle_update_release(koan_root: str, instance: str, count: int) -> bool:
     Returns True if the update was performed (caller should restart),
     False if no tags found or safety check failed.
     """
-    from app.update_manager import check_update_safety, checkout_latest_tag
+    from app.update_manager import checkout_latest_tag
     from app.restart_manager import request_restart
     from app.pause_manager import remove_pause
-
-    safety_msg = check_update_safety(Path(koan_root))
-    if safety_msg:
-        log("koan", "Release update refused: diverged from upstream")
-        _notify(instance, safety_msg)
-        return False
 
     result = checkout_latest_tag(Path(koan_root))
     if not result.success:

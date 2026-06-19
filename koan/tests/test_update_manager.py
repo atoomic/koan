@@ -441,6 +441,17 @@ class TestCheckUpdateSafety:
         mock_run.return_value = MagicMock(returncode=1, stdout="")
         assert check_update_safety(Path("/repo")) is None
 
+    @patch("app.update_manager._run_git")
+    def test_safe_when_detached_head(self, mock_run):
+        """Detached HEAD (after release tag checkout) should not block updates."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="HEAD\n"),            # detached HEAD
+            MagicMock(returncode=0, stdout="upstream\n"),         # find_upstream_remote
+            MagicMock(returncode=0, stdout=""),                    # fetch --quiet
+            MagicMock(returncode=0, stdout=""),                    # rev-list (no extra commits)
+        ]
+        assert check_update_safety(Path("/repo")) is None
+
 
 class TestCheckoutLatestTag:
     """Tests for checkout_latest_tag() — release-based update."""
@@ -546,3 +557,27 @@ class TestCheckoutLatestTag:
         result = checkout_latest_tag(Path("/repo"))
         assert result.success is False
         assert "checkout" in result.error.lower()
+
+    @patch("app.update_manager._run_git")
+    def test_stash_pop_failure_surfaces_error(self, mock_run):
+        """Stash pop failure reported in result, not silently ignored."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="abc1234\n"),        # sha
+            MagicMock(returncode=0, stdout="upstream\n"),        # remote
+            MagicMock(returncode=0, stdout=" M dirty.py\n"),     # dirty
+            MagicMock(returncode=0, stdout=""),                   # stash push
+            MagicMock(returncode=0, stdout=""),                   # fetch --tags
+            MagicMock(returncode=0, stdout="v3.0.0\n"),           # latest tag
+            MagicMock(returncode=1, stdout=""),                   # not ancestor
+            MagicMock(returncode=0, stdout=""),                   # irrelevant
+            MagicMock(returncode=0, stdout=""),                   # checkout tag
+            MagicMock(returncode=0, stdout="def5678\n"),          # new sha
+            MagicMock(returncode=0, stdout="3\n"),                # count
+            MagicMock(returncode=1, stdout="", stderr="CONFLICT (content): Merge conflict"),
+        ]
+
+        result = checkout_latest_tag(Path("/repo"))
+        assert result.success is True
+        assert result.stash_error is not None
+        assert "CONFLICT" in result.stash_error
+        assert "stash" in result.summary().lower()

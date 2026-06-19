@@ -143,13 +143,15 @@ def update():
 @require_token
 def update_release():
     try:
-        from app.update_manager import check_update_safety, checkout_latest_tag
-        safety_msg = check_update_safety(_koan_root())
-        if safety_msg:
-            return jsonify({"error": {"code": "update_refused", "message": safety_msg}}), 409
+        from app.update_manager import checkout_latest_tag
         result = checkout_latest_tag(_koan_root())
         from app.restart_manager import request_restart
         request_restart(str(_koan_root()))
-        return jsonify({"status": "updated", "result": str(result)})
+        if not result.success:
+            return jsonify({
+                "error": {"code": "update_failed", "message": result.error},
+                "restarting": True,
+            }), 502
+        return jsonify({"status": "updated", "result": result.summary()})
     except Exception as e:
         return jsonify({"error": {"code": "update_error", "message": str(e)}}), 500
