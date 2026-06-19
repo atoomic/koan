@@ -693,7 +693,7 @@ def _apply_focus_mode_override(prompt: str) -> str:
         return prompt
     begin = prompt.find(_FOCUS_SENTINEL_BEGIN)
     end = prompt.find(_FOCUS_SENTINEL_END)
-    if begin == -1 or end == -1:
+    if begin == -1 or end == -1 or end < begin:
         return prompt
     return prompt[:begin] + _FOCUS_MODE_REPLACEMENT + prompt[end + len(_FOCUS_SENTINEL_END):]
 

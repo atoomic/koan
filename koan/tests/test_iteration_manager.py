@@ -3340,6 +3340,17 @@ class TestFocusModePromptOverride:
             result = _apply_focus_mode_override(sample)
         assert result == sample
 
+    def test_misordered_sentinels_returns_prompt_unchanged(self):
+        from app.prompt_builder import _apply_focus_mode_override
+        sample = (
+            "<!-- END:github-issue-selection -->\n"
+            "## GitHub Issue Selection\n\ncontent\n"
+            "<!-- BEGIN:github-issue-selection -->\n"
+        )
+        with patch("app.prompt_builder._is_focus_mode", return_value=True):
+            result = _apply_focus_mode_override(sample)
+        assert result == sample
+
 
 # === Tests: _log_selection_audit ===
 
