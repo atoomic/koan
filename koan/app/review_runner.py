@@ -97,8 +97,15 @@ _BOT_NOISE_PATTERNS = [
     re.compile(r"https?://[\w.-]*deploy[\w.-]*\.(netlify|vercel|herokuapp|surge)", re.I),
     re.compile(r"coverage[:\s]+\d+(\.\d+)?%", re.I),
     re.compile(r"^##\s+(summary|walkthrough|changelog)\b", re.I | re.M),
-    re.compile(r"^\s*\|.*\|.*\|.*\|\s*$", re.M),
 ]
+
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|.*\|\s*$")
+
+
+def _is_table_only(body: str) -> bool:
+    """Return True if every non-blank line in *body* is a markdown table row."""
+    lines = [ln for ln in body.splitlines() if ln.strip()]
+    return bool(lines) and all(_TABLE_ROW_RE.match(ln) for ln in lines)
 
 
 def _pre_filter_bot_noise(comments: List[dict]) -> List[dict]:
@@ -109,6 +116,8 @@ def _pre_filter_bot_noise(comments: List[dict]) -> List[dict]:
         if not body:
             continue
         if any(pat.search(body) for pat in _BOT_NOISE_PATTERNS):
+            continue
+        if _is_table_only(body):
             continue
         filtered.append(c)
     return filtered
@@ -2072,6 +2081,29 @@ def run_review(
         and set(current_shas) == set(prior_shas)
         and not review_was_requested
     ):
+        bot_triage_cfg = get_review_bot_triage_config()
+        bot_triage_enabled = bot_comments or bot_triage_cfg["enabled"]
+        if bot_triage_enabled:
+            extra_bot_usernames = bot_triage_cfg["bot_usernames"]
+            full_repo = f"{owner}/{repo}"
+            bot_inline = _fetch_bot_inline_comments(
+                full_repo, pr_number, bot_username, extra_bot_usernames,
+            )
+            if bot_inline:
+                notify_fn(f"Triaging {len(bot_inline)} bot comment(s) on PR #{pr_number}...")
+                triage_replies = _run_bot_comment_triage(
+                    bot_inline, context.get("diff", ""), skill_dir,
+                    project_path=project_path,
+                )
+                if triage_replies:
+                    bot_reply_results = _post_comment_replies(
+                        owner, repo, pr_number, triage_replies, bot_inline,
+                    )
+                    if bot_reply_results:
+                        print(
+                            f"[review_runner] posted {len(bot_reply_results)} bot triage reply(ies)",
+                            file=sys.stderr,
+                        )
         return (
             True,
             f"PR #{pr_number} has no new commits since last review — skipping.",
