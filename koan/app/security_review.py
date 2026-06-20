@@ -114,7 +114,8 @@ _SECRET_REDACT_RE = re.compile(
 
 
 def _redact_snippet(snippet: str, max_len: int = 80) -> str:
-    return _SECRET_REDACT_RE.sub("<redacted>", snippet[:max_len])
+    redacted = _SECRET_REDACT_RE.sub("<redacted>", snippet)
+    return redacted[:max_len]
 
 
 _JS_PATTERNS = {"potential XSS via innerHTML", "React XSS risk", "wildcard CORS"}
@@ -156,7 +157,7 @@ _SEMGREP_LANGUAGES_BY_FINDING = {
     "py": ["python"],
     "js": ["javascript", "typescript"],
     "py_js": ["python", "javascript", "typescript"],
-    "all": ["python", "javascript", "typescript"],
+    "all": ["python", "javascript", "typescript", "ruby", "java", "go"],
 }
 
 
@@ -256,7 +257,7 @@ def _check_variants_grep(
         includes = _grep_includes_for_finding(description)
         try:
             result = subprocess.run(
-                ["grep", "-rn", "-E", *_GREP_EXCLUDES, *includes, pattern, "."],
+                ["grep", "-rn", "-E", *_GREP_EXCLUDES, *includes, "--", pattern, "."],
                 capture_output=True, text=True,
                 cwd=project_path, timeout=30,
                 stdin=subprocess.DEVNULL,
@@ -299,21 +300,19 @@ def _check_variants_grep(
     return hits
 
 
-def _build_semgrep_yaml(patterns: list) -> str:
-    """Build a semgrep YAML rules file from (pattern, description) pairs."""
+def _build_semgrep_config(patterns: list) -> str:
+    """Build a semgrep JSON config from (pattern, description) pairs."""
     rules = []
     for i, (pattern, description) in enumerate(patterns):
         langs = _semgrep_languages_for_finding(description)
-        lang_str = ", ".join(langs)
-        rules.append(
-            f"  - id: variant-{i}\n"
-            f"    pattern-regex: |-\n"
-            f"      {pattern}\n"
-            f"    message: Variant of security finding\n"
-            f"    languages: [{lang_str}]\n"
-            f"    severity: WARNING"
-        )
-    return "rules:\n" + "\n".join(rules) if rules else "rules: []"
+        rules.append({
+            "id": f"variant-{i}",
+            "pattern-regex": pattern,
+            "message": "Variant of security finding",
+            "languages": langs,
+            "severity": "WARNING",
+        })
+    return _json.dumps({"rules": rules})
 
 
 def _check_variants_semgrep(
@@ -330,14 +329,14 @@ def _check_variants_semgrep(
     if not shutil.which("semgrep"):
         return None
 
-    yaml_content = _build_semgrep_yaml(patterns)
+    json_content = _build_semgrep_config(patterns)
     hits = []
     try:
         from app.utils import koan_tmp_dir
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", dir=koan_tmp_dir(), delete=True,
+            mode="w", suffix=".json", dir=koan_tmp_dir(), delete=True,
         ) as f:
-            f.write(yaml_content)
+            f.write(json_content)
             f.flush()
             result = subprocess.run(
                 ["semgrep", "--config", f.name, "--json", "--quiet", "."],
@@ -374,7 +373,7 @@ def _check_variants_semgrep(
                 snippet = item.get("extra", {}).get("lines", "").strip()
                 if (filepath, lineno) not in exclude_lines:
                     hits.append((filepath, lineno, snippet))
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+    except Exception as exc:
         print(
             f"[security_review] semgrep error: {exc}, falling back to grep",
             file=sys.stderr,
@@ -469,7 +468,7 @@ def _dispatch_variant_missions(
 
         fingerprint = hashlib.sha256(
             f"{project_name}:{filepath}:{lineno}".encode()
-        ).hexdigest()[:12]
+        ).hexdigest()
         tracker_key = f"{project_name}:{fingerprint}"
         if tracker_key in tracker:
             continue
@@ -515,7 +514,7 @@ def _write_variant_journal_section(
         if len(hits) > 10:
             lines.append(f"- ... and {len(hits) - 10} more")
 
-        write_to_journal(instance_dir, "\n".join(lines))
+        write_to_journal(Path(instance_dir), "\n".join(lines))
     except Exception as e:
         print(f"[security_review] Variant journal write failed: {e}", file=sys.stderr)
 

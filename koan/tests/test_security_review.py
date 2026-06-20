@@ -22,7 +22,7 @@ from app.security_review import (
     _extract_diff_lines,
     _check_variants_grep,
     _check_variants_semgrep,
-    _build_semgrep_yaml,
+    _build_semgrep_config,
     _check_variants,
     _load_variant_tracker,
     _save_variant_tracker,
@@ -972,44 +972,56 @@ class TestCheckVariantsGrep:
 
 
 # ---------------------------------------------------------------------------
-# _build_semgrep_yaml / _check_variants_semgrep
+# _build_semgrep_config / _check_variants_semgrep
 # ---------------------------------------------------------------------------
 
 
-class TestBuildSemgrepYaml:
-    """Tests for _build_semgrep_yaml()."""
+class TestBuildSemgrepConfig:
+    """Tests for _build_semgrep_config()."""
 
     def test_single_pattern(self):
-        yaml_str = _build_semgrep_yaml([(r"eval\s*\(", "eval() usage")])
-        assert "rules:" in yaml_str
-        assert "eval" in yaml_str
-        assert "pattern-regex" in yaml_str
+        import json
+        config_str = _build_semgrep_config([(r"eval\s*\(", "eval() usage")])
+        data = json.loads(config_str)
+        assert "rules" in data
+        assert len(data["rules"]) == 1
+        assert "pattern-regex" in data["rules"][0]
+        assert "eval" in data["rules"][0]["pattern-regex"]
 
     def test_multiple_patterns(self):
-        yaml_str = _build_semgrep_yaml([
+        import json
+        config_str = _build_semgrep_config([
             (r"eval\s*\(", "eval() usage"),
             (r"exec\s*\(", "exec() usage"),
         ])
-        assert yaml_str.count("pattern-regex") == 2
+        data = json.loads(config_str)
+        assert len(data["rules"]) == 2
 
     def test_empty_patterns(self):
-        yaml_str = _build_semgrep_yaml([])
-        assert "rules:" in yaml_str
+        import json
+        config_str = _build_semgrep_config([])
+        data = json.loads(config_str)
+        assert data["rules"] == []
 
-    def test_escapes_single_quotes(self):
-        yaml_str = _build_semgrep_yaml([
+    def test_preserves_regex_special_chars(self):
+        import json
+        config_str = _build_semgrep_config([
             (r"(?:api[_-]?key|secret[_-]?key|password)\s*=\s*['\"]", "hardcoded secret"),
         ])
-        assert "pattern-regex" in yaml_str
-        assert "rules:" in yaml_str
+        data = json.loads(config_str)
+        assert r"['\"]" in data["rules"][0]["pattern-regex"]
 
     def test_js_pattern_uses_js_languages(self):
-        yaml_str = _build_semgrep_yaml([(r"\.innerHTML\s*=", "potential XSS via innerHTML")])
-        assert "javascript" in yaml_str
+        import json
+        config_str = _build_semgrep_config([(r"\.innerHTML\s*=", "potential XSS via innerHTML")])
+        data = json.loads(config_str)
+        assert "javascript" in data["rules"][0]["languages"]
 
     def test_python_pattern_uses_python_language(self):
-        yaml_str = _build_semgrep_yaml([(r"eval\s*\(", "eval() usage")])
-        assert "python" in yaml_str
+        import json
+        config_str = _build_semgrep_config([(r"eval\s*\(", "eval() usage")])
+        data = json.loads(config_str)
+        assert "python" in data["rules"][0]["languages"]
 
 
 class TestCheckVariantsSemgrep:
@@ -1183,7 +1195,7 @@ class TestDispatchVariantMissions:
     @patch("app.security_review._load_variant_tracker")
     @patch("app.utils.insert_pending_mission", return_value=True)
     def test_skips_already_dispatched(self, mock_insert, mock_load, mock_save, tmp_path):
-        fp = hashlib.sha256("myapp:src/a.py:10".encode()).hexdigest()[:12]
+        fp = hashlib.sha256("myapp:src/a.py:10".encode()).hexdigest()
         mock_load.return_value = {f"myapp:{fp}": True}
         hits = [
             ("src/a.py", 10, "eval(x)"),
@@ -1389,6 +1401,9 @@ class TestSemgrepLanguagesForFinding:
         langs = _semgrep_languages_for_finding("hardcoded secret")
         assert "python" in langs
         assert "javascript" in langs
+        assert "ruby" in langs
+        assert "java" in langs
+        assert "go" in langs
 
 
 # ---------------------------------------------------------------------------
