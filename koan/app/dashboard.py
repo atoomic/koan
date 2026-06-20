@@ -63,6 +63,20 @@ from app.automation_rules import (
     toggle_rule,
     update_rule_params,
 )
+from app.recurring import (
+    add_recurring,
+    add_recurring_interval,
+    force_run,
+    format_interval,
+    list_recurring,
+    load_recurring,
+    parse_at_time,
+    parse_days,
+    parse_interval,
+    remove_recurring,
+    save_recurring,
+    toggle_recurring,
+)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -2077,6 +2091,175 @@ def api_rules_delete(rule_id):
     if not removed:
         return jsonify({"error": "Rule not found"}), 404
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Recurring tasks
+# ---------------------------------------------------------------------------
+
+RECURRING_FILE = INSTANCE_DIR / "recurring.json"
+
+
+@app.route("/recurring")
+def recurring_page():
+    """Recurring tasks management page."""
+    tasks = list_recurring(RECURRING_FILE)
+    projects = _get_all_project_names()
+    return render_template("recurring.html", tasks=tasks, projects=projects)
+
+
+@app.route("/api/recurring", methods=["GET"])
+def api_recurring_list():
+    """Return all recurring tasks as JSON."""
+    return jsonify(list_recurring(RECURRING_FILE))
+
+
+@app.route("/api/recurring", methods=["POST"])
+def api_recurring_create():
+    """Create a new recurring task."""
+    data = request.get_json(force=True) or {}
+    frequency = data.get("frequency", "")
+    text = data.get("text", "").strip()
+
+    if not text:
+        return jsonify({"error": "Task text is required"}), 400
+    if frequency not in ("hourly", "daily", "weekly", "every"):
+        return jsonify({"error": f"Invalid frequency: {frequency}"}), 400
+
+    project = data.get("project") or None
+    at = data.get("at") or None
+
+    if at:
+        try:
+            at, _ = parse_at_time(at + " _")
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    if frequency == "every":
+        interval_str = data.get("interval", "")
+        if not interval_str:
+            return jsonify({"error": "Interval is required for 'every' frequency"}), 400
+        try:
+            interval_secs = parse_interval(interval_str)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        task = add_recurring_interval(
+            RECURRING_FILE,
+            interval_seconds=interval_secs,
+            interval_display=interval_str,
+            text=text,
+            project=project,
+        )
+    else:
+        task = add_recurring(
+            RECURRING_FILE,
+            frequency=frequency,
+            text=text,
+            project=project,
+            at=at,
+        )
+
+    days = data.get("days")
+    if days:
+        try:
+            days = parse_days(days)
+            missions = load_recurring(RECURRING_FILE)
+            for m in missions:
+                if m["id"] == task["id"]:
+                    m["days"] = days
+                    break
+            save_recurring(RECURRING_FILE, missions)
+            task["days"] = days
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    return jsonify(task), 201
+
+
+@app.route("/api/recurring/<task_id>", methods=["PATCH"])
+def api_recurring_update(task_id):
+    """Update a recurring task's fields."""
+    data = request.get_json(force=True) or {}
+    missions = load_recurring(RECURRING_FILE)
+
+    target = None
+    for m in missions:
+        if m["id"] == task_id:
+            target = m
+            break
+
+    if target is None:
+        return jsonify({"error": "Task not found"}), 404
+
+    if "enabled" in data:
+        target["enabled"] = bool(data["enabled"])
+    if "text" in data and data["text"].strip():
+        target["text"] = data["text"].strip()
+    if "frequency" in data:
+        freq = data["frequency"]
+        if freq not in ("hourly", "daily", "weekly", "every"):
+            return jsonify({"error": f"Invalid frequency: {freq}"}), 400
+        target["frequency"] = freq
+    if "at" in data:
+        at_val = data["at"]
+        if at_val:
+            try:
+                at_val, _ = parse_at_time(at_val + " _")
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+        target["at"] = at_val or None
+    if "days" in data:
+        days_val = data["days"]
+        if days_val:
+            try:
+                days_val = parse_days(days_val)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+        target["days"] = days_val or None
+    if "project" in data:
+        target["project"] = data["project"] or None
+    if "interval" in data and target.get("frequency") == "every":
+        interval_str = data["interval"]
+        if interval_str:
+            try:
+                target["interval_seconds"] = parse_interval(interval_str)
+                target["interval_display"] = interval_str.strip().lower()
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+
+    save_recurring(RECURRING_FILE, missions)
+    return jsonify(target)
+
+
+@app.route("/api/recurring/<task_id>", methods=["DELETE"])
+def api_recurring_delete(task_id):
+    """Delete a recurring task."""
+    missions = load_recurring(RECURRING_FILE)
+    before = len(missions)
+    missions = [m for m in missions if m["id"] != task_id]
+    if len(missions) == before:
+        return jsonify({"error": "Task not found"}), 404
+    save_recurring(RECURRING_FILE, missions)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/recurring/<task_id>/run", methods=["POST"])
+def api_recurring_run(task_id):
+    """Force-run a recurring task immediately."""
+    missions = load_recurring(RECURRING_FILE)
+    target = None
+    for m in missions:
+        if m["id"] == task_id:
+            target = m
+            break
+    if target is None:
+        return jsonify({"error": "Task not found"}), 404
+
+    try:
+        injected = force_run(RECURRING_FILE, MISSIONS_FILE, identifier=target["text"][:20])
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "injected": injected})
 
 
 # ---------------------------------------------------------------------------
