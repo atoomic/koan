@@ -568,7 +568,15 @@ def _record_session_outcome(
         if journal_content:
             summary_parts.append(journal_content[:500])
         content = " | ".join(summary_parts) if summary_parts else mission_title or "session"
-        append_memory_entry(instance_dir, "session", project_name or None, content)
+        source_skill = None
+        if mission_title and mission_title.lstrip().startswith("/"):
+            parts = mission_title.lstrip().split(None, 1)
+            if parts:
+                source_skill = parts[0].lstrip("/").lower()
+        append_memory_entry(
+            instance_dir, "session", project_name or None, content,
+            source_skill=source_skill,
+        )
     except Exception as e:
         _log_runner("error", f"JSONL session log failed: {e}")
 

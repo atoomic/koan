@@ -605,7 +605,10 @@ def _append_lessons_to_learnings(
         for line in new_lines:
             stripped = line.strip()
             if stripped:
-                append_memory_entry(instance_dir, "learning", project_name, stripped)
+                append_memory_entry(
+                    instance_dir, "learning", project_name, stripped,
+                    source_skill="review",
+                )
     except Exception as e:
         log.warning("JSONL append failed: %s", e)
 

@@ -1920,6 +1920,34 @@ class TestAppendMemoryEntry:
         obj = json.loads(lines[0])
         assert obj["ts"] == "2024-01-01T00:00:00Z"
 
+    def test_metadata_fields_persisted(self, tmp_path):
+        import json
+        instance = str(tmp_path)
+        append_memory_entry(
+            instance, "learning", "myproject", "use async for I/O",
+            source_skill="review",
+            tags=["performance", "async"],
+            confidence=0.9,
+            expires_at="2026-09-01T00:00:00Z",
+        )
+        lines = (tmp_path / "memory" / "log.jsonl").read_text().splitlines()
+        obj = json.loads(lines[0])
+        assert obj["source_skill"] == "review"
+        assert obj["tags"] == ["performance", "async"]
+        assert obj["confidence"] == 0.9
+        assert obj["expires_at"] == "2026-09-01T00:00:00Z"
+
+    def test_metadata_fields_optional(self, tmp_path):
+        import json
+        instance = str(tmp_path)
+        append_memory_entry(instance, "session", "proj", "plain entry")
+        lines = (tmp_path / "memory" / "log.jsonl").read_text().splitlines()
+        obj = json.loads(lines[0])
+        assert "source_skill" not in obj
+        assert "tags" not in obj
+        assert "confidence" not in obj
+        assert "expires_at" not in obj
+
 
 class TestReadMemoryWindow:
 
@@ -2027,6 +2055,34 @@ class TestPruneMemoryLog:
             removed = prune_memory_log(instance, horizon_days=365)
         assert removed == 0
         assert len(fsync_calls) == 0
+
+    def test_removes_expired_entries(self, tmp_path):
+        import json
+        instance = str(tmp_path)
+        append_memory_entry(
+            instance, "learning", "proj", "temporary fix",
+            ts="2099-01-01T00:00:00Z",
+            expires_at="2025-01-01T00:00:00Z",
+        )
+        append_memory_entry(
+            instance, "learning", "proj", "permanent pattern",
+            ts="2099-01-01T00:00:00Z",
+        )
+        removed = prune_memory_log(instance, horizon_days=365)
+        assert removed == 1
+        lines = (tmp_path / "memory" / "log.jsonl").read_text().splitlines()
+        assert len(lines) == 1
+        assert "permanent pattern" in lines[0]
+
+    def test_keeps_non_expired_entries(self, tmp_path):
+        instance = str(tmp_path)
+        append_memory_entry(
+            instance, "learning", "proj", "future expiry",
+            ts="2099-01-01T00:00:00Z",
+            expires_at="2099-12-31T00:00:00Z",
+        )
+        removed = prune_memory_log(instance, horizon_days=365)
+        assert removed == 0
 
 
 class TestMigrateMarkdownToJsonl:
