@@ -20,7 +20,7 @@ from app.bridge_state import (
     _reset_registry,
 )
 from app.notify import TypingIndicator, send_telegram
-from app.signals import CYCLE_FILE, PAUSE_FILE, QUOTA_RESET_FILE, STOP_FILE
+from app.signals import CYCLE_FILE, CYCLE_RELEASE_FILE, PAUSE_FILE, QUOTA_RESET_FILE, STOP_FILE
 from app.skills import Skill, SkillContext, SkillError, execute_skill
 from app.utils import (
     atomic_write,
@@ -48,7 +48,8 @@ def set_callbacks(
 
 # Core commands that remain hardcoded (safety-critical or bootstrap)
 CORE_COMMANDS = frozenset({
-    "help", "stop", "update", "upgrade", "sleep", "resume", "skill",
+    "help", "stop", "update", "upgrade", "update_last_release", "sleep",
+    "resume", "skill",
     "pause", "work", "awake", "start", "run",  # aliases for sleep/resume
     "at",  # one-shot scheduled mission trigger
 })
@@ -105,9 +106,17 @@ def handle_command(text: str):
     if cmd in ("/update", "/upgrade"):
         atomic_write(KOAN_ROOT / CYCLE_FILE, "CYCLE")
         if _has_in_progress_mission():
-            send_telegram("🔄 Update requested. Current mission will complete, then Kōan will update and restart.")
+            send_telegram("🔄 Update to latest main requested. Current mission will complete, then Kōan will update and restart.")
         else:
-            send_telegram("🔄 Update requested. Kōan will update and restart.")
+            send_telegram("🔄 Update to latest main requested. Kōan will update and restart.")
+        return
+
+    if cmd == "/update_last_release":
+        atomic_write(KOAN_ROOT / CYCLE_RELEASE_FILE, "CYCLE_RELEASE")
+        if _has_in_progress_mission():
+            send_telegram("🔄 Update to latest release tag requested. Current mission will complete, then Kōan will update and restart.")
+        else:
+            send_telegram("🔄 Update to latest release tag requested. Kōan will update and restart.")
         return
 
     if cmd in ("/pause", "/sleep") or cmd.startswith(("/pause ", "/sleep ")):
@@ -583,7 +592,8 @@ _GROUP_META = {
 _CORE_COMMAND_HELP = [
     ("help",   "Show help overview or details",   ["h"],                    "system"),
     ("stop",   "Stop the run loop",               [],                      "system"),
-    ("update", "Finish current mission, update, restart", ["upgrade"],     "system"),
+    ("update", "Update to latest commit on main, restart", ["upgrade"],     "system"),
+    ("update_last_release", "Update to most recent release tag, restart", [],  "system"),
     ("pause",  "Pause mission processing (optional: /pause 2h)",  ["sleep"],  "system"),
     ("resume", "Resume mission processing",        ["work", "awake", "run", "start"], "system"),
     ("skill",  "Manage skill packages",            [],                     "system"),

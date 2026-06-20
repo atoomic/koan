@@ -214,7 +214,8 @@ Secret fields (keys containing `token`, `password`, `secret`, `api_key`) are rep
 |---|---|---|---|
 | `POST` | `/v1/restart` | yes | Signal restart via per-consumer markers `.koan-restart-run` + `.koan-restart-bridge` (picked up by run loop and bridge) |
 | `POST` | `/v1/shutdown` | yes | Write `.koan-stop` signal |
-| `POST` | `/v1/update` | yes | Pull upstream + signal restart |
+| `POST` | `/v1/update` | yes | Pull latest commit on main + signal restart |
+| `POST` | `/v1/update_release` | yes | Checkout most recent release tag + signal restart |
 
 ---
 

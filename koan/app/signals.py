@@ -14,6 +14,7 @@ STOP_FILE = ".koan-stop"
 SHUTDOWN_FILE = ".koan-shutdown"
 RESTART_FILE = ".koan-restart"
 CYCLE_FILE = ".koan-cycle"
+CYCLE_RELEASE_FILE = ".koan-cycle-release"
 ABORT_FILE = ".koan-abort"
 
 # -- Pause / quota signals ----------------------------------------------------

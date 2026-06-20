@@ -62,7 +62,7 @@ class TestFormatTagMessage:
         from app.update_hint import _format_tag_update_message
         msg = _format_tag_update_message("v1.5.0")
         assert "v1.5.0" in msg
-        assert "/update" in msg
+        assert "/update_last_release" in msg
 
     def test_includes_update_arrow(self):
         from app.update_hint import _format_tag_update_message
@@ -86,7 +86,7 @@ class TestMaybeSendUpdateHint:
         mock_send.assert_called_once()
         msg = mock_send.call_args[0][0]
         assert "v1.5.0" in msg
-        assert "/update" in msg
+        assert "/update_last_release" in msg
 
         # State file written
         state = Path(instance_dir) / ".update-hint.json"

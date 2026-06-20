@@ -7,7 +7,7 @@ and during idle sleep (alongside feature tips).
 
 Uses the same tag-based mechanism as auto_update: compares latest upstream
 tag against a cached value. The notification message informs the user
-a new release is available and suggests /update.
+a new release is available and suggests /update_last_release.
 
 Runtime state: ``instance/.update-hint.json``
   ``{"last_notified_at": "2026-05-18T12:00:00+00:00"}``
@@ -65,7 +65,7 @@ def _format_tag_update_message(tag: str) -> str:
     """Build the Telegram notification message for a new release tag."""
     return (
         f"⬆️ New Koan release available: **{tag}**\n\n"
-        f"Run /update to apply."
+        f"Run /update_last_release to update to this release."
     )
 
 
