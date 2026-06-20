@@ -208,6 +208,11 @@ class TestScanDiffForPatterns:
         assert len(findings) == 1
         assert findings[0][0] == "unsafe YAML deserialization"
 
+    def test_yaml_safe_loader_not_flagged(self):
+        diff = "+data = yaml.load(content, Loader=yaml.SafeLoader)"
+        findings = scan_diff_for_patterns(diff)
+        assert len(findings) == 0
+
     def test_detects_private_key(self):
         diff = "+-----BEGIN RSA PRIVATE KEY-----"
         findings = scan_diff_for_patterns(diff)

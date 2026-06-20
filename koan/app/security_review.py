@@ -54,7 +54,7 @@ SENSITIVE_CONTENT_PATTERNS = [
     (r"(?i)(?:pickle|marshal)\.loads?\s*\(", "unsafe deserialization"),
     (r"(?i)\.innerHTML\s*=", "potential XSS via innerHTML"),
     (r"(?i)dangerouslySetInnerHTML", "React XSS risk"),
-    (r"(?i)yaml\.(?:unsafe_)?load\s*\(", "unsafe YAML deserialization"),
+    (r"(?i)yaml\.(?:unsafe_load\s*\(|load\s*\((?!.*SafeLoader))", "unsafe YAML deserialization"),
     (r"BEGIN[ \t]+(?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY", "private key in source"),
     (r"(?i)hashlib\.(?:md5|sha1)\s*\(", "weak cryptographic hash"),
     (r"(?i)tempfile\.mktemp\s*\(", "insecure temp file creation"),
