@@ -57,6 +57,24 @@ projects:
       enabled: false           # Skip review for low-risk internal tools
 ```
 
+### Variant analysis
+
+When variant analysis is enabled, security findings from the diff are used to scan the **entire project** for similar occurrences. This turns a single-diff review into a codebase-wide vulnerability sweep. Semgrep is preferred when available (structured JSON output, language-aware file selection); grep is the fallback.
+
+```yaml
+defaults:
+  security_review:
+    enabled: true
+    variant_analysis:
+      enabled: true              # Scan codebase for sibling occurrences
+      max_variant_missions: 3    # Cap on investigation missions dispatched
+```
+
+When variants are found:
+- A `[VARIANT]` section is appended to the journal
+- Investigation missions tagged `[security-variant]` are dispatched to the pending queue
+- Dedup tracker (`.variant-dispatch-tracker.json`) prevents re-dispatching the same location
+
 ### Options
 
 | Setting | Default | Description |
@@ -64,6 +82,8 @@ projects:
 | `enabled` | `false` | Run the security review on every mission. |
 | `blocking` | `false` | Block auto-merge when risk meets the threshold. When false, findings are logged but auto-merge proceeds. |
 | `severity_threshold` | `high` | Minimum risk level that triggers a block (when `blocking: true`). One of: `low`, `medium`, `high`, `critical`. |
+| `variant_analysis.enabled` | `false` | Scan the full project for sibling occurrences of detected patterns. |
+| `variant_analysis.max_variant_missions` | `3` | Maximum number of investigation missions dispatched per review. |
 
 ## What It Detects
 
@@ -134,3 +154,16 @@ The security review runs in the post-mission pipeline in `mission_runner.py`:
 4. Auto-merge (skipped if security review blocks)
 
 If the review itself fails (exception), it logs the error and returns "pass" to avoid blocking the pipeline on review infrastructure issues.
+
+## Variant Analysis
+
+When variant analysis is enabled and the diff contains security-sensitive patterns (e.g., `eval()`, `shell=True`), the system:
+
+1. **Extracts patterns** from content findings into grep-ready regexes
+2. **Scans the full project** using semgrep (if installed) or grep
+3. **Excludes diff lines** to avoid reporting the already-reviewed code
+4. **Logs to journal** with a `[VARIANT]` section listing all hits
+5. **Dispatches investigation missions** (capped by `max_variant_missions`) tagged `[security-variant]`
+6. **Deduplicates** via a fingerprint tracker (SHA-256 of `project:filepath:lineno`) to avoid re-dispatching
+
+Semgrep is preferred for structured JSON output and language-aware file selection; grep is the always-available fallback. Both use regex matching — semgrep's `pattern-regex` rules do not provide AST-level filtering. Install semgrep for better results, but it is not required.

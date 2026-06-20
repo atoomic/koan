@@ -608,10 +608,34 @@ def get_project_security_review(config: dict, project_name: str) -> dict:
     project_cfg = get_project_config(config, project_name)
     sr = project_cfg.get("security_review", {}) or {}
 
+    va = sr.get("variant_analysis", {}) or {}
+    if not isinstance(va, dict):
+        print(
+            f"[projects_config] Invalid variant_analysis config for '{project_name}' "
+            f"(expected dict, got {type(va).__name__}), using defaults",
+            file=sys.stderr,
+        )
+        va = {}
+    raw_max = va.get("max_variant_missions", 3)
+    try:
+        max_missions = int(raw_max)
+    except (ValueError, TypeError):
+        print(
+            f"[projects_config] Invalid max_variant_missions={raw_max!r} "
+            f"for '{project_name}', using default 3",
+            file=sys.stderr,
+        )
+        max_missions = 3
+    max_missions = min(max(max_missions, 0), 10)
+
     return {
         "enabled": bool(sr.get("enabled", False)),
         "blocking": bool(sr.get("blocking", False)),
         "severity_threshold": str(sr.get("severity_threshold", "high")).strip().lower(),
+        "variant_analysis": {
+            "enabled": bool(va.get("enabled", False)),
+            "max_variant_missions": max_missions,
+        },
     }
 
 

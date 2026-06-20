@@ -46,6 +46,9 @@ defaults:
   #   enabled: true
   #   blocking: false
   #   severity_threshold: high
+  #   variant_analysis:
+  #     enabled: false             # Scan codebase for sibling occurrences of detected patterns
+  #     max_variant_missions: 3    # Max investigation missions dispatched per review
 
   # Review verdict — control the formal APPROVE / REQUEST_CHANGES status
   # submitted via the GitHub Pull Request Reviews API after /review.
