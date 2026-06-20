@@ -12,7 +12,7 @@ recurring tasks, and cross-project patterns into personalized proposals.
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 _DEFAULT_MIN_INTERVAL_HOURS = 24
 _DEFAULT_MAX_PER_DAY = 2
+_DEFAULT_TRACKER_MAX_AGE_DAYS = 90
 _MAX_LEARNINGS_LINES = 60
 _MAX_CROSS_PROJECT_ENTRIES = 20
 
@@ -85,6 +86,7 @@ def _record_suggestion(instance: str, project: str):
     from app.locked_file import locked_json_modify
 
     def _update(data: dict):
+        _prune_stale(data)
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         entry = data.get(project, {})
         if entry.get("last_date") != today:
@@ -96,6 +98,18 @@ def _record_suggestion(instance: str, project: str):
         data[project] = entry
 
     locked_json_modify(_tracker_path(instance), _update, indent=2)
+
+
+def _prune_stale(data: dict, max_age_days: int = _DEFAULT_TRACKER_MAX_AGE_DAYS) -> int:
+    """Remove entries whose ``last_suggested_at`` is older than *max_age_days*."""
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    stale = [
+        k for k, v in data.items()
+        if isinstance(v, dict) and (v.get("last_suggested_at", "") or "") < cutoff_iso
+    ]
+    for k in stale:
+        del data[k]
+    return len(stale)
 
 
 # ---------------------------------------------------------------------------

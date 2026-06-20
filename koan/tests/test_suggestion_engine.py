@@ -349,3 +349,31 @@ class TestMaybeSuggestAutomations:
         tracker = _read_tracker(instance_dir)
         assert "myproject" in tracker
         assert tracker["myproject"]["count_today"] >= 1
+
+
+class TestPruneStale:
+    def test_removes_old_entries(self):
+        from app.suggestion_engine import _prune_stale
+
+        data = {
+            "old-project": {"last_suggested_at": "2020-01-01T00:00:00+00:00", "count_today": 1, "last_date": "2020-01-01"},
+            "new-project": {"last_suggested_at": "2099-01-01T00:00:00+00:00", "count_today": 1, "last_date": "2099-01-01"},
+        }
+        removed = _prune_stale(data, max_age_days=90)
+        assert removed == 1
+        assert "old-project" not in data
+        assert "new-project" in data
+
+    def test_handles_missing_timestamp(self):
+        from app.suggestion_engine import _prune_stale
+
+        data = {"proj": {"count_today": 1}}
+        removed = _prune_stale(data, max_age_days=90)
+        assert removed == 1
+        assert "proj" not in data
+
+    def test_empty_data_noop(self):
+        from app.suggestion_engine import _prune_stale
+
+        data = {}
+        assert _prune_stale(data) == 0

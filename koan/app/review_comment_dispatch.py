@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_COOLDOWN_MINUTES = 30
 _DEFAULT_ENABLED = False
+_DEFAULT_TRACKER_MAX_AGE_DAYS = 30
 
 
 def _get_review_dispatch_config() -> dict:
@@ -37,10 +38,15 @@ def _get_review_dispatch_config() -> dict:
         return {
             "enabled": bool(rd.get("enabled", _DEFAULT_ENABLED)),
             "cooldown_minutes": int(rd.get("cooldown_minutes", _DEFAULT_COOLDOWN_MINUTES)),
+            "tracker_max_age_days": int(rd.get("tracker_max_age_days", _DEFAULT_TRACKER_MAX_AGE_DAYS)),
         }
     except (ImportError, OSError, ValueError) as e:
         log.warning("Failed to load review_dispatch config, using defaults: %s", e)
-        return {"enabled": _DEFAULT_ENABLED, "cooldown_minutes": _DEFAULT_COOLDOWN_MINUTES}
+        return {
+            "enabled": _DEFAULT_ENABLED,
+            "cooldown_minutes": _DEFAULT_COOLDOWN_MINUTES,
+            "tracker_max_age_days": _DEFAULT_TRACKER_MAX_AGE_DAYS,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +231,24 @@ def _save_tracker(instance_dir: str, data: dict) -> None:
     atomic_write_json(_tracker_path(instance_dir), data)
 
 
+def _prune_tracker(data: dict, max_age_days: int = _DEFAULT_TRACKER_MAX_AGE_DAYS) -> int:
+    """Remove tracker entries older than *max_age_days*. Returns count removed."""
+    cutoff = time.time() - max_age_days * 86400
+    stale = [
+        k for k, v in data.items()
+        if not k.startswith("cooldown:") and _entry_ts(v) < cutoff
+    ]
+    for k in stale:
+        del data[k]
+    return len(stale)
+
+
+def _entry_ts(value) -> float:
+    if isinstance(value, dict):
+        return value.get("ts", 0)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Main dispatch logic
 # ---------------------------------------------------------------------------
@@ -293,11 +317,12 @@ def check_and_dispatch_review_comments(
         return 0
 
     tracker = _load_tracker(instance_dir)
+    pruned = _prune_tracker(tracker, config.get("tracker_max_age_days", _DEFAULT_TRACKER_MAX_AGE_DAYS))
     bot_username = _get_bot_username()
     cooldown_secs = config["cooldown_minutes"] * 60
     now = time.time()
     dispatched = 0
-    tracker_changed = False
+    tracker_changed = pruned > 0
 
     for project_name, project_path in projects:
         project_key = f"cooldown:{project_name}"
@@ -334,9 +359,10 @@ def check_and_dispatch_review_comments(
                 continue
 
             fingerprint = compute_comment_fingerprint(all_comments)
-            stored = tracker.get(pr_key)
+            stored_raw = tracker.get(pr_key)
+            stored_fp = stored_raw.get("fingerprint", "") if isinstance(stored_raw, dict) else stored_raw
 
-            if stored == fingerprint:
+            if stored_fp == fingerprint:
                 continue
 
             summary = _format_comment_summary(all_comments)
@@ -357,10 +383,10 @@ def check_and_dispatch_review_comments(
                 log.info(
                     "Review dispatch: new comments on %s#%d (fingerprint %s → %s)",
                     full_repo, pr_number,
-                    (stored or "none")[:8], fingerprint[:8],
+                    (stored_fp or "none")[:8], fingerprint[:8],
                 )
                 dispatched += 1
-                tracker[pr_key] = fingerprint
+                tracker[pr_key] = {"fingerprint": fingerprint, "ts": now}
                 tracker_changed = True
 
         tracker[project_key] = now

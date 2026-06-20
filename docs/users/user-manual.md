@@ -738,6 +738,7 @@ Configure this behavior in `config.yaml`:
 review_dispatch:
   enabled: true            # Opt-in (default: false)
   cooldown_minutes: 30     # Min minutes between checks per project (default: 30)
+  tracker_max_age_days: 30 # Prune dedup entries older than this (default: 30)
 ```
 
 To prevent the bot from replying to itself in review comment threads (and to cap thread depth), configure:
@@ -1802,6 +1803,7 @@ ci_dispatch:
   enabled: true              # Master switch (default: false)
   cooldown_minutes: 30       # Min time between checks per project (default: 30)
   log_snippet_bytes: 4096    # Max CI log snippet in mission text (default: 4096)
+  tracker_max_age_days: 30   # Prune dedup entries older than this (default: 30)
 ```
 
 ### Auto-Update

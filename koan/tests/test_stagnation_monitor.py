@@ -12,6 +12,7 @@ import app.stagnation_monitor as stagnation_monitor
 from app.stagnation_monitor import (
     StagnationMonitor,
     _mission_key,
+    _prune_tracker,
     _tail_hash,
     classify_stagnation,
     clear_retry_count,
@@ -1256,3 +1257,62 @@ class TestMigrationTrackerCache:
 
         _migrate_tracker_filename(dir_b)
         assert dir_b in _migration_checked
+
+
+class TestPruneTracker:
+    def test_removes_old_entries(self):
+        old_ts = time.time() - 31 * 86400
+        data = {
+            "hash_old": {"count": 2, "updated_at": old_ts},
+            "hash_new": {"count": 1, "updated_at": time.time()},
+        }
+        removed = _prune_tracker(data, max_age_days=30)
+        assert removed == 1
+        assert "hash_old" not in data
+        assert "hash_new" in data
+
+    def test_prunes_legacy_entries_without_updated_at(self):
+        data = {
+            "hash_legacy": {"count": 3, "pattern_type": "loop"},
+        }
+        removed = _prune_tracker(data, max_age_days=30)
+        assert removed == 1
+        assert "hash_legacy" not in data
+
+    def test_prunes_legacy_scalar_entries(self):
+        data = {
+            "hash_int": 3,
+            "hash_dict": {"count": 1, "updated_at": time.time()},
+        }
+        removed = _prune_tracker(data, max_age_days=30)
+        assert removed == 1
+        assert "hash_int" not in data
+        assert "hash_dict" in data
+
+    def test_empty_data_noop(self):
+        assert _prune_tracker({}) == 0
+
+    def test_increment_sets_updated_at(self, tmp_path):
+        increment_retry_count(str(tmp_path), "test mission")
+        tracker_path = tmp_path / ".mission-retries.json"
+        data = json.loads(tracker_path.read_text())
+        key = _mission_key("test mission")
+        assert "updated_at" in data[key]
+        assert data[key]["updated_at"] > 0
+
+    def test_increment_crash_sets_updated_at(self, tmp_path):
+        increment_crash_count(str(tmp_path), "test mission")
+        tracker_path = tmp_path / ".mission-retries.json"
+        data = json.loads(tracker_path.read_text())
+        key = _mission_key("test mission")
+        assert "updated_at" in data[key]
+
+    def test_clear_partial_preserves_updated_at(self, tmp_path):
+        d = str(tmp_path)
+        increment_crash_count(d, "test mission")
+        clear_retry_count(d, "test mission", clear_total=False)
+        tracker_path = tmp_path / ".mission-retries.json"
+        data = json.loads(tracker_path.read_text())
+        key = _mission_key("test mission")
+        assert "updated_at" in data[key]
+        assert data[key]["updated_at"] > 0

@@ -8,7 +8,10 @@ File location: ``instance/.check-tracker.json``
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+_DEFAULT_TRACKER_MAX_AGE_DAYS = 30
 
 
 def _tracker_path(instance_dir):
@@ -48,16 +51,27 @@ def mark_checked(instance_dir, url, updated_at):
         url: Canonical GitHub URL (PR or issue).
         updated_at: ISO-8601 timestamp from the GitHub API.
     """
-    from datetime import datetime, timezone
     from app.locked_file import locked_json_modify
 
     def _update(data):
+        _prune_stale(data)
         data[url] = {
             "updated_at": updated_at,
             "checked_at": datetime.now(timezone.utc).isoformat(),
         }
 
     locked_json_modify(_tracker_path(instance_dir), _update, indent=2)
+
+
+def _prune_stale(data, max_age_days=_DEFAULT_TRACKER_MAX_AGE_DAYS):
+    """Remove entries with ``checked_at`` older than *max_age_days*."""
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    stale = [
+        k for k, v in data.items()
+        if isinstance(v, dict) and (v.get("checked_at", "") or "") < cutoff_iso
+    ]
+    for k in stale:
+        del data[k]
 
 
 def has_changed(instance_dir, url, current_updated_at):

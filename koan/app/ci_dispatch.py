@@ -12,6 +12,7 @@ Config in config.yaml::
       enabled: false           # opt-in
       cooldown_minutes: 30     # min time between checks per project
       log_snippet_bytes: 4096  # max log snippet size in mission text
+      tracker_max_age_days: 30 # prune dedup entries older than this
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ log = logging.getLogger(__name__)
 _DEFAULT_ENABLED = False
 _DEFAULT_COOLDOWN_MINUTES = 30
 _DEFAULT_LOG_SNIPPET_BYTES = 4096
+_DEFAULT_TRACKER_MAX_AGE_DAYS = 30
 
 
 def _get_ci_dispatch_config() -> dict:
@@ -41,12 +43,14 @@ def _get_ci_dispatch_config() -> dict:
             "enabled": bool(cd.get("enabled", _DEFAULT_ENABLED)),
             "cooldown_minutes": int(cd.get("cooldown_minutes", _DEFAULT_COOLDOWN_MINUTES)),
             "log_snippet_bytes": int(cd.get("log_snippet_bytes", _DEFAULT_LOG_SNIPPET_BYTES)),
+            "tracker_max_age_days": int(cd.get("tracker_max_age_days", _DEFAULT_TRACKER_MAX_AGE_DAYS)),
         }
     except (ImportError, OSError, ValueError):
         return {
             "enabled": _DEFAULT_ENABLED,
             "cooldown_minutes": _DEFAULT_COOLDOWN_MINUTES,
             "log_snippet_bytes": _DEFAULT_LOG_SNIPPET_BYTES,
+            "tracker_max_age_days": _DEFAULT_TRACKER_MAX_AGE_DAYS,
         }
 
 
@@ -89,6 +93,29 @@ def _load_tracker(instance_dir: str) -> dict:
 def _save_tracker(instance_dir: str, data: dict) -> None:
     from app.utils import atomic_write_json
     atomic_write_json(_tracker_path(instance_dir), data)
+
+
+def _prune_tracker(data: dict, max_age_days: int = _DEFAULT_TRACKER_MAX_AGE_DAYS) -> int:
+    """Remove tracker entries older than *max_age_days*. Returns count removed."""
+    cutoff = time.time() - max_age_days * 86400
+    stale = [
+        k for k, v in data.items()
+        if not k.startswith("cooldown:") and _entry_ts(v) < cutoff
+    ]
+    for k in stale:
+        del data[k]
+    return len(stale)
+
+
+def _entry_ts(value) -> float:
+    """Extract the unix timestamp from a tracker entry.
+
+    New-format entries are dicts with a ``ts`` key.  Legacy entries (plain
+    strings or missing ``ts``) return 0 so they are pruned first.
+    """
+    if isinstance(value, dict):
+        return value.get("ts", 0)
+    return 0
 
 
 def fetch_koan_open_prs(project_path: str) -> List[dict]:
@@ -246,11 +273,12 @@ def check_and_dispatch_ci_fixes(
         return 0
 
     tracker = _load_tracker(instance_dir)
+    pruned = _prune_tracker(tracker, config.get("tracker_max_age_days", _DEFAULT_TRACKER_MAX_AGE_DAYS))
     cooldown_secs = config["cooldown_minutes"] * 60
     max_log_bytes = config["log_snippet_bytes"]
     now = time.time()
     dispatched = 0
-    tracker_changed = False
+    tracker_changed = pruned > 0
 
     for project_name, project_path in projects:
         project_key = f"cooldown:{project_name}"
@@ -319,7 +347,7 @@ def check_and_dispatch_ci_fixes(
                     )
                     dispatched += 1
 
-                tracker[fp_key] = fingerprint
+                tracker[fp_key] = {"fingerprint": fingerprint, "ts": now}
                 tracker_changed = True
 
         if not api_failed:

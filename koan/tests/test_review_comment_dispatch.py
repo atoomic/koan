@@ -231,19 +231,19 @@ class TestReviewDispatchConfigHelpers:
             "review_dispatch": {"enabled": 1, "cooldown_minutes": "5"},
         }
 
-        assert _get_review_dispatch_config() == {
-            "enabled": True,
-            "cooldown_minutes": 5,
-        }
+        result = _get_review_dispatch_config()
+        assert result["enabled"] is True
+        assert result["cooldown_minutes"] == 5
+        assert result["tracker_max_age_days"] == 30
 
     @patch("app.utils.load_config", side_effect=ValueError("bad"))
     def test_get_review_dispatch_config_falls_back_on_error(self, mock_config):
         from app.review_comment_dispatch import _get_review_dispatch_config
 
-        assert _get_review_dispatch_config() == {
-            "enabled": False,
-            "cooldown_minutes": 30,
-        }
+        result = _get_review_dispatch_config()
+        assert result["enabled"] is False
+        assert result["cooldown_minutes"] == 30
+        assert result["tracker_max_age_days"] == 30
 
     @patch("app.config.get_branch_prefix", side_effect=OSError("bad"))
     def test_branch_prefix_falls_back_to_koan(self, mock_prefix):
@@ -348,8 +348,9 @@ class TestCheckAndDispatch:
         mock_inline.return_value = comments
         mock_review_body.return_value = []
 
+        import time as _time
         fp = compute_comment_fingerprint(comments)
-        _save_tracker(instance_dir, {"owner/myproject#42": fp})
+        _save_tracker(instance_dir, {"owner/myproject#42": {"fingerprint": fp, "ts": _time.time()}})
 
         result = check_and_dispatch_review_comments(instance_dir, "/koan")
         assert result == 0
@@ -473,3 +474,36 @@ class TestCheckAndDispatch:
         check_and_dispatch_review_comments(instance_dir, "/koan")
         tracker = _load_tracker(instance_dir)
         assert "cooldown:myproject" in tracker
+
+
+class TestPruneTracker:
+    def test_removes_old_entries(self):
+        import time
+        from app.review_comment_dispatch import _prune_tracker
+
+        old_ts = time.time() - 31 * 86400
+        data = {
+            "owner/repo#10": {"fingerprint": "abc", "ts": old_ts},
+            "owner/repo#20": {"fingerprint": "def", "ts": time.time()},
+            "cooldown:proj": time.time(),
+        }
+        removed = _prune_tracker(data, max_age_days=30)
+        assert removed == 1
+        assert "owner/repo#10" not in data
+        assert "owner/repo#20" in data
+        assert "cooldown:proj" in data
+
+    def test_prunes_legacy_string_entries(self):
+        from app.review_comment_dispatch import _prune_tracker
+
+        data = {"owner/repo#5": "old-fp", "owner/repo#6": {"fingerprint": "fp", "ts": 9999999999}}
+        removed = _prune_tracker(data, max_age_days=30)
+        assert removed == 1
+        assert "owner/repo#5" not in data
+
+    def test_preserves_cooldown_entries(self):
+        from app.review_comment_dispatch import _prune_tracker
+
+        data = {"cooldown:proj": 0}
+        assert _prune_tracker(data, max_age_days=1) == 0
+        assert "cooldown:proj" in data

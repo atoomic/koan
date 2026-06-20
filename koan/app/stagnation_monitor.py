@@ -37,6 +37,7 @@ import os
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -55,6 +56,7 @@ _CLASSIFY_TAIL_LINES = 100        # lines to read for pattern classification
 # right before a crash doesn't lose its retry count.
 _RETRY_TRACKER_FILENAME = ".mission-retries.json"
 _RETRY_TRACKER_OLD_FILENAME = ".stagnation-retries.json"
+_DEFAULT_TRACKER_MAX_AGE_DAYS = 30
 
 
 def _read_tail(stdout_file: str, lines: int) -> Optional[bytes]:
@@ -460,6 +462,22 @@ def _validate_tracker(data) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _prune_tracker(data: dict, max_age_days: int = _DEFAULT_TRACKER_MAX_AGE_DAYS) -> int:
+    """Remove entries whose ``updated_at`` is older than *max_age_days*.
+
+    Entries without ``updated_at`` (legacy) are pruned immediately.
+    Returns count removed.
+    """
+    cutoff = time.time() - max_age_days * 86400
+    stale = [
+        k for k, v in data.items()
+        if not isinstance(v, dict) or v.get("updated_at", 0) < cutoff
+    ]
+    for k in stale:
+        del data[k]
+    return len(stale)
+
+
 def get_retry_count(instance_dir: str, mission_title: str) -> int:
     """Return how many times *mission_title* has been stagnation-requeued."""
     path = _retry_tracker_path(instance_dir)
@@ -502,18 +520,20 @@ def increment_crash_count(instance_dir: str, mission_title: str) -> int:
     key = _mission_key(mission_title)
 
     def _mutate(data: dict) -> int:
+        _prune_tracker(data)
         existing = data.get(key, {})
         total = max(0, int(existing.get("total_attempts", 0))) if isinstance(existing, dict) else 0
         crash = max(0, int(existing.get("crash_count", 0))) if isinstance(existing, dict) else 0
         new_crash = crash + 1
         new_total = total + 1
         if isinstance(existing, dict):
-            data[key] = {**existing, "crash_count": new_crash, "total_attempts": new_total}
+            data[key] = {**existing, "crash_count": new_crash, "total_attempts": new_total, "updated_at": time.time()}
         else:
             data[key] = {
                 "count": _extract_count(existing),
                 "crash_count": new_crash,
                 "total_attempts": new_total,
+                "updated_at": time.time(),
             }
         return new_crash
 
@@ -542,11 +562,12 @@ def seed_crash_count(instance_dir: str, mission_title: str, seed_value: int) -> 
         if seed_value <= crash:
             return  # already at or above seed value
         if isinstance(existing, dict):
-            data[key] = {**existing, "crash_count": seed_value}
+            data[key] = {**existing, "crash_count": seed_value, "updated_at": time.time()}
         else:
             data[key] = {
                 "count": _extract_count(existing),
                 "crash_count": seed_value,
+                "updated_at": time.time(),
             }
 
     with contextlib.suppress(OSError):
@@ -617,6 +638,7 @@ def increment_retry_count(
     key = _mission_key(mission_title)
 
     def _mutate(data: dict) -> int:
+        _prune_tracker(data)
         existing = data.get(key, {})
         current = _extract_count(existing)
         total = max(0, int(existing.get("total_attempts", 0))) if isinstance(existing, dict) else 0
@@ -628,6 +650,7 @@ def increment_retry_count(
             "sample_lines": pattern_excerpt[:500],
             "total_attempts": total + 1,
             "crash_count": crash,
+            "updated_at": time.time(),
         }
         return new_count
 
@@ -670,6 +693,7 @@ def clear_retry_count(instance_dir: str, mission_title: str, *, clear_total: boo
             if crash:
                 preserved["crash_count"] = crash
             if preserved:
+                preserved["updated_at"] = time.time()
                 data[key] = preserved
             else:
                 data.pop(key, None)
