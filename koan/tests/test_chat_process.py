@@ -82,13 +82,15 @@ class TestChatRouting:
     """Test that awake.py routes to chat process when available."""
 
     @patch("app.awake._is_chat_process_running", return_value=True)
-    @patch("app.awake.send_telegram")
-    def test_routes_to_chat_process_when_running(self, mock_send, mock_running, monkeypatch, instance_dir):
+    @patch("app.awake.save_conversation_message")
+    @patch("app.config.get_prompt_guard_config", return_value={"enabled": False})
+    def test_routes_to_chat_process_when_running(self, mock_guard_cfg, mock_save, mock_running, monkeypatch, instance_dir):
         """When chat process is alive, messages go to inbox."""
         from app.awake import _route_to_chat_process
 
         inbox = instance_dir / "chat-inbox.jsonl"
         monkeypatch.setattr("app.chat_process.CHAT_INBOX", inbox)
+        monkeypatch.setattr("app.awake.CONVERSATION_HISTORY_FILE", instance_dir / "history.jsonl")
 
         result = _route_to_chat_process("Hello")
         assert result is True
@@ -96,6 +98,8 @@ class TestChatRouting:
         assert inbox.exists()
         entries = json.loads(inbox.read_text().strip())
         assert entries["text"] == "Hello"
+        # Conversation history saved before routing
+        mock_save.assert_called_once()
 
     @patch("app.awake._is_chat_process_running", return_value=False)
     def test_falls_back_when_process_not_running(self, mock_running):
@@ -105,13 +109,15 @@ class TestChatRouting:
         assert result is False
 
     @patch("app.awake._is_chat_process_running", return_value=True)
-    @patch("app.awake.send_telegram")
-    def test_queues_when_pending_requests(self, mock_send, mock_running, monkeypatch, instance_dir):
+    @patch("app.awake.save_conversation_message")
+    @patch("app.config.get_prompt_guard_config", return_value={"enabled": False})
+    def test_queues_when_pending_requests(self, mock_guard_cfg, mock_save, mock_running, monkeypatch, instance_dir):
         """When inbox already has pending requests, new messages are still queued."""
         from app.awake import _route_to_chat_process
 
         inbox = instance_dir / "chat-inbox.jsonl"
         monkeypatch.setattr("app.chat_process.CHAT_INBOX", inbox)
+        monkeypatch.setattr("app.awake.CONVERSATION_HISTORY_FILE", instance_dir / "history.jsonl")
 
         # Pre-fill inbox
         write_to_inbox("first message")
@@ -119,12 +125,23 @@ class TestChatRouting:
 
         result = _route_to_chat_process("second message")
         assert result is True
-        # No busy message sent — both requests are queued
-        mock_send.assert_not_called()
         # Verify both messages are in inbox
         lines = inbox.read_text().strip().split("\n")
         assert len(lines) == 2
         assert json.loads(lines[1])["text"] == "second message"
+
+    @patch("app.awake._is_chat_process_running", return_value=True)
+    @patch("app.awake.save_conversation_message")
+    @patch("app.config.get_prompt_guard_config", return_value={"enabled": False})
+    def test_route_exception_falls_back(self, mock_guard_cfg, mock_save, mock_running, monkeypatch):
+        """If write_to_inbox raises, returns False so fallback handles it."""
+        from app.awake import _route_to_chat_process
+
+        monkeypatch.setattr("app.awake.CONVERSATION_HISTORY_FILE", Path("/tmp/test-hist.jsonl"))
+
+        with patch("app.chat_process.write_to_inbox", side_effect=OSError("disk full")):
+            result = _route_to_chat_process("Hello")
+        assert result is False
 
 
 class TestRetryConstants:

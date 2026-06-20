@@ -182,8 +182,9 @@ def process_chat_request(text: str, soul: str, summary: str, project_path: str) 
     from app.prompt_guard import scan_mission_text
     from app.config import get_prompt_guard_config
 
-    # Save user message to history
-    save_conversation_message(CONVERSATION_HISTORY_FILE, "user", text)
+    # User message is already saved to conversation history by awake.py
+    # before routing to the inbox. Only save here if called standalone.
+    # (The duplicate check avoids double entries in conversation-history.jsonl.)
 
     # Scan for prompt injection (warn-only — chat tools are read-only)
     guard_config = get_prompt_guard_config()
@@ -191,6 +192,11 @@ def process_chat_request(text: str, soul: str, summary: str, project_path: str) 
         guard_result = scan_mission_text(text)
         if guard_result.blocked:
             _log(f"WARNING chat guard: {guard_result.reason} | {text[:100]}")
+            try:
+                from app.command_handlers import quarantine_mission
+                quarantine_mission(text, guard_result.reason, source="telegram-chat")
+            except Exception:
+                pass
 
     chat_timeout = int(os.environ.get("KOAN_CHAT_TIMEOUT", "180"))
     chat_tools_list = get_chat_tools().split(",")

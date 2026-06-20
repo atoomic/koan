@@ -314,11 +314,11 @@ def _retry_chat_lite(text: str, chat_tools_list: list, models: dict):
         else:
             if result.stderr:
                 log("error", f"Lite retry stderr: {result.stderr[:500]}")
-            timeout_msg = f"⏱ Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
-            send_telegram(timeout_msg)
-            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", timeout_msg)
+            empty_msg = "⚠️ I couldn't generate a response — try a shorter question, or send 'mission: ...' for complex tasks."
+            send_telegram(empty_msg)
+            save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", empty_msg)
     except subprocess.TimeoutExpired:
-        timeout_msg = f"Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
+        timeout_msg = f"⏱ Timeout after {CHAT_TIMEOUT}s — try a shorter question, or send 'mission: ...' for complex tasks."
         send_telegram(timeout_msg)
         save_conversation_message(CONVERSATION_HISTORY_FILE, "assistant", timeout_msg)
     except Exception as e:
@@ -586,16 +586,38 @@ def _route_to_chat_process(text: str) -> bool:
     """Try to route a chat message to the dedicated chat process.
 
     Returns True if the message was successfully queued, False if the
-    chat process is not running (caller should fall back to worker thread).
+    chat process is not running or the write failed (caller should fall
+    back to worker thread).
+
+    Saves conversation history and runs prompt guard here so these steps
+    are not skipped when bypassing handle_chat().
     """
     if not _is_chat_process_running():
         return False
 
-    from app.chat_process import write_to_inbox
+    try:
+        # Save user message to conversation history before routing
+        save_conversation_message(CONVERSATION_HISTORY_FILE, "user", text)
 
-    write_to_inbox(text)
-    log("chat", "Chat routed to dedicated chat process")
-    return True
+        # Prompt guard (warn-only — chat tools are read-only)
+        from app.prompt_guard import scan_mission_text
+        from app.config import get_prompt_guard_config
+        from app.command_handlers import quarantine_mission
+
+        guard_config = get_prompt_guard_config()
+        if guard_config["enabled"]:
+            guard_result = scan_mission_text(text)
+            if guard_result.blocked:
+                log("guard", f"WARNING chat: {guard_result.reason} | {text[:100]}")
+                quarantine_mission(text, guard_result.reason, source="telegram-chat")
+
+        from app.chat_process import write_to_inbox
+        write_to_inbox(text)
+        log("chat", "Chat routed to dedicated chat process")
+        return True
+    except Exception as e:
+        log("error", f"Failed to route to chat process: {e}")
+        return False
 
 
 def handle_message(text: str):

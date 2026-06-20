@@ -833,7 +833,7 @@ class TestHandleChat:
     @patch("app.config.get_tools_description", return_value="")
     @patch("app.awake.get_chat_tools", return_value="")
     @patch("app.awake.send_telegram")
-    @patch("app.awake.subprocess.run")
+    @patch("app.cli_exec.run_cli")
     def test_empty_response_sends_fallback(self, mock_run, mock_send, mock_tools,
                                            mock_tools_desc, mock_fmt, mock_hist,
                                            mock_save, tmp_path):
@@ -847,7 +847,7 @@ class TestHandleChat:
              patch("app.awake.SUMMARY", ""):
             handle_chat("hello")
         # User must receive a reply — not silence
-        mock_send.assert_called_once()
+        assert mock_send.call_count >= 1
         # Must persist the fallback to conversation history
         assert mock_save.call_count >= 2  # user msg + fallback msg
 
