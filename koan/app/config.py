@@ -1680,6 +1680,40 @@ def get_review_triage_config() -> dict:
     }
 
 
+def get_review_bot_triage_config() -> dict:
+    """Get review bot comment triage configuration from config.yaml.
+
+    Controls whether /review triages inline comments from code-review bots
+    (CodeRabbit, GitHub Copilot Review, Sourcery) and optionally replies.
+
+    Config key: review_bot_triage::
+
+        review_bot_triage:
+          enabled: false
+          bot_usernames:
+            - coderabbitai
+            - sourcery-ai
+
+    Returns:
+        Dict with keys: enabled (bool), bot_usernames (list of str).
+    """
+    config = _load_config()
+    section = config.get("review_bot_triage", {}) or {}
+    if not isinstance(section, dict):
+        section = {}
+
+    enabled = section.get("enabled", False)
+    if not isinstance(enabled, bool):
+        enabled = False
+
+    usernames = section.get("bot_usernames", [])
+    if not isinstance(usernames, list):
+        usernames = []
+    usernames = [str(u) for u in usernames]
+
+    return {"enabled": enabled, "bot_usernames": usernames}
+
+
 def get_review_verdict_config() -> dict:
     """Get review verdict configuration from config.yaml.
 

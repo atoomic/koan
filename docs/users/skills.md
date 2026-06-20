@@ -43,7 +43,7 @@ Complete reference for all Koan slash commands. Use these via Telegram, Slack, o
 | `/implement <issue>` | `/impl` | Queue implementation for a GitHub or Jira issue; never bails — resolves ambiguity with simplest viable solution, retries once before surfacing a problem | Yes |
 | `/fix <issue>` | — | Diagnose → understand → plan → test → implement → submit PR. Runs a lightweight pre-fix diagnostic (bypass with `--skip-diagnose`) | Yes |
 | `/debug <issue>` | `/dbg` | Structured 4-step debug loop: reproduce → hypothesize → minimal fix → verify. Auto-queued when `/fix` fails (opt-in via `debug_escalation.on_fix_failure` in config.yaml) | Yes |
-| `/review <PR>` | `/rv` | Review a pull request | Yes |
+| `/review <PR> [--bot-comments]` | `/rv` | Review a pull request; `--bot-comments` triages bot findings | Yes |
 | `/ultrareview <PR>` | `/urv` | Ultra-thorough review: architecture + silent-failure passes combined | Yes |
 | `/explain <PR>` | `/xp` | Explain a PR's changes in plain language with examples and alternative approaches | Yes |
 | `/rebase <PR>` | `/rb` | Rebase a PR onto its base branch | Yes |

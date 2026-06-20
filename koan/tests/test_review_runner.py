@@ -1539,6 +1539,7 @@ class TestMainCli:
             comments=False,
             ultra=False,
             force=False,
+            bot_comments=False,
         )
 
     @patch("app.review_runner.run_review")
@@ -5205,3 +5206,276 @@ class TestReRequestBypassesIncrementalSkip:
         assert success is True
         assert "no new commits" in summary.lower()
         mock_claude.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Bot comment triage — config
+# ---------------------------------------------------------------------------
+
+class TestReviewBotTriageConfig:
+    """Tests for get_review_bot_triage_config."""
+
+    def test_defaults_when_missing(self):
+        from app.config import get_review_bot_triage_config
+        with patch("app.config._load_config", return_value={}):
+            cfg = get_review_bot_triage_config()
+        assert cfg["enabled"] is False
+        assert cfg["bot_usernames"] == []
+
+    def test_enabled_with_usernames(self):
+        from app.config import get_review_bot_triage_config
+        config = {"review_bot_triage": {
+            "enabled": True,
+            "bot_usernames": ["coderabbitai", "sourcery-ai"],
+        }}
+        with patch("app.config._load_config", return_value=config):
+            cfg = get_review_bot_triage_config()
+        assert cfg["enabled"] is True
+        assert cfg["bot_usernames"] == ["coderabbitai", "sourcery-ai"]
+
+    def test_non_dict_returns_defaults(self):
+        from app.config import get_review_bot_triage_config
+        with patch("app.config._load_config", return_value={"review_bot_triage": "bad"}):
+            cfg = get_review_bot_triage_config()
+        assert cfg["enabled"] is False
+
+    def test_non_list_usernames_returns_empty(self):
+        from app.config import get_review_bot_triage_config
+        config = {"review_bot_triage": {"enabled": True, "bot_usernames": "not-a-list"}}
+        with patch("app.config._load_config", return_value=config):
+            cfg = get_review_bot_triage_config()
+        assert cfg["bot_usernames"] == []
+
+
+# ---------------------------------------------------------------------------
+# Bot comment triage — noise pre-filter
+# ---------------------------------------------------------------------------
+
+class TestPreFilterBotNoise:
+    """Tests for _pre_filter_bot_noise."""
+
+    def test_keeps_actionable_comment(self):
+        from app.review_runner import _pre_filter_bot_noise
+        comments = [{"id": 1, "body": "Consider using `Optional` here to handle None."}]
+        result = _pre_filter_bot_noise(comments)
+        assert len(result) == 1
+
+    def test_drops_deployment_url(self):
+        from app.review_runner import _pre_filter_bot_noise
+        comments = [{"id": 1, "body": "Preview: https://deploy-preview-42.netlify.app"}]
+        result = _pre_filter_bot_noise(comments)
+        assert len(result) == 0
+
+    def test_drops_coverage_badge(self):
+        from app.review_runner import _pre_filter_bot_noise
+        comments = [{"id": 1, "body": "Coverage: 85.2% (+0.3%) :white_check_mark:"}]
+        result = _pre_filter_bot_noise(comments)
+        assert len(result) == 0
+
+    def test_drops_summary_header_block(self):
+        from app.review_runner import _pre_filter_bot_noise
+        comments = [{"id": 1, "body": "## Summary by CodeRabbit\n\n- Updated dependencies"}]
+        result = _pre_filter_bot_noise(comments)
+        assert len(result) == 0
+
+    def test_drops_empty_body(self):
+        from app.review_runner import _pre_filter_bot_noise
+        comments = [{"id": 1, "body": ""}]
+        result = _pre_filter_bot_noise(comments)
+        assert len(result) == 0
+
+    def test_mixed_keeps_only_actionable(self):
+        from app.review_runner import _pre_filter_bot_noise
+        comments = [
+            {"id": 1, "body": "Coverage: 90%"},
+            {"id": 2, "body": "This function has a potential null dereference on line 42."},
+            {"id": 3, "body": ""},
+        ]
+        result = _pre_filter_bot_noise(comments)
+        assert len(result) == 1
+        assert result[0]["id"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Bot comment triage — partition and fetch
+# ---------------------------------------------------------------------------
+
+class TestPartitionInlineComments:
+    """Tests for _partition_inline_comments."""
+
+    def test_separates_human_and_bot(self):
+        from app.review_runner import _partition_inline_comments
+        items = [
+            {"id": 1, "user": "alice", "body": "Nice", "user_type": "User", "path": "a.py", "line": 1},
+            {"id": 2, "user": "coderabbitai", "body": "Bug here", "user_type": "Bot", "path": "b.py", "line": 5},
+        ]
+        human, bot = _partition_inline_comments(items, "koan-bot", [])
+        assert len(human) == 1
+        assert human[0]["id"] == 1
+        assert len(bot) == 1
+        assert bot[0]["id"] == 2
+
+    def test_config_bot_usernames_treated_as_bot(self):
+        from app.review_runner import _partition_inline_comments
+        items = [
+            {"id": 1, "user": "sourcery-ai", "body": "Simplify", "user_type": "User", "path": "c.py", "line": 3},
+        ]
+        human, bot = _partition_inline_comments(items, "", ["sourcery-ai"])
+        assert len(human) == 0
+        assert len(bot) == 1
+
+    def test_self_bot_excluded_from_both(self):
+        from app.review_runner import _partition_inline_comments
+        items = [
+            {"id": 1, "user": "Koan-Bot", "body": "My reply", "user_type": "User", "path": "d.py", "line": 2},
+        ]
+        human, bot = _partition_inline_comments(items, "koan-bot", [])
+        assert len(human) == 0
+        assert len(bot) == 0
+
+
+class TestFetchBotInlineComments:
+    """Tests for _fetch_bot_inline_comments."""
+
+    @patch("app.review_runner.run_gh")
+    def test_returns_bot_comments_with_noise_filtered(self, mock_gh):
+        from app.review_runner import _fetch_bot_inline_comments
+        mock_gh.return_value = "\n".join([
+            json.dumps({"id": 1, "user": "coderabbitai", "body": "Bug: null deref", "path": "x.py", "line": 10, "user_type": "Bot"}),
+            json.dumps({"id": 2, "user": "coderabbitai", "body": "Coverage: 85%", "path": "y.py", "line": 1, "user_type": "Bot"}),
+            json.dumps({"id": 3, "user": "alice", "body": "LGTM", "path": "z.py", "line": 5, "user_type": "User"}),
+        ])
+        result = _fetch_bot_inline_comments("owner/repo", "42", "koan-bot", [])
+        assert len(result) == 1
+        assert result[0]["id"] == 1
+        assert result[0]["body"] == "Bug: null deref"
+
+    @patch("app.review_runner.run_gh")
+    def test_empty_when_no_bot_comments(self, mock_gh):
+        from app.review_runner import _fetch_bot_inline_comments
+        mock_gh.return_value = json.dumps(
+            {"id": 1, "user": "alice", "body": "Nice", "path": "a.py", "line": 1, "user_type": "User"}
+        )
+        result = _fetch_bot_inline_comments("owner/repo", "42", "", [])
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Bot comment triage — triage runner
+# ---------------------------------------------------------------------------
+
+class TestRunBotCommentTriage:
+    """Tests for _run_bot_comment_triage."""
+
+    @patch("app.review_runner._run_claude_review")
+    def test_returns_reply_items_for_actionable(self, mock_claude):
+        from app.review_runner import _run_bot_comment_triage
+        mock_claude.return_value = (json.dumps([
+            {"comment_id": 42, "classification": "actionable", "reply": "Acknowledged: Good catch."},
+        ]), "")
+        bot_comments = [{"id": 42, "body": "Null deref risk", "path": "x.py", "line": 10}]
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "core" / "review"
+        replies = _run_bot_comment_triage(bot_comments, "diff content", skill_dir)
+        assert len(replies) == 1
+        assert replies[0]["comment_id"] == 42
+        assert replies[0]["reply"] == "Acknowledged: Good catch."
+
+    @patch("app.review_runner._run_claude_review")
+    def test_skips_noise_entries(self, mock_claude):
+        from app.review_runner import _run_bot_comment_triage
+        mock_claude.return_value = (json.dumps([
+            {"comment_id": 42, "classification": "actionable", "reply": "Acknowledged: Fixed."},
+            {"comment_id": 43, "classification": "noise", "reply": ""},
+        ]), "")
+        bot_comments = [
+            {"id": 42, "body": "Bug", "path": "x.py", "line": 10},
+            {"id": 43, "body": "Coverage", "path": "y.py", "line": 1},
+        ]
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "core" / "review"
+        replies = _run_bot_comment_triage(bot_comments, "diff", skill_dir)
+        assert len(replies) == 1
+        assert replies[0]["comment_id"] == 42
+
+    @patch("app.review_runner._run_claude_review")
+    def test_returns_empty_on_parse_failure(self, mock_claude):
+        from app.review_runner import _run_bot_comment_triage
+        mock_claude.return_value = ("not valid json", "")
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "core" / "review"
+        replies = _run_bot_comment_triage([], "diff", skill_dir)
+        assert replies == []
+
+    @patch("app.review_runner._run_claude_review")
+    def test_returns_empty_on_exception(self, mock_claude):
+        from app.review_runner import _run_bot_comment_triage
+        mock_claude.side_effect = RuntimeError("CLI error")
+        bot_comments = [{"id": 42, "body": "Bug", "path": "x.py", "line": 10}]
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "core" / "review"
+        replies = _run_bot_comment_triage(bot_comments, "diff", skill_dir)
+        assert replies == []
+
+
+# ---------------------------------------------------------------------------
+# Bot comment triage — run_review integration
+# ---------------------------------------------------------------------------
+
+class TestRunReviewBotCommentTriage:
+    """Integration tests for bot comment triage pass in run_review."""
+
+    @patch("app.review_runner.get_review_bot_triage_config")
+    @patch("app.review_runner._run_bot_comment_triage")
+    @patch("app.review_runner._fetch_bot_inline_comments")
+    @patch("app.review_runner._post_comment_replies")
+    @patch("app.review_runner._fetch_pr_commit_shas", return_value=[])
+    @patch("app.review_runner.fetch_repliable_comments", return_value=[])
+    @patch("app.review_runner.run_gh")
+    @patch("app.review_runner._run_claude_review")
+    @patch("app.review_runner.fetch_pr_context")
+    def test_triage_pass_runs_when_enabled(
+        self, mock_context, mock_claude, mock_gh, mock_repliable, _mock_shas,
+        mock_post, mock_fetch_bot, mock_triage, mock_config,
+        pr_context, review_skill_dir,
+    ):
+        mock_config.return_value = {"enabled": True, "bot_usernames": ["coderabbitai"]}
+        mock_context.return_value = pr_context
+        mock_claude.return_value = (json.dumps(LGTM_REVIEW_JSON), "")
+        mock_fetch_bot.return_value = [
+            {"id": 99, "body": "Bug here", "path": "a.py", "line": 5,
+             "type": "review_comment", "user": "coderabbitai"},
+        ]
+        mock_triage.return_value = [{"comment_id": 99, "reply": "Acknowledged: Will fix."}]
+        mock_post.return_value = [{"comment_id": 99, "action": "acknowledged"}]
+
+        success, summary, _ = run_review(
+            "owner", "repo", "42", "/tmp/project",
+            notify_fn=MagicMock(), skill_dir=review_skill_dir,
+            bot_comments=True,
+        )
+        assert success is True
+        mock_fetch_bot.assert_called_once()
+        mock_triage.assert_called_once()
+
+    @patch("app.review_runner.get_review_bot_triage_config")
+    @patch("app.review_runner._run_bot_comment_triage")
+    @patch("app.review_runner._fetch_bot_inline_comments")
+    @patch("app.review_runner._fetch_pr_commit_shas", return_value=[])
+    @patch("app.review_runner.fetch_repliable_comments", return_value=[])
+    @patch("app.review_runner.run_gh")
+    @patch("app.review_runner._run_claude_review")
+    @patch("app.review_runner.fetch_pr_context")
+    def test_triage_pass_skipped_when_disabled(
+        self, mock_context, mock_claude, mock_gh, mock_repliable, _mock_shas,
+        mock_fetch_bot, mock_triage, mock_config,
+        pr_context, review_skill_dir,
+    ):
+        mock_config.return_value = {"enabled": False, "bot_usernames": []}
+        mock_context.return_value = pr_context
+        mock_claude.return_value = (json.dumps(LGTM_REVIEW_JSON), "")
+
+        success, summary, _ = run_review(
+            "owner", "repo", "42", "/tmp/project",
+            notify_fn=MagicMock(), skill_dir=review_skill_dir,
+            bot_comments=False,
+        )
+        assert success is True
+        mock_fetch_bot.assert_not_called()
+        mock_triage.assert_not_called()
