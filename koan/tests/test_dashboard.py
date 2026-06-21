@@ -56,6 +56,7 @@ def app_client(instance_dir, tmp_path):
          patch.object(dashboard, "SUMMARY_FILE", instance_dir / "memory" / "summary.md"), \
          patch.object(dashboard, "JOURNAL_DIR", instance_dir / "journal"), \
          patch.object(dashboard, "PENDING_FILE", instance_dir / "journal" / "pending.md"), \
+         patch.object(dashboard, "RECURRING_FILE", instance_dir / "recurring.json"), \
          patch.object(dashboard, "KOAN_ROOT", tmp_path):
         dashboard.app.config["TESTING"] = True
         dashboard.app.jinja_loader = FileSystemLoader(str(tpl_dest))
@@ -2185,3 +2186,139 @@ class TestNicknameApi:
             resp = app_client.get("/")
         assert b"Lab42" in resp.data
         assert b"instance-nickname" in resp.data
+
+
+class TestRecurringPage:
+    """Tests for /recurring page and /api/recurring endpoints."""
+
+    def test_recurring_page_renders_empty(self, app_client, instance_dir):
+        resp = app_client.get("/recurring")
+        assert resp.status_code == 200
+        assert b"Recurring Tasks" in resp.data
+        assert b"No recurring tasks" in resp.data
+
+    def test_recurring_page_shows_tasks(self, app_client, instance_dir):
+        (instance_dir / "recurring.json").write_text(json.dumps([
+            {"id": "rec_1", "frequency": "daily", "text": "check emails",
+             "project": None, "created": "2026-01-01T00:00:00",
+             "last_run": None, "enabled": True, "at": "09:00"},
+        ]))
+        resp = app_client.get("/recurring")
+        assert resp.status_code == 200
+        assert b"check emails" in resp.data
+        assert b"daily" in resp.data
+
+    def test_api_recurring_list_empty(self, app_client, instance_dir):
+        resp = app_client.get("/api/recurring")
+        assert resp.status_code == 200
+        assert resp.get_json() == []
+
+    def test_api_recurring_list_returns_tasks(self, app_client, instance_dir):
+        (instance_dir / "recurring.json").write_text(json.dumps([
+            {"id": "rec_1", "frequency": "daily", "text": "task one",
+             "project": None, "created": "2026-01-01T00:00:00",
+             "last_run": None, "enabled": True, "at": None},
+        ]))
+        resp = app_client.get("/api/recurring")
+        data = resp.get_json()
+        assert len(data) == 1
+        assert data[0]["text"] == "task one"
+
+    def test_api_recurring_create_daily(self, app_client, instance_dir):
+        resp = app_client.post("/api/recurring",
+            json={"frequency": "daily", "text": "new task", "at": "14:00"})
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["text"] == "new task"
+        assert data["frequency"] == "daily"
+        assert data["at"] == "14:00"
+        assert data["enabled"] is True
+
+    def test_api_recurring_create_every(self, app_client, instance_dir):
+        resp = app_client.post("/api/recurring",
+            json={"frequency": "every", "text": "poll status", "interval": "30m"})
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["frequency"] == "every"
+        assert data["interval_seconds"] == 1800
+
+    def test_api_recurring_create_with_days(self, app_client, instance_dir):
+        resp = app_client.post("/api/recurring",
+            json={"frequency": "daily", "text": "weekday task", "days": "weekdays"})
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["days"] == "weekdays"
+
+    def test_api_recurring_create_invalid_frequency(self, app_client, instance_dir):
+        resp = app_client.post("/api/recurring",
+            json={"frequency": "biweekly", "text": "nope"})
+        assert resp.status_code == 400
+
+    def test_api_recurring_create_empty_text(self, app_client, instance_dir):
+        resp = app_client.post("/api/recurring",
+            json={"frequency": "daily", "text": ""})
+        assert resp.status_code == 400
+
+    def test_api_recurring_create_every_no_interval(self, app_client, instance_dir):
+        resp = app_client.post("/api/recurring",
+            json={"frequency": "every", "text": "task"})
+        assert resp.status_code == 400
+
+    def test_api_recurring_update(self, app_client, instance_dir):
+        (instance_dir / "recurring.json").write_text(json.dumps([
+            {"id": "rec_1", "frequency": "daily", "text": "old text",
+             "project": None, "created": "2026-01-01T00:00:00",
+             "last_run": None, "enabled": True, "at": None},
+        ]))
+        resp = app_client.patch("/api/recurring/rec_1",
+            json={"text": "updated text", "at": "20:00"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["text"] == "updated text"
+        assert data["at"] == "20:00"
+
+    def test_api_recurring_toggle(self, app_client, instance_dir):
+        (instance_dir / "recurring.json").write_text(json.dumps([
+            {"id": "rec_1", "frequency": "daily", "text": "task",
+             "project": None, "created": "2026-01-01T00:00:00",
+             "last_run": None, "enabled": True, "at": None},
+        ]))
+        resp = app_client.patch("/api/recurring/rec_1", json={"enabled": False})
+        assert resp.status_code == 200
+        assert resp.get_json()["enabled"] is False
+
+    def test_api_recurring_update_not_found(self, app_client, instance_dir):
+        resp = app_client.patch("/api/recurring/nope", json={"text": "x"})
+        assert resp.status_code == 404
+
+    def test_api_recurring_delete(self, app_client, instance_dir):
+        (instance_dir / "recurring.json").write_text(json.dumps([
+            {"id": "rec_1", "frequency": "daily", "text": "task",
+             "project": None, "created": "2026-01-01T00:00:00",
+             "last_run": None, "enabled": True, "at": None},
+        ]))
+        resp = app_client.delete("/api/recurring/rec_1")
+        assert resp.status_code == 200
+        assert resp.get_json()["ok"] is True
+        remaining = json.loads((instance_dir / "recurring.json").read_text())
+        assert len(remaining) == 0
+
+    def test_api_recurring_delete_not_found(self, app_client, instance_dir):
+        resp = app_client.delete("/api/recurring/nope")
+        assert resp.status_code == 404
+
+    def test_api_recurring_run(self, app_client, instance_dir):
+        (instance_dir / "recurring.json").write_text(json.dumps([
+            {"id": "rec_1", "frequency": "daily", "text": "run me",
+             "project": None, "created": "2026-01-01T00:00:00",
+             "last_run": None, "enabled": True, "at": None},
+        ]))
+        resp = app_client.post("/api/recurring/rec_1/run")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert b"run me" in (instance_dir / "missions.md").read_bytes()
+
+    def test_api_recurring_run_not_found(self, app_client, instance_dir):
+        resp = app_client.post("/api/recurring/nope/run")
+        assert resp.status_code == 404
