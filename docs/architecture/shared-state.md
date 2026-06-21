@@ -9,9 +9,10 @@ simple and makes state inspectable by humans and agents.
 
 - `missions.json` - canonical structured mission store (source of truth).
 - `missions.md` - human-readable view of the queue, **generated** from
-  `missions.json`. Never write it directly; mutate via
-  `mission_store.locked_store()` (or `MissionStore.save()`), which regenerates
-  the view atomically.
+  `missions.json`. Code must not write it directly; mutate via
+  `mission_store.locked_store()`, which regenerates the view atomically.
+  Human hand-edits are detected and reconciled back into JSON on the next
+  store load.
 - `outbox.md` - pending outbound messages for the bridge.
 - `config.yaml` - instance behavior and integration configuration.
 - `memory/` - global and per-project memory files.

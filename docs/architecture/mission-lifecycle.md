@@ -3,15 +3,18 @@
 ## Data/view split
 
 `instance/missions.json` is the canonical mission store. `instance/missions.md`
-is a **generated view** — it is regenerated from JSON on every save and must
-never be written directly by code.
+is a **generated view** — it is regenerated from JSON on every save. Code must
+not write `missions.md` directly; all mutations go through the store.
+
+Humans *can* hand-edit `missions.md` (e.g. to reorder or add missions).
+The store detects this via a SHA-256 hash stored in the JSON sidecar: when the
+hash diverges from the last generated view, the store reconciles the edits back
+into the structured records before the next save.
 
 All queue mutations go through `mission_store.locked_store(instance_dir)`, which
 holds a thread+file lock across the full load→mutate→save cycle, then calls
 `MissionStore.save()` to atomically write the JSON and regenerate the Markdown
-view. Human edits to `missions.md` are detected by a sha256 hash stored in the
-JSON sidecar; when the hash diverges the store reconciles the edits back into
-the structured records before the next save.
+view.
 
 `koan/app/missions.py` provides the Markdown parser (`parse_sections()`,
 `extract_project_tag()`) and `canonical_mission_key()` — the single source of
@@ -23,10 +26,14 @@ callers not yet migrated; prefer the store mutators for new code.
 
 Missions are stored in four lifecycle sections. The canonical order is:
 
-- In Progress
 - Pending
+- In Progress
 - Done
 - Failed
+
+Note: the generated `missions.md` view renders In Progress before Pending
+(so the active mission appears at the top). This is controlled by the
+`_VIEW_SECTIONS` list in `mission_store.py`.
 
 French section names are also accepted for compatibility. Missions can include
 project tags such as `[project:name]`.
