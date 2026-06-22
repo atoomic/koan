@@ -1157,8 +1157,15 @@ def _normalize_review_data(data: object) -> object:
         checklist = rs.get("checklist")
         if isinstance(checklist, list):
             for entry in checklist:
-                if isinstance(entry, dict) and "finding_ref" not in entry:
-                    entry["finding_ref"] = ""
+                # Backfill the index-based field only when the entry carries no
+                # cross-reference at all. A legacy string ``finding_ref`` is left
+                # intact so the renderer's fallback path can still honor it.
+                if (
+                    isinstance(entry, dict)
+                    and "finding_refs" not in entry
+                    and "finding_ref" not in entry
+                ):
+                    entry["finding_refs"] = []
         # lgtm is derivable from finding severities when omitted: blocking iff
         # any critical/warning finding is present.
         if "lgtm" not in rs and isinstance(fc, list):
@@ -1314,6 +1321,58 @@ def _parse_line_hint(line_hint: str) -> Tuple[int, int]:
     return start, end
 
 
+_LEGACY_FINDING_REF_RE = re.compile(
+    r"(critical|warning|suggestion)\s*#\s*(\d+)", re.IGNORECASE
+)
+
+
+def _resolve_finding_labels(
+    checklist_item: dict, index_to_label: dict, valid_labels: set,
+) -> list:
+    """Resolve a checklist item's finding cross-references to rendered labels.
+
+    Preferred form is ``finding_refs`` — a list of 0-based indices into
+    ``file_comments``. Each index is mapped to the label the renderer assigned
+    that finding (e.g. ``"warning #2"``). Indices with no rendered finding are
+    silently dropped, so a checklist can never reference a finding number that
+    does not exist.
+
+    Falls back to a legacy ``finding_ref`` string (e.g. ``"warning #1"``) when
+    ``finding_refs`` is absent, keeping only tokens that match a rendered
+    finding. Returns labels in ASCII ``#`` form (the caller escapes ``#`` for
+    display). Order is preserved and duplicates removed.
+    """
+    refs = checklist_item.get("finding_refs")
+    if isinstance(refs, list):
+        labels: list = []
+        seen: set = set()
+        for ref in refs:
+            if isinstance(ref, bool):
+                continue
+            if isinstance(ref, float) and ref == int(ref):
+                ref = int(ref)
+            if not isinstance(ref, int):
+                continue
+            label = index_to_label.get(ref)
+            if label and label not in seen:
+                seen.add(label)
+                labels.append(label)
+        return labels
+
+    legacy = checklist_item.get("finding_ref")
+    if isinstance(legacy, str) and legacy:
+        labels = []
+        seen = set()
+        for sev, num in _LEGACY_FINDING_REF_RE.findall(legacy):
+            label = f"{sev.lower()} #{int(num)}"
+            if label in valid_labels and label not in seen:
+                seen.add(label)
+                labels.append(label)
+        return labels
+
+    return []
+
+
 def _format_review_as_markdown(
     review_data: dict, title: str = "", bot_username: str = "",
     owner: str = "", repo: str = "", head_sha: str = "",
@@ -1371,6 +1430,21 @@ def _format_review_as_markdown(
         sev = c.get("severity", "suggestion")
         by_severity.setdefault(sev, []).append(c)
 
+    # Map each file_comments index to the label the renderer assigns it
+    # (e.g. "warning #2"). Numbering is per-severity, 1-based, in array order —
+    # identical to the section emission below — so checklist cross-references
+    # derived from these labels always match the rendered finding numbers.
+    # Indices for severities that aren't rendered (anything outside the three
+    # known levels) are intentionally omitted, so references to them get dropped.
+    index_to_label: dict = {}
+    _sev_counters: dict = {"critical": 0, "warning": 0, "suggestion": 0}
+    for idx, c in enumerate(comments):
+        sev = c.get("severity", "suggestion")
+        if sev not in _sev_counters:
+            continue
+        _sev_counters[sev] += 1
+        index_to_label[idx] = f"{sev} #{_sev_counters[sev]}"
+
     # Emit severity sections (skip empty ones)
     for sev in ("critical", "warning", "suggestion"):
         items = by_severity.get(sev, [])
@@ -1422,13 +1496,14 @@ def _format_review_as_markdown(
         lines.append("")
         lines.append("### Checklist")
         lines.append("")
+        valid_labels = set(index_to_label.values())
         for ci in checklist:
             mark = "x" if ci["passed"] else " "
-            finding_ref = ci.get("finding_ref", "")
-            if finding_ref:
+            labels = _resolve_finding_labels(ci, index_to_label, valid_labels)
+            if labels:
                 # Replace ASCII # with fullwidth ＃ (U+FF03) to prevent GitHub
                 # from auto-linking cross-references to repository issues/PRs.
-                safe_ref = finding_ref.replace("#", "\uFF03")
+                safe_ref = ", ".join(labels).replace("#", "\uFF03")
                 ref = f" \u2014 {safe_ref}"
             else:
                 ref = ""

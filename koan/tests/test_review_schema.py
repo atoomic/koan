@@ -51,8 +51,8 @@ class TestValidateReviewValid:
                 "lgtm": False,
                 "summary": "Blocking SQL injection issue.",
                 "checklist": [
-                    {"item": "No hardcoded secrets", "passed": True, "finding_ref": ""},
-                    {"item": "Input validation", "passed": False, "finding_ref": "critical #1"},
+                    {"item": "No hardcoded secrets", "passed": True, "finding_refs": []},
+                    {"item": "Input validation", "passed": False, "finding_refs": [0]},
                 ],
             },
         }
@@ -184,7 +184,7 @@ class TestValidateReviewInvalid:
             "file_comments": [],
             "review_summary": {
                 "lgtm": True, "summary": "s",
-                "checklist": [{"item": "x", "passed": "yes", "finding_ref": ""}],
+                "checklist": [{"item": "x", "passed": "yes", "finding_refs": []}],
             },
         }
         valid, errors = validate_review(data)
@@ -196,12 +196,50 @@ class TestValidateReviewInvalid:
             "file_comments": [],
             "review_summary": {
                 "lgtm": True, "summary": "s",
-                "checklist": [{"item": "x", "passed": True}],  # missing finding_ref
+                "checklist": [{"item": "x"}],  # missing required 'passed'
             },
         }
         valid, errors = validate_review(data)
         assert valid is False
-        assert any("finding_ref" in e for e in errors)
+        assert any("passed" in e for e in errors)
+
+    def test_checklist_item_without_finding_refs_is_valid(self):
+        """finding_refs is optional — normalize backfills it, so its absence is valid."""
+        data = {
+            "file_comments": [],
+            "review_summary": {
+                "lgtm": True, "summary": "s",
+                "checklist": [{"item": "x", "passed": True}],
+            },
+        }
+        valid, errors = validate_review(data)
+        assert valid is True, errors
+
+    def test_checklist_finding_refs_accepts_int_list(self):
+        data = {
+            "file_comments": [{
+                "file": "a.py", "line_start": 1, "line_end": 1,
+                "severity": "critical", "title": "t", "comment": "c", "code_snippet": "",
+            }],
+            "review_summary": {
+                "lgtm": False, "summary": "s",
+                "checklist": [{"item": "x", "passed": False, "finding_refs": [0, 1]}],
+            },
+        }
+        valid, errors = validate_review(data)
+        assert valid is True, errors
+
+    def test_checklist_finding_refs_rejects_non_int(self):
+        data = {
+            "file_comments": [],
+            "review_summary": {
+                "lgtm": False, "summary": "s",
+                "checklist": [{"item": "x", "passed": False, "finding_refs": ["critical #1"]}],
+            },
+        }
+        valid, errors = validate_review(data)
+        assert valid is False
+        assert any("finding_refs" in e for e in errors)
 
     def test_float_line_numbers_accepted(self):
         """JSON has no int type — float values like 42.0 should be accepted."""

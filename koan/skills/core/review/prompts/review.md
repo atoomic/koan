@@ -111,12 +111,12 @@ Your ENTIRE response must be a single valid JSON object (no markdown, no code fe
       {
         "item": "No hardcoded secrets",
         "passed": true,
-        "finding_ref": ""
+        "finding_refs": []
       },
       {
         "item": "Input validation at boundaries",
         "passed": false,
-        "finding_ref": "critical #1"
+        "finding_refs": [0]
       }
     ]
   },

@@ -448,7 +448,7 @@ VALID_REVIEW_JSON = {
         "lgtm": False,
         "summary": "Needs validation before merge.",
         "checklist": [
-            {"item": "No hardcoded secrets", "passed": True, "finding_ref": ""},
+            {"item": "No hardcoded secrets", "passed": True, "finding_refs": []},
         ],
     },
 }
@@ -499,7 +499,7 @@ _PR40_REVIEW_OBJ = {
         "lgtm": False,
         "summary": "Solid security-focused PR with two items to address.",
         "checklist": [
-            {"item": "No command injection", "passed": False, "finding_ref": "critical #1"},
+            {"item": "No command injection", "passed": False, "finding_refs": [0]},
         ],
     },
     "comment_replies": [],
@@ -757,13 +757,17 @@ class TestFormatReviewAsMarkdown:
 
     def test_checklist_rendering(self):
         data = {
-            "file_comments": [],
+            "file_comments": [
+                {"file": "a.py", "line_start": 1, "line_end": 1,
+                 "severity": "critical", "title": "Missing validation",
+                 "comment": "x", "code_snippet": ""},
+            ],
             "review_summary": {
                 "lgtm": True,
                 "summary": "Good.",
                 "checklist": [
-                    {"item": "No secrets", "passed": True, "finding_ref": ""},
-                    {"item": "Input validated", "passed": False, "finding_ref": "critical #1"},
+                    {"item": "No secrets", "passed": True, "finding_refs": []},
+                    {"item": "Input validated", "passed": False, "finding_refs": [0]},
                 ],
             },
         }
@@ -776,15 +780,22 @@ class TestFormatReviewAsMarkdown:
     def test_checklist_finding_refs_escape_hash(self):
         """All #N cross-references in checklist use fullwidth ＃ to prevent GitHub auto-linking."""
         data = {
-            "file_comments": [],
+            "file_comments": [
+                {"file": "a.py", "line_start": 1, "line_end": 1,
+                 "severity": "warning", "title": "Return type", "comment": "x", "code_snippet": ""},
+                {"file": "b.py", "line_start": 2, "line_end": 2,
+                 "severity": "warning", "title": "Null check", "comment": "x", "code_snippet": ""},
+                {"file": "c.py", "line_start": 3, "line_end": 3,
+                 "severity": "suggestion", "title": "Dup validation", "comment": "x", "code_snippet": ""},
+            ],
             "review_summary": {
                 "lgtm": False,
                 "summary": "Issues found.",
                 "checklist": [
-                    {"item": "Return type matches interface", "passed": False, "finding_ref": "warning #1"},
-                    {"item": "Null check present", "passed": False, "finding_ref": "warning #2"},
-                    {"item": "No duplicated validation", "passed": False, "finding_ref": "suggestion #1"},
-                    {"item": "No secrets", "passed": True, "finding_ref": ""},
+                    {"item": "Return type matches interface", "passed": False, "finding_refs": [0]},
+                    {"item": "Null check present", "passed": False, "finding_refs": [1]},
+                    {"item": "No duplicated validation", "passed": False, "finding_refs": [2]},
+                    {"item": "No secrets", "passed": True, "finding_refs": []},
                 ],
             },
         }
@@ -798,6 +809,60 @@ class TestFormatReviewAsMarkdown:
             if "\u2014" in line:  # em dash separates the ref
                 ref_part = line.split("\u2014", 1)[1]
                 assert "#" not in ref_part, f"ASCII # found in ref: {line!r}"
+
+    def test_checklist_drops_out_of_range_finding_refs(self):
+        """Regression: a finding_ref index past the real finding count is dropped.
+
+        Mirrors the reported bug where a 4-finding review's checklist cited a
+        non-existent '#5'. Index-based refs that point past file_comments are
+        silently omitted; in-range indices render the renderer-assigned number.
+        """
+        data = {
+            "file_comments": [
+                {"file": f"f{i}.py", "line_start": i + 1, "line_end": i + 1,
+                 "severity": "warning", "title": f"Issue {i}", "comment": "x",
+                 "code_snippet": ""}
+                for i in range(4)
+            ],
+            "review_summary": {
+                "lgtm": False,
+                "summary": "Four findings.",
+                "checklist": [
+                    # In range -> renders as the 4th warning.
+                    {"item": "Aligns with description", "passed": False, "finding_refs": [3]},
+                    # Out of range -> dropped, no dangling reference emitted.
+                    {"item": "Phantom check", "passed": False, "finding_refs": [99]},
+                ],
+            },
+        }
+        md = _format_review_as_markdown(data)
+        # Index 3 is the 4th warning.
+        assert "- [ ] Aligns with description — warning ＃4" in md
+        # Out-of-range index yields no ref suffix and never invents a 5th.
+        assert "- [ ] Phantom check" in md
+        assert "＃5" not in md
+        assert "warning #5" not in md
+
+    def test_checklist_legacy_finding_ref_string_fallback(self):
+        """A legacy string finding_ref is still honored, but only for real findings."""
+        data = {
+            "file_comments": [
+                {"file": "a.py", "line_start": 1, "line_end": 1,
+                 "severity": "critical", "title": "Bug", "comment": "x", "code_snippet": ""},
+            ],
+            "review_summary": {
+                "lgtm": False,
+                "summary": "Issue.",
+                "checklist": [
+                    # Real finding -> kept; phantom 'critical #5' -> dropped.
+                    {"item": "Input validated", "passed": False,
+                     "finding_ref": "critical #1, critical #5"},
+                ],
+            },
+        }
+        md = _format_review_as_markdown(data)
+        assert "- [ ] Input validated — critical ＃1" in md
+        assert "＃5" not in md
 
     def test_code_snippet_in_output(self):
         data = {
