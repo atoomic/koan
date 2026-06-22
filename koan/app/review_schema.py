@@ -100,7 +100,7 @@ REVIEW_SUMMARY_SCHEMA = {
             ),
             "items": {
                 "type": "object",
-                "required": ["item", "passed", "finding_ref"],
+                "required": ["item", "passed"],
                 "properties": {
                     "item": {
                         "type": "string",
@@ -110,11 +110,14 @@ REVIEW_SUMMARY_SCHEMA = {
                         "type": "boolean",
                         "description": "True if the check passed, False if it failed.",
                     },
-                    "finding_ref": {
-                        "type": "string",
+                    "finding_refs": {
+                        "type": "array",
+                        "items": {"type": "integer"},
                         "description": (
-                            "Cross-reference to the related finding "
-                            "(e.g. 'critical #1'). Empty string if passed."
+                            "0-based indices into file_comments for the findings this "
+                            "check relates to. Empty array if the check passed. Do not "
+                            "write finding numbers yourself — Kōan assigns the displayed "
+                            "numbers from these indices."
                         ),
                     },
                 },
@@ -452,11 +455,27 @@ def _validate_checklist_item(item: object, index: int) -> list:
     if not isinstance(item, dict):
         return [f"{prefix}: must be an object"]
 
-    required = {"item": str, "passed": bool, "finding_ref": str}
+    required = {"item": str, "passed": bool}
     for field, expected_type in required.items():
         if field not in item:
             errors.append(f"{prefix}: missing required field '{field}'")
         elif not isinstance(item[field], expected_type):
             errors.append(f"{prefix}.{field}: expected {expected_type.__name__}, got {type(item[field]).__name__}")
+
+    # finding_refs is optional (normalize backfills it). When present it must be a
+    # list of integers (0-based indices into file_comments). Out-of-range values are
+    # not a validation error — the renderer silently drops dangling references.
+    if "finding_refs" in item:
+        refs = item["finding_refs"]
+        if not isinstance(refs, list):
+            errors.append(f"{prefix}.finding_refs: expected list, got {type(refs).__name__}")
+        else:
+            for j, ref in enumerate(refs):
+                # Allow int-like floats (JSON has no int type).
+                if isinstance(ref, bool) or not (
+                    isinstance(ref, int)
+                    or (isinstance(ref, float) and ref == int(ref))
+                ):
+                    errors.append(f"{prefix}.finding_refs[{j}]: expected integer, got {type(ref).__name__}")
 
     return errors
