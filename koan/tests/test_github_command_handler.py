@@ -27,6 +27,7 @@ from app.github_command_handler import (
     _notify_github_question,
     _notify_github_reply,
     _post_help_reply,
+    _fetch_requested_review_prs,
     _save_reply_timestamps,
     _try_assignment_notification,
     _try_nlp_classification,
@@ -42,6 +43,7 @@ from app.github_command_handler import (
     post_error_reply,
     process_single_notification,
     resolve_project_from_notification,
+    scan_requested_review_missions,
     validate_command,
 )
 from app.skills import Skill, SkillCommand, SkillRegistry
@@ -3952,6 +3954,156 @@ class TestTryAssignmentNotification:
         assert review_notification[NOTIFICATION_OUTCOME_KEY] == NOTIFICATION_OUTCOME_HANDLED_NOOP
 
 
+class TestRequestedReviewScan:
+    """Tests for notification-independent requested-review scanning."""
+
+    @pytest.fixture
+    def review_registry(self):
+        reg = SkillRegistry()
+        reg._register(Skill(
+            name="review",
+            scope="core",
+            description="Review PR",
+            github_enabled=True,
+            github_context_aware=True,
+            commands=[SkillCommand(name="review", aliases=["rv"])],
+        ))
+        return reg
+
+    @pytest.fixture
+    def projects_config(self):
+        return {
+            "projects": {
+                "koan": {
+                    "path": "/workspace/koan",
+                    "github_url": "sukria/koan",
+                    "github_urls": ["https://github.com/sukria/koan.git"],
+                },
+            },
+        }
+
+    def _pr(self, sha="sha-aaaa", draft=False):
+        return {
+            "number": 42,
+            "url": "https://github.com/sukria/koan/pull/42",
+            "headRefOid": sha,
+            "isDraft": draft,
+            "reviewRequests": [{"__typename": "User", "login": "koan-bot"}],
+            "title": "Fix issue",
+        }
+
+    def test_queues_review_when_notification_is_missing(
+        self, projects_config, review_registry, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        instance_dir = tmp_path / "instance"
+        instance_dir.mkdir()
+        (instance_dir / "missions.md").write_text(
+            "# Missions\n\n## Pending\n\n## In Progress\n\n## Done\n",
+        )
+
+        with patch("app.github_command_handler._fetch_requested_review_prs",
+                   return_value=[self._pr()]):
+            queued = scan_requested_review_missions(
+                projects_config,
+                {"github": {"nickname": "koan-bot"}},
+                review_registry,
+                str(instance_dir),
+            )
+
+        assert queued == 1
+        content = (instance_dir / "missions.md").read_text()
+        assert "[project:koan] /review https://github.com/sukria/koan/pull/42" in content
+
+    def test_same_head_sha_is_deduped(
+        self, projects_config, review_registry, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        instance_dir = tmp_path / "instance"
+        instance_dir.mkdir()
+        missions_path = instance_dir / "missions.md"
+        missions_path.write_text("# Missions\n\n## Pending\n\n## In Progress\n\n## Done\n")
+
+        with patch("app.github_command_handler._fetch_requested_review_prs",
+                   return_value=[self._pr("sha-same")]):
+            first = scan_requested_review_missions(
+                projects_config,
+                {"github": {"nickname": "koan-bot"}},
+                review_registry,
+                str(instance_dir),
+            )
+            missions_path.write_text(
+                "# Missions\n\n## Pending\n\n## In Progress\n\n"
+                "- [project:koan] /review https://github.com/sukria/koan/pull/42 📬\n"
+                "\n## Done\n",
+            )
+            second = scan_requested_review_missions(
+                projects_config,
+                {"github": {"nickname": "koan-bot"}},
+                review_registry,
+                str(instance_dir),
+            )
+
+        assert first == 1
+        assert second == 0
+        assert missions_path.read_text().count(
+            "/review https://github.com/sukria/koan/pull/42",
+        ) == 1
+
+    def test_new_head_sha_queues_new_review(
+        self, projects_config, review_registry, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+        instance_dir = tmp_path / "instance"
+        instance_dir.mkdir()
+        missions_path = instance_dir / "missions.md"
+        missions_path.write_text("# Missions\n\n## Pending\n\n## In Progress\n\n## Done\n")
+
+        with patch("app.github_command_handler._fetch_requested_review_prs",
+                   return_value=[self._pr("sha-old")]):
+            first = scan_requested_review_missions(
+                projects_config,
+                {"github": {"nickname": "koan-bot"}},
+                review_registry,
+                str(instance_dir),
+            )
+
+        missions_path.write_text(
+            "# Missions\n\n## Pending\n\n## In Progress\n\n## Done\n"
+            "- [project:koan] /review https://github.com/sukria/koan/pull/42 📬\n",
+        )
+
+        with patch("app.github_command_handler._fetch_requested_review_prs",
+                   return_value=[self._pr("sha-new")]):
+            second = scan_requested_review_missions(
+                projects_config,
+                {"github": {"nickname": "koan-bot"}},
+                review_registry,
+                str(instance_dir),
+            )
+
+        assert first == 1
+        assert second == 1
+        assert missions_path.read_text().count(
+            "/review https://github.com/sukria/koan/pull/42",
+        ) == 2
+
+    def test_draft_pr_is_skipped_by_fetch_filter(self):
+        raw = json.dumps([self._pr(draft=True)])
+        with patch("app.github.run_gh", return_value=raw):
+            assert _fetch_requested_review_prs("sukria/koan", "koan-bot") == []
+
+    def test_sso_error_is_recorded(self):
+        from app.github import SSOAuthRequired
+
+        with patch("app.github.run_gh", side_effect=SSOAuthRequired("SAML SSO")), \
+             patch("app.github_notifications._record_sso_failure") as mock_record:
+            result = _fetch_requested_review_prs("sukria/koan", "koan-bot")
+
+        assert result == []
+        mock_record.assert_called_once()
+
+
 class TestIsBotStillRequested:
     """Tests for _is_bot_still_requested — requested_reviewers API check."""
 
@@ -4017,6 +4169,19 @@ class TestFetchSubjectInfo:
         }
         with patch("app.github.api", side_effect=RuntimeError("network")):
             assert _fetch_subject_info(notification) == {}
+
+    def test_sso_error_is_recorded(self):
+        from app.github import SSOAuthRequired
+
+        notification = {
+            "subject": {
+                "url": "https://api.github.com/repos/owner/repo/pulls/1",
+            },
+        }
+        with patch("app.github.api", side_effect=SSOAuthRequired("SAML SSO")), \
+             patch("app.github_notifications._record_sso_failure") as mock_record:
+            assert _fetch_subject_info(notification) == {}
+        mock_record.assert_called_once()
 
     def test_returns_empty_when_no_subject_url(self):
         assert _fetch_subject_info({"subject": {}}) == {}
