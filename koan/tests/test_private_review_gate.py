@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, patch
 from app.private_review_gate import (
     _actionable_findings,
     _budget_preflight,
+    _build_fix_prompt,
     _dedup_precheck,
+    _diffstat_from_diff,
     _maybe_record_clean,
     run_private_review_gate,
 )
@@ -471,3 +473,86 @@ class TestDedupTracker:
             reason = _dedup_precheck(tmp_path, "o", "r", "42", "x", cfg)
         assert reason == ""
         mock_sha.assert_not_called()
+
+
+_SAMPLE_DIFF = (
+    "diff --git a/src/auth.py b/src/auth.py\n"
+    "index abc..def 100644\n"
+    "--- a/src/auth.py\n"
+    "+++ b/src/auth.py\n"
+    "@@ -1,3 +1,3 @@\n"
+    " import os\n"
+    "+import jwt\n"
+    "-import legacy\n"
+    " UNIQUE_CONTEXT_LINE_XYZ\n"
+    "diff --git a/tests/test_auth.py b/tests/test_auth.py\n"
+    "new file mode 100644\n"
+    "--- /dev/null\n"
+    "+++ b/tests/test_auth.py\n"
+    "@@ -0,0 +1,2 @@\n"
+    "+def test_x():\n"
+    "+    assert True\n"
+)
+
+
+class TestDiffstatFromDiff:
+    def test_parses_files_and_churn(self):
+        stat = _diffstat_from_diff(_SAMPLE_DIFF)
+        assert "src/auth.py | +1 -1" in stat
+        assert "tests/test_auth.py | +2 -0" in stat
+        assert "2 file(s) changed" in stat
+        # The +++/--- header lines must not be counted as churn.
+        # Context/hunk bodies must not leak into the stat.
+        assert "UNIQUE_CONTEXT_LINE_XYZ" not in stat
+        assert "import jwt" not in stat
+
+    def test_empty_diff(self):
+        assert _diffstat_from_diff("") == "(no diff available)"
+
+    def test_diff_without_file_headers(self):
+        assert _diffstat_from_diff("just some text\nno headers") == (
+            "(no file changes detected)"
+        )
+
+
+class TestBuildFixPrompt:
+    def _findings(self):
+        return [{
+            "file": "src/auth.py",
+            "line_start": 2,
+            "line_end": 2,
+            "severity": "warning",
+            "title": "Unvalidated token",
+            "comment": "Validate the token before decoding.",
+            "code_snippet": "jwt.decode(token)",
+        }]
+
+    def test_sends_diffstat_not_full_diff(self):
+        context = {
+            "title": "Add auth",
+            "body": "short body",
+            "branch": "koan/add-auth",
+            "base": "main",
+            "diff": _SAMPLE_DIFF,
+        }
+        prompt = _build_fix_prompt(context, self._findings(), "warning")
+
+        # Diffstat (file list) is present; raw diff hunk bodies are not.
+        assert "src/auth.py | +1 -1" in prompt
+        assert "UNIQUE_CONTEXT_LINE_XYZ" not in prompt
+        # Findings content reaches the prompt.
+        assert "Unvalidated token" in prompt
+        assert "jwt.decode(token)" in prompt
+
+    def test_caps_long_body(self):
+        context = {
+            "title": "t",
+            "body": "B" * 2000 + "BODY_TAIL_MARKER",
+            "branch": "koan/x",
+            "base": "main",
+            "diff": _SAMPLE_DIFF,
+        }
+        prompt = _build_fix_prompt(context, self._findings(), "warning")
+
+        assert "BODY_TAIL_MARKER" not in prompt
+        assert "(truncated)" in prompt

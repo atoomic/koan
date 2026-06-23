@@ -35,7 +35,10 @@ run a backend-only challenge loop:
 - filter findings to the configured minimum severity (`warning`/Important by
   default);
 - run a write-capable fix step on the same branch, commit and push fixes with
-  the caller's branch update strategy, then re-review;
+  the caller's branch update strategy, then re-review; the fix step is fed the
+  filtered findings (each with its own code snippet) plus a diffstat — not the
+  full PR diff — to bound token cost across rounds, and the fixer reads live
+  files itself for any deeper context;
 - stop when clean, no fix is produced, a provider/push error occurs,
   `private_review_gate.max_rounds` is reached, or a fix round makes no progress
   (the round's findings are identical to the previous round's — a convergence

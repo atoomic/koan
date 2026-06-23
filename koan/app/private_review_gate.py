@@ -416,19 +416,70 @@ def _fix_findings(
     return False, "no code changes were produced"
 
 
+def _diffstat_from_diff(diff: str) -> str:
+    """Render a compact per-file diffstat from a unified diff string.
+
+    Parses the already-fetched PR diff (no subprocess, no base-ref lookup)
+    into one line per changed file — ``path | +N -M`` — plus a
+    ``K file(s) changed`` footer. This replaces embedding the full diff in the
+    fix prompt: each finding already carries its own ``code_snippet`` and the
+    fixer can read or ``git diff`` any file itself, so only the PR's blast
+    radius is needed here.
+    """
+    if not diff:
+        return "(no diff available)"
+
+    files = []
+    path = ""
+    adds = dels = 0
+
+    def _flush():
+        if path:
+            files.append((path, adds, dels))
+
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            _flush()
+            # "diff --git a/x b/y" -> prefer the b/ (new) path
+            parts = line.split(" b/", 1)
+            path = parts[1] if len(parts) == 2 else line[len("diff --git "):]
+            adds = dels = 0
+        elif line.startswith(("+++", "---")):
+            continue
+        elif line.startswith("+"):
+            adds += 1
+        elif line.startswith("-"):
+            dels += 1
+    _flush()
+
+    if not files:
+        return "(no file changes detected)"
+
+    lines = [f"{p} | +{a} -{d}" for p, a, d in files]
+    lines.append(f"{len(files)} file(s) changed")
+    return "\n".join(lines)
+
+
 def _build_fix_prompt(context: dict, findings: list, min_severity: str) -> str:
     from app.prompt_guard import fence_external_data
+    from app.utils import truncate_text
 
     return load_prompt(
         "implementation-review-fix",
         TITLE=fence_external_data(context.get("title", ""), "PR title"),
-        BODY=fence_external_data(context.get("body", ""), "PR body"),
+        BODY=fence_external_data(
+            truncate_text(context.get("body", ""), 1500), "PR body",
+        ),
         BRANCH=context.get("branch", ""),
         BASE=context.get("base", ""),
-        DIFF=fence_external_data(context.get("diff", ""), "PR diff", scan=False),
+        DIFFSTAT=fence_external_data(
+            _diffstat_from_diff(context.get("diff", "")),
+            "changed files",
+            scan=False,
+        ),
         MIN_SEVERITY=min_severity,
         FINDINGS_JSON=fence_external_data(
-            json.dumps(findings, indent=2),
+            json.dumps(findings, ensure_ascii=False, indent=1),
             "private review findings",
             scan=False,
         ),
