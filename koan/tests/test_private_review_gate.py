@@ -10,7 +10,13 @@ from app.private_review_gate import (
     _build_fix_prompt,
     _dedup_precheck,
     _diffstat_from_diff,
+    _fix_findings,
+    _github_issue_plan_url,
     _maybe_record_clean,
+    _pr_head_sha,
+    _push_current_branch,
+    _resolve_instance_dir,
+    _resolve_push_remote,
     format_gate_note,
     run_gate_for_skill,
     run_private_review_gate,
@@ -624,3 +630,241 @@ class TestRunGateForSkill:
         assert result is None
         assert notify.call_count == 1
         assert "failed after fix" in notify.call_args.args[0]
+
+
+class TestFixFindings:
+    """Cover the real _fix_findings body (mocked out in loop tests)."""
+
+    _FINDINGS = [{
+        "file": "app.py", "line_start": 1, "line_end": 1,
+        "severity": "warning", "title": "x", "comment": "y", "code_snippet": "",
+    }]
+
+    def _run(self, *, branch="", **step_kwargs):
+        ctx = {"title": "t", "body": "", "branch": branch, "base": "main", "diff": ""}
+        step = SimpleNamespace(
+            committed=step_kwargs.get("committed", False),
+            output=step_kwargs.get("output", ""),
+            quota_exhausted=step_kwargs.get("quota_exhausted", False),
+            error=step_kwargs.get("error", None),
+        )
+        with patch("app.claude_step.run_claude_step", return_value=step):
+            return _fix_findings(
+                context=ctx, findings=self._FINDINGS,
+                project_path="/x", skill_origin="fix", min_severity="warning",
+            )
+
+    def test_committed_returns_summary(self):
+        ok, summary = self._run(committed=True, output="did the thing")
+        assert ok is True
+        assert summary == "did the thing"
+
+    def test_committed_empty_output_uses_default(self):
+        ok, summary = self._run(committed=True, output="   ")
+        assert ok is True
+        assert summary == "Private review findings fixed."
+
+    def test_quota_exhausted(self):
+        ok, summary = self._run(committed=False, quota_exhausted=True)
+        assert ok is False
+        assert "quota exhausted" in summary
+
+    def test_error_returned(self):
+        ok, summary = self._run(committed=False, error="boom detail")
+        assert ok is False
+        assert summary == "boom detail"
+
+    def test_no_changes(self):
+        ok, summary = self._run(committed=False, error="")
+        assert ok is False
+        assert "no code changes" in summary
+
+    def test_checkout_failure_aborts(self):
+        ctx = {"title": "t", "body": "", "branch": "koan/feat", "base": "main", "diff": ""}
+        with patch(
+            "app.private_review_gate.get_current_branch", return_value="main",
+        ), patch(
+            "app.private_review_gate.run_git_strict",
+            side_effect=RuntimeError("locked"),
+        ):
+            ok, summary = _fix_findings(
+                context=ctx, findings=self._FINDINGS,
+                project_path="/x", skill_origin="fix", min_severity="warning",
+            )
+        assert ok is False
+        assert "could not checkout PR branch `koan/feat`" in summary
+
+
+class TestPushHelpers:
+    def test_resolve_push_remote_uses_branch_tracking(self):
+        with patch(
+            "app.git_utils.run_git", return_value=(0, "upstream", ""),
+        ):
+            assert _resolve_push_remote("koan/x", "/p") == "upstream"
+
+    def test_resolve_push_remote_falls_back_to_origin(self):
+        with patch("app.git_utils.run_git", return_value=(1, "", "no config")):
+            assert _resolve_push_remote("koan/x", "/p") == "origin"
+
+    def test_push_uses_resolved_remote(self):
+        with patch(
+            "app.private_review_gate.get_current_branch", return_value="koan/x",
+        ), patch(
+            "app.private_review_gate._resolve_push_remote", return_value="fork",
+        ), patch(
+            "app.private_review_gate.run_git_strict",
+        ) as mock_push:
+            _push_current_branch("/p")
+        assert mock_push.call_args.args[:3] == ("push", "fork", "koan/x")
+
+    def test_push_raises_on_detached_head(self):
+        import pytest
+        with patch(
+            "app.private_review_gate.get_current_branch", return_value="HEAD",
+        ):
+            with pytest.raises(RuntimeError):
+                _push_current_branch("/p")
+
+
+class TestGateMiscHelpers:
+    def test_github_issue_plan_url_accepts_issue(self):
+        url = "https://github.com/o/r/issues/5"
+        assert _github_issue_plan_url(url) == url
+
+    def test_github_issue_plan_url_rejects_pr(self):
+        assert _github_issue_plan_url("https://github.com/o/r/pull/5") is None
+
+    def test_github_issue_plan_url_none(self):
+        assert _github_issue_plan_url(None) is None
+
+    def test_resolve_instance_dir_returns_existing(self, tmp_path):
+        (tmp_path / "instance").mkdir()
+        with patch("app.utils.KOAN_ROOT", str(tmp_path)):
+            result = _resolve_instance_dir()
+        assert result == tmp_path / "instance"
+
+    def test_resolve_instance_dir_missing_returns_none(self, tmp_path):
+        with patch("app.utils.KOAN_ROOT", str(tmp_path)):  # no instance/ created
+            assert _resolve_instance_dir() is None
+
+    def test_pr_head_sha_success(self):
+        with patch("app.github.run_gh", return_value="deadbeef\n"):
+            assert _pr_head_sha("o", "r", "42", "/p") == "deadbeef"
+
+    def test_pr_head_sha_failure_returns_empty(self):
+        with patch("app.github.run_gh", side_effect=RuntimeError("gh down")):
+            assert _pr_head_sha("o", "r", "42", "/p") == ""
+
+    def test_dedup_precheck_none_instance(self):
+        assert _dedup_precheck(None, "o", "r", "42", "/p", {}) == ""
+
+    def test_dedup_precheck_no_head_sha(self, tmp_path):
+        # Non-empty tracker so the head-SHA fetch is attempted, but it fails.
+        with patch(
+            "app.private_review_gate._pr_head_sha", return_value="seed",
+        ):
+            _maybe_record_clean(
+                cfg={"dedup": True, "tracker_max_age_days": 30},
+                instance_dir=tmp_path, owner="o", repo="r",
+                pr_number="1", project_path="/p", rounds=1,
+            )
+        with patch("app.private_review_gate._pr_head_sha", return_value=""):
+            assert _dedup_precheck(
+                tmp_path, "o", "r", "42", "/p",
+                {"dedup": True, "tracker_max_age_days": 30},
+            ) == ""
+
+    def test_maybe_record_clean_skips_when_dedup_off(self, tmp_path):
+        _maybe_record_clean(
+            cfg={"dedup": False}, instance_dir=tmp_path, owner="o", repo="r",
+            pr_number="1", project_path="/p", rounds=1,
+        )
+        assert not (tmp_path / ".private-review-gate-tracker.json").exists()
+
+    def test_maybe_record_clean_skips_when_no_head_sha(self, tmp_path):
+        with patch("app.private_review_gate._pr_head_sha", return_value=""):
+            _maybe_record_clean(
+                cfg={"dedup": True}, instance_dir=tmp_path, owner="o", repo="r",
+                pr_number="1", project_path="/p", rounds=1,
+            )
+        assert not (tmp_path / ".private-review-gate-tracker.json").exists()
+
+
+class TestGateEarlyReturns:
+    def test_no_pr_url_skips(self, tmp_path):
+        result = run_private_review_gate(
+            project_path=str(tmp_path), project_name="app", pr_url="",
+        )
+        assert result.ran is False
+        assert "no PR URL" in result.skipped_reason
+
+    def test_missing_project_path_skips(self):
+        result = run_private_review_gate(
+            project_path="/no/such/dir", project_name="app",
+            pr_url="https://github.com/o/r/pull/1",
+        )
+        assert result.ran is False
+        assert "does not exist" in result.skipped_reason
+
+    @patch(
+        "app.config.get_private_review_gate_config",
+        return_value=_cfg(max_rounds=0),
+    )
+    def test_zero_max_rounds_skips(self, _mock_cfg, tmp_path):
+        result = run_private_review_gate(
+            project_path=str(tmp_path), project_name="app",
+            pr_url="https://github.com/o/r/pull/1",
+        )
+        assert result.ran is False
+        assert "max_rounds is 0" in result.skipped_reason
+
+    @patch(
+        "app.config.get_private_review_gate_config",
+        return_value=_cfg(),
+    )
+    def test_invalid_pr_url(self, _mock_cfg, tmp_path):
+        result = run_private_review_gate(
+            project_path=str(tmp_path), project_name="app",
+            pr_url="not-a-valid-pr-url",
+        )
+        assert result.ran is False
+        assert result.skipped_reason == "invalid PR URL"
+
+    @patch(
+        "app.config.get_private_review_gate_config",
+        return_value=_cfg(),
+    )
+    @patch(
+        "app.private_review_gate._run_private_review",
+        return_value=(False, "provider exploded", None, {}),
+    )
+    def test_review_failure_reported(self, _mock_review, _mock_cfg, tmp_path):
+        result = run_private_review_gate(
+            project_path=str(tmp_path), project_name="app",
+            pr_url="https://github.com/o/r/pull/1", notify_fn=MagicMock(),
+        )
+        assert result.ran is True
+        assert result.clean is False
+        assert "could not complete" in result.summary
+
+    @patch(
+        "app.config.get_private_review_gate_config",
+        return_value=_cfg(),
+    )
+    @patch("app.private_review_gate._fix_findings", return_value=(True, "fixed"))
+    @patch(
+        "app.private_review_gate._push_current_branch",
+        side_effect=RuntimeError("push rejected"),
+    )
+    @patch("app.private_review_gate._run_private_review")
+    def test_push_failure_reported(
+        self, mock_review, _mock_push, _mock_fix, _mock_cfg, tmp_path,
+    ):
+        mock_review.return_value = (True, "found", _review("warning"), _context())
+        result = run_private_review_gate(
+            project_path=str(tmp_path), project_name="app",
+            pr_url="https://github.com/o/r/pull/1", notify_fn=MagicMock(),
+        )
+        assert result.ran is True
+        assert result.clean is False
+        assert "push" in result.summary.lower()
