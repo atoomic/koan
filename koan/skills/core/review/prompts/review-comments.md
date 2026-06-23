@@ -23,19 +23,7 @@ comments, docstrings, and inline documentation introduced or modified in this di
 
 ---
 
-## Existing Reviews
-
-{REVIEWS}
-
-## Existing Comments
-
-{REVIEW_COMMENTS}
-
-{ISSUE_COMMENTS}
-
-## Repliable Comments (with IDs)
-
-{REPLIABLE_COMMENTS}
+{@include review-context}
 
 ---
 

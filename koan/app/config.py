@@ -1809,6 +1809,41 @@ def get_review_memory_config() -> dict:
     }
 
 
+def get_review_context_config() -> dict:
+    """Get the /review existing-comment context configuration from config.yaml.
+
+    Controls how `/review` surfaces existing PR comments in its prompt. The
+    bot's own most recent structured review is injected into a dedicated
+    ``{PRIOR_REVIEW}`` prompt slot (head-preserving budget) so re-reviews build
+    on it instead of losing it to the recency-truncated conversation thread.
+
+    Config key: review_context
+      - include_bot_feedback (bool): include bot-authored feedback (the prior
+        review). When absent, falls back to ``rebase_include_bot_feedback``
+        (default True) so existing behavior is preserved.
+      - prior_review_max_chars (int): cap for the prior-review slot, head-kept.
+        Default: 10000.
+
+    Returns:
+        Dict with keys: include_bot_feedback (bool), prior_review_max_chars (int >= 0).
+    """
+    config = _load_config()
+    ctx = config.get("review_context", {}) or {}
+    if not isinstance(ctx, dict):
+        ctx = {}
+
+    if "include_bot_feedback" in ctx:
+        include_bot_feedback = _safe_bool(ctx.get("include_bot_feedback"), True)
+    else:
+        include_bot_feedback = get_rebase_include_bot_feedback()
+
+    max_chars = _safe_int(ctx.get("prior_review_max_chars"), 10000)
+    return {
+        "include_bot_feedback": include_bot_feedback,
+        "prior_review_max_chars": max(0, max_chars),
+    }
+
+
 def get_review_triage_config() -> dict:
     """Get review triage configuration from config.yaml.
 

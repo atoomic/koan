@@ -41,6 +41,7 @@ from app.review_markers import (
     COMMIT_IDS_END,
     extract_between_markers,
     extract_commit_shas,
+    extract_prior_review_body,
     replace_commit_block,
     replace_section,
 )
@@ -548,6 +549,41 @@ def _build_review_session_memory(project_name: str, task_text: str) -> str:
     )
 
 
+def _strip_bot_summary_from_thread(issue_comments: str) -> str:
+    """Remove the bot's own ``koan-summary`` comment from the flattened thread.
+
+    The conversation thread is a string of ``@login: body`` blocks joined by
+    newlines (a single body may span many lines). When the prior structured
+    review is surfaced in its own ``{PRIOR_REVIEW}`` slot, we drop it from the
+    thread so the (recency-truncated) thread budget serves human discussion
+    instead of echoing the bot's own review.
+
+    Best-effort: a body line that itself begins with ``@`` could, worst case,
+    cause one adjacent comment to be trimmed — preferable to echoing the whole
+    review. Returns the input unchanged when no summary marker is present.
+    """
+    if not issue_comments or SUMMARY_TAG not in issue_comments:
+        return issue_comments
+    tag_idx = issue_comments.find(SUMMARY_TAG)
+    start = issue_comments.rfind("\n@", 0, tag_idx)
+    block_start = 0 if start == -1 else start + 1
+    nxt = issue_comments.find("\n@", tag_idx)
+    block_end = len(issue_comments) if nxt == -1 else nxt + 1
+    cleaned = issue_comments[:block_start] + issue_comments[block_end:]
+    return cleaned.strip("\n")
+
+
+def _format_prior_review(prior_review: Optional[str], max_chars: int) -> str:
+    """Render the dedicated prior-review block, head-preserving and budgeted."""
+    text = (prior_review or "").strip()
+    if not text:
+        return "(No prior automated review.)"
+    if max_chars and len(text) > max_chars:
+        from app.utils import truncate_text
+        text = truncate_text(text, max_chars)
+    return text
+
+
 def build_review_prompt(
     context: dict,
     skill_dir: Optional[Path] = None,
@@ -558,6 +594,7 @@ def build_review_prompt(
     project_path: Optional[str] = None,
     triaged_files: Optional[list] = None,
     project_name: str = "",
+    prior_review: Optional[str] = None,
 ) -> str:
     """Build a prompt for Claude to review a PR.
 
@@ -584,6 +621,21 @@ def build_review_prompt(
         prompt_name = "review"
 
     repliable_text = _format_repliable_comments(repliable_comments or [])
+
+    # Dedicated prior-review slot: surface the bot's last structured review as
+    # authoritative context (head-preserving budget) and drop it from the
+    # recency-truncated conversation thread so it no longer competes with — or
+    # is evicted by — human discussion.
+    from app.config import get_review_context_config
+    ctx_cfg = get_review_context_config()
+    if not ctx_cfg["include_bot_feedback"]:
+        prior_review = None
+    issue_comments_text = context.get("issue_comments", "")
+    if prior_review:
+        issue_comments_text = _strip_bot_summary_from_thread(issue_comments_text)
+    prior_review_block = _format_prior_review(
+        prior_review, ctx_cfg["prior_review_max_chars"],
+    )
 
     project_memory = ""
     if project_path:
@@ -642,8 +694,9 @@ def build_review_prompt(
         DIFF=raw_diff,
         REVIEW_COMMENTS=context["review_comments"],
         REVIEWS=context["reviews"],
-        ISSUE_COMMENTS=context["issue_comments"],
+        ISSUE_COMMENTS=issue_comments_text,
         REPLIABLE_COMMENTS=repliable_text,
+        PRIOR_REVIEW=prior_review_block,
         PROJECT_MEMORY=project_memory,
         SKIPPED_FILES=skipped_note,
     )
@@ -2379,12 +2432,18 @@ def run_review(
     # Track review wall-clock time for footer attribution
     _review_start = time.monotonic()
 
-    # Step 2: Build review prompt
+    # Step 2: Build review prompt. Surface the bot's last structured review (if
+    # any) as authoritative prior context so a re-review builds on it.
+    prior_review_text = (
+        extract_prior_review_body(existing_comment.get("body", ""))
+        if existing_comment else None
+    )
     prompt = build_review_prompt(
         context, skill_dir=skill_dir, architecture=architecture,
         comments=comments, repliable_comments=repliable_comments,
         plan_body=plan_body or None, project_path=project_path,
         triaged_files=_triaged_files, project_name=project_name or "",
+        prior_review=prior_review_text,
     )
 
     # Resolve provider/model for footer attribution

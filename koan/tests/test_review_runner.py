@@ -65,6 +65,7 @@ def review_skill_dir(tmp_path):
     (prompts_dir / "review.md").write_text(
         "Review PR: {TITLE}\nAuthor: {AUTHOR}\nBranch: {BRANCH} -> {BASE}\n"
         "Body: {BODY}\n{PROJECT_MEMORY}\n{SKIPPED_FILES}Diff: {DIFF}\n"
+        "Prior: {PRIOR_REVIEW}\n"
         "Reviews: {REVIEWS}\nComments: {REVIEW_COMMENTS}\n"
         "Issue: {ISSUE_COMMENTS}\n"
         "Repliable: {REPLIABLE_COMMENTS}\n"
@@ -178,6 +179,127 @@ class TestBuildReviewPrompt:
         assert "token validation" in task_text  # body
         assert "quota_handler.py" in task_text  # diff signal
         assert "fix-auth" not in task_text     # branch must not be the main signal
+
+
+# ---------------------------------------------------------------------------
+# Dedicated prior-review slot
+# ---------------------------------------------------------------------------
+
+class TestPriorReviewSlot:
+    def _cfg(self, include_bot_feedback=True, prior_review_max_chars=10000):
+        return {
+            "include_bot_feedback": include_bot_feedback,
+            "prior_review_max_chars": prior_review_max_chars,
+        }
+
+    def test_prior_review_embedded(self, pr_context, review_skill_dir):
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                prior_review="FINDING_ALPHA: validate the token",
+            )
+        assert "FINDING_ALPHA: validate the token" in prompt
+        assert "{PRIOR_REVIEW}" not in prompt
+
+    def test_placeholder_when_no_prior_review(self, pr_context, review_skill_dir):
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir, prior_review=None,
+            )
+        assert "(No prior automated review.)" in prompt
+        assert "{PRIOR_REVIEW}" not in prompt
+
+    def test_dedup_strips_bot_summary_from_thread(self, pr_context, review_skill_dir):
+        from app.review_markers import SUMMARY_TAG
+
+        pr_context = dict(pr_context)
+        pr_context["issue_comments"] = (
+            "@human: PLEASE_LOOK at the imports\n"
+            f"@bot: {SUMMARY_TAG}\n## Code Review\n\nBOT_SUMMARY_BODY here\n"
+            "@human2: THANKS_REVIEWER"
+        )
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                prior_review="prior review text",
+            )
+        # Human discussion stays in the thread; the bot's own summary is gone.
+        assert "PLEASE_LOOK" in prompt
+        assert "THANKS_REVIEWER" in prompt
+        assert "BOT_SUMMARY_BODY" not in prompt
+
+    def test_thread_untouched_when_no_prior_review(self, pr_context, review_skill_dir):
+        # Gate path (prior_review=None) must not strip the thread.
+        from app.review_markers import SUMMARY_TAG
+
+        pr_context = dict(pr_context)
+        pr_context["issue_comments"] = f"@bot: {SUMMARY_TAG}\nKEEP_THIS_BODY"
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir, prior_review=None,
+            )
+        assert "KEEP_THIS_BODY" in prompt
+
+    def test_prior_review_head_truncated_over_cap(self, pr_context, review_skill_dir):
+        long_text = "HEAD_KEPT " + ("x" * 200) + " TAIL_DROPPED"
+        with patch(
+            "app.config.get_review_context_config",
+            return_value=self._cfg(prior_review_max_chars=20),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir, prior_review=long_text,
+            )
+        assert "HEAD_KEPT" in prompt
+        assert "TAIL_DROPPED" not in prompt
+        assert "...(truncated)" in prompt
+
+    def test_bot_feedback_disabled_forces_placeholder(self, pr_context, review_skill_dir):
+        with patch(
+            "app.config.get_review_context_config",
+            return_value=self._cfg(include_bot_feedback=False),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                prior_review="SHOULD_NOT_APPEAR",
+            )
+        assert "SHOULD_NOT_APPEAR" not in prompt
+        assert "(No prior automated review.)" in prompt
+
+    def test_partial_resolves_and_interpolates_in_real_template(self, pr_context):
+        """The shared review-context partial resolves in the real review
+        template AND all its variables ({PRIOR_REVIEW}, {REVIEWS}, comment
+        sections) are interpolated — includes are resolved before placeholder
+        substitution."""
+        pr_context = dict(pr_context)
+        pr_context["reviews"] = "@human (CHANGES_REQUESTED): EXISTING_VERDICT"
+        review_dir = (
+            Path(__file__).parent.parent / "skills" / "core" / "review"
+        )
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_dir,
+                prior_review="FINDING_BETA: handle the proxy case",
+            )
+        # Directive resolved and every placeholder in the partial interpolated.
+        assert "{@include" not in prompt
+        assert "{PRIOR_REVIEW}" not in prompt
+        assert "{REVIEWS}" not in prompt
+        assert "{REPLIABLE_COMMENTS}" not in prompt
+        # The full review-context block is present.
+        assert "Prior Automated Review (authoritative)" in prompt
+        assert "FINDING_BETA: handle the proxy case" in prompt
+        assert "## Existing Reviews" in prompt
+        assert "EXISTING_VERDICT" in prompt
 
 
 # ---------------------------------------------------------------------------

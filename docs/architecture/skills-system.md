@@ -50,6 +50,15 @@ memory as `/review`: filtered learnings plus human-curated context/priorities
 enabled. The owning skill threads its known `project_name` through so memory is
 scoped to the right project rather than guessed from the directory name.
 
+On a re-review, `/review` reconstructs the bot's previous structured review from
+its posted `koan-summary` comment (`review_markers.extract_prior_review_body`)
+and renders it in a dedicated `{PRIOR_REVIEW}` prompt slot with its own
+head-preserving budget (`review_context.prior_review_max_chars`), separate from
+the recency-truncated conversation thread. The same prior review is stripped out
+of `{ISSUE_COMMENTS}` so it neither echoes nor crowds out human feedback. The
+private gate stays stateless (no prior-review lookup) so its verdict is
+independent.
+
 The gate must not post GitHub review comments, issue comments, review verdicts,
 or PR-close decisions. Its configuration lives under
 `private_review_gate` in `config.yaml`, with per-project overrides in

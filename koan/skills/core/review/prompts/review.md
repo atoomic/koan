@@ -22,19 +22,7 @@ actionable, constructive feedback that helps the author improve the code.
 
 ---
 
-## Existing Reviews
-
-{REVIEWS}
-
-## Existing Comments
-
-{REVIEW_COMMENTS}
-
-{ISSUE_COMMENTS}
-
-## Repliable Comments (with IDs)
-
-{REPLIABLE_COMMENTS}
+{@include review-context}
 
 ---
 

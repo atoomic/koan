@@ -1463,6 +1463,53 @@ class TestReviewMemoryConfig:
         assert result["max_entries"] == 0
 
 
+class TestReviewContextConfig:
+    def test_defaults_fall_back_to_rebase_flag(self):
+        from app.config import get_review_context_config
+
+        # No review_context key and no rebase flag -> rebase default (True).
+        with _mock_config({}):
+            result = get_review_context_config()
+
+        assert result == {"include_bot_feedback": True, "prior_review_max_chars": 10000}
+
+    def test_include_bot_feedback_inherits_rebase_flag(self):
+        from app.config import get_review_context_config
+
+        with _mock_config({"rebase_include_bot_feedback": False}):
+            result = get_review_context_config()
+
+        assert result["include_bot_feedback"] is False
+
+    def test_explicit_review_context_overrides_rebase_flag(self):
+        from app.config import get_review_context_config
+
+        with _mock_config({
+            "rebase_include_bot_feedback": False,
+            "review_context": {"include_bot_feedback": True},
+        }):
+            result = get_review_context_config()
+
+        assert result["include_bot_feedback"] is True
+
+    def test_custom_and_clamped_max_chars(self):
+        from app.config import get_review_context_config
+
+        with _mock_config({"review_context": {"prior_review_max_chars": "500"}}):
+            assert get_review_context_config()["prior_review_max_chars"] == 500
+
+        with _mock_config({"review_context": {"prior_review_max_chars": -10}}):
+            assert get_review_context_config()["prior_review_max_chars"] == 0
+
+    def test_non_dict_review_context_safe_defaults(self):
+        from app.config import get_review_context_config
+
+        with _mock_config({"review_context": "garbage"}):
+            result = get_review_context_config()
+
+        assert result == {"include_bot_feedback": True, "prior_review_max_chars": 10000}
+
+
 # --- backward compatibility ---
 
 

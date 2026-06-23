@@ -829,6 +829,16 @@ auto_update:
 #   enabled: false          # Master switch (default: false)
 #   max_entries: 8          # Max recent memory entries to include (default: 8)
 
+# Review context — how /review surfaces existing PR comments. The bot's own
+# most recent structured review is injected into a dedicated, head-preserving
+# prompt slot (so a re-review builds on it instead of losing it to the
+# recency-truncated conversation thread) and is removed from the thread to
+# avoid echoing itself and starving human feedback.
+# review_context:
+#   include_bot_feedback: true    # Include the prior bot review. Default:
+#                                 # falls back to rebase_include_bot_feedback (true)
+#   prior_review_max_chars: 10000 # Cap for the prior-review slot (head-kept)
+
 # Review bot comment triage — triage inline comments from code-review bots
 # (CodeRabbit, GitHub Copilot Review, Sourcery) and post replies to actionable
 # findings. Off by default; enable globally here or per-review with --bot-comments.
