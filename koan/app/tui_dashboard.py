@@ -858,7 +858,10 @@ class KoanDashboard(App):
         # would freeze the whole UI until the next 2s tick. The Static-backed
         # panels update their widget only on the final line of their renderer,
         # so an exception mid-render leaves the last good content in place —
-        # the cached fallback is automatic. Logs are transient and simply skip.
+        # the cached fallback is automatic. The logs panel is the intentional
+        # exception: it clears its widget before writing, so a mid-render
+        # failure blanks it rather than caching last-good content; it self-heals
+        # on the next tick.
         self._safe_render("status", self._render_status)
         self._safe_render("logs", self._render_logs)
         self._safe_render("usage", self._render_usage)
@@ -869,6 +872,10 @@ class KoanDashboard(App):
         try:
             render()
         except Exception as exc:  # noqa: BLE001 — one panel must never sink the refresh
+            # Route through the module logger so persistent renderer bugs surface
+            # in normal logs, not just Textual's dev console. self.log keeps the
+            # dev-console trace consistent with the rest of this class.
+            _log.warning("%s render failed: %s", name, exc)
             self.log(f"{name} render failed: {exc}")
 
     def _update_subtitle(self) -> None:
