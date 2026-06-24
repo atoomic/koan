@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -325,6 +326,10 @@ def run_claude(
     from app.security_audit import SUBPROCESS_EXEC, _redact_list, log_event
 
     try:
+        # parent_death_signal: this helper runs inside skill subprocesses
+        # (rebase/recreate/pr_review). start_new_session isolates the provider
+        # into its own group; PR_SET_PDEATHSIG ensures run.py's teardown of the
+        # skill subprocess still reaps it instead of orphaning it (Linux-only).
         proc, cleanup = popen_cli(
             cmd,
             stdout=subprocess.PIPE,
@@ -333,6 +338,7 @@ def run_claude(
             errors="replace",
             cwd=cwd,
             start_new_session=True,
+            parent_death_signal=signal.SIGKILL,
         )
     except Exception as e:
         log_event(SUBPROCESS_EXEC, details={

@@ -902,6 +902,35 @@ def get_rebase_ci_max_duration() -> int:
     return _safe_int(config.get("rebase_ci_max_duration", fallback), fallback)
 
 
+def get_review_idle_timeout() -> int:
+    """Get inactivity timeout for the /review Claude step.
+
+    If no CLI/tool output appears for this long, the streaming review is
+    considered stalled and is aborted — instead of bounding total runtime,
+    which would kill a large review that is actively streaming.
+
+    Config key: review_idle_timeout.
+    Fallback: first_output_timeout.
+    """
+    config = _load_config()
+    fallback = get_first_output_timeout()
+    return _safe_int(config.get("review_idle_timeout", fallback), fallback)
+
+
+def get_review_max_duration() -> int:
+    """Get hard wall-clock cap for the /review Claude step.
+
+    Allows long active reviews to continue while still enforcing an upper
+    bound on total runtime.
+
+    Config key: review_max_duration.
+    Fallback: skill_timeout.
+    """
+    config = _load_config()
+    fallback = get_skill_timeout()
+    return _safe_int(config.get("review_max_duration", fallback), fallback)
+
+
 def get_rebase_include_bot_feedback() -> bool:
     """Whether /rebase review feedback should include bot-authored comments.
 

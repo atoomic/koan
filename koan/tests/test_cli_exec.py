@@ -1,6 +1,7 @@
 """Tests for app.cli_exec — secure prompt passing via temp files."""
 
 import os
+import signal
 import subprocess
 from unittest.mock import patch, MagicMock
 
@@ -394,6 +395,42 @@ class TestPopenCli:
         call_args = mock_popen.call_args
         assert call_args[1].get("stdin", subprocess.DEVNULL) == subprocess.DEVNULL
         cleanup()  # should not raise
+
+    @patch("app.cli_exec.subprocess.Popen")
+    def test_parent_death_signal_sets_preexec_on_linux(self, mock_popen):
+        """On Linux, parent_death_signal wires a preexec_fn (PDEATHSIG)."""
+        mock_popen.return_value = MagicMock()
+        with patch("app.subprocess_runner.sys.platform", "linux"), \
+             patch("app.subprocess_runner.ctypes.CDLL", return_value=MagicMock()):
+            proc, cleanup = popen_cli(
+                ["git", "status"],
+                parent_death_signal=signal.SIGKILL,
+                start_new_session=True,
+            )
+        kwargs = mock_popen.call_args[1]
+        assert callable(kwargs.get("preexec_fn"))
+        # Isolation must still be forwarded alongside the death signal.
+        assert kwargs.get("start_new_session") is True
+        cleanup()
+
+    @patch("app.cli_exec.subprocess.Popen")
+    def test_parent_death_signal_is_noop_on_non_linux(self, mock_popen):
+        """On macOS there is no prctl — no preexec_fn is set."""
+        mock_popen.return_value = MagicMock()
+        with patch("app.subprocess_runner.sys.platform", "darwin"):
+            proc, cleanup = popen_cli(
+                ["git", "status"], parent_death_signal=signal.SIGKILL,
+            )
+        assert mock_popen.call_args[1].get("preexec_fn") is None
+        cleanup()
+
+    @patch("app.cli_exec.subprocess.Popen")
+    def test_no_parent_death_signal_sets_no_preexec(self, mock_popen):
+        """Default (None) leaves preexec_fn unset for all existing callers."""
+        mock_popen.return_value = MagicMock()
+        proc, cleanup = popen_cli(["git", "status"])
+        assert mock_popen.call_args[1].get("preexec_fn") is None
+        cleanup()
 
     @patch("app.cli_exec.subprocess.Popen")
     def test_stdin_is_file_object(self, mock_popen):

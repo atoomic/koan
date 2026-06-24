@@ -808,6 +808,42 @@ class TestRunCommandStreaming:
         proc.wait.return_value = None
         return proc
 
+    def _make_hanging_proc_after_lines(self, stdout_lines, stderr="", returncode=-9):
+        import threading
+
+        stopped = threading.Event()
+
+        class BlockingStdout:
+            def __iter__(self):
+                for line in stdout_lines:
+                    yield line
+                while not stopped.wait(0.05):
+                    pass
+
+            def close(self):
+                stopped.set()
+
+        proc = MagicMock()
+        proc.pid = 999999999
+        proc.stdout = BlockingStdout()
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = stderr
+        proc.returncode = None
+        proc.poll.side_effect = lambda: proc.returncode
+
+        def _kill():
+            proc.returncode = returncode
+            stopped.set()
+
+        def _wait(timeout=None):
+            stopped.wait(timeout or 0)
+            proc.returncode = returncode if proc.returncode is None else proc.returncode
+            return proc.returncode
+
+        proc.kill.side_effect = _kill
+        proc.wait.side_effect = _wait
+        return proc
+
     def test_happy_path(self, capsys):
         from app.provider import run_command_streaming
         proc = self._make_proc(["line1\n", "line2\n"])
@@ -832,6 +868,96 @@ class TestRunCommandStreaming:
             run_command_streaming("hi", "/tmp", [])
         call_kwargs = mock_popen.call_args[1]
         assert call_kwargs.get("errors") == "replace"
+
+    def test_popen_isolates_child_process_group(self):
+        """The child must be its own process-group leader.
+
+        The terminal-event grace and hard-timeout paths terminate a stuck
+        provider via force_kill_process_group(), which SIGKILLs the child's
+        whole process group. If the child shared our group, that kill would
+        also take down the skill subprocess running run_command_streaming
+        before it could return. Isolation (start_new_session=True) makes the
+        group-kill hit only the provider tree.
+        """
+        from app.provider import run_command_streaming
+        proc = self._make_proc(["ok\n"])
+        cleanup = MagicMock()
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", return_value=(proc, cleanup)) as mock_popen, \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s):
+            run_command_streaming("hi", "/tmp", [])
+        call_kwargs = mock_popen.call_args[1]
+        assert call_kwargs.get("start_new_session") is True
+
+    def test_popen_sets_parent_death_signal(self):
+        """The child must be armed with a parent-death signal.
+
+        The provider runs inside a skill subprocess that run.py tears down
+        with a process-group kill aimed at the skill's group. Because the
+        provider is isolated into its own group (start_new_session), that kill
+        misses it — orphaning the provider on /abort or a watchdog. SIGKILL via
+        PR_SET_PDEATHSIG (Linux) makes the kernel reap the provider when the
+        skill subprocess dies. Assert the contract is wired at popen_cli.
+        """
+        import signal
+        from app.provider import run_command_streaming
+        proc = self._make_proc(["ok\n"])
+        cleanup = MagicMock()
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", return_value=(proc, cleanup)) as mock_popen, \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s):
+            run_command_streaming("hi", "/tmp", [])
+        call_kwargs = mock_popen.call_args[1]
+        assert call_kwargs.get("parent_death_signal") == signal.SIGKILL
+
+    def test_idle_timeout_kills_silent_stream(self):
+        """A stream that goes silent past idle_timeout is killed, with a
+        message distinct from the max-duration timeout."""
+        from app.provider import run_command_streaming
+        proc = self._make_hanging_proc_after_lines(["plain output line\n"])
+        cleanup = MagicMock()
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", return_value=(proc, cleanup)), \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s):
+            with pytest.raises(RuntimeError, match="produced no output"):
+                run_command_streaming("hi", "/tmp", [], timeout=30, idle_timeout=0.05)
+        assert proc.kill.called
+
+    def test_active_stream_resets_idle_and_completes(self):
+        """Lines arriving faster than idle_timeout keep resetting it, so an
+        actively-streaming run whose total time exceeds idle_timeout still
+        reaches EOF and returns — it is NOT killed for taking long."""
+        import time as _time
+        from app.provider import run_command_streaming
+
+        class ActiveStdout:
+            def __iter__(self):
+                for i in range(10):
+                    _time.sleep(0.02)  # 0.02 gap << 0.1 idle; 10*0.02=0.2 > 0.1
+                    yield f"line{i}\n"
+
+            def close(self):
+                pass
+
+        proc = MagicMock()
+        proc.pid = 999999999
+        proc.stdout = ActiveStdout()
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = ""
+        proc.returncode = 0
+        proc.poll.side_effect = lambda: proc.returncode
+        proc.wait.return_value = 0
+        cleanup = MagicMock()
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", return_value=(proc, cleanup)), \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s):
+            out = run_command_streaming("hi", "/tmp", [], timeout=30, idle_timeout=0.1)
+        assert "line9" in out
+        assert not proc.kill.called
 
     def test_failure_raises(self):
         from app.provider import run_command_streaming
@@ -1273,6 +1399,76 @@ class TestRunCommandStreaming:
             out = run_command_streaming("hi", "/tmp", [])
 
         assert out == "event fallback answer"
+
+    def test_codex_task_complete_hang_returns_final_message(self, capsys):
+        """Codex may emit task_complete and keep the process alive.
+
+        Once the logical task is complete and final text is captured, Koan
+        should stop waiting for EOF, terminate the stuck process, and let the
+        owning skill continue.
+        """
+        import json
+        from app.provider import run_command_streaming
+
+        events = [
+            json.dumps({
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": "done from final answer",
+                    "phase": "final_answer",
+                },
+            }) + "\n",
+            json.dumps({
+                "type": "event_msg",
+                "payload": {"type": "task_complete"},
+            }) + "\n",
+        ]
+        proc = self._make_hanging_proc_after_lines(events)
+        cleanup = MagicMock()
+
+        with patch("app.provider._TERMINAL_STREAM_GRACE_SECONDS", 0.05), \
+             patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.get_provider_name", return_value="codex"), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", return_value=(proc, cleanup)), \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s):
+            out = run_command_streaming("hi", "/tmp", [], timeout=10)
+
+        assert out == "done from final answer"
+        assert proc.kill.called
+        assert "terminal event but did not exit" in capsys.readouterr().err
+
+    def test_codex_task_complete_hang_with_error_still_fails(self):
+        import json
+        from app.provider import run_command_streaming
+
+        events = [
+            json.dumps({"type": "error", "message": "provider exploded"}) + "\n",
+            json.dumps({
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": "misleading final",
+                    "phase": "final_answer",
+                },
+            }) + "\n",
+            json.dumps({
+                "type": "event_msg",
+                "payload": {"type": "task_complete"},
+            }) + "\n",
+        ]
+        proc = self._make_hanging_proc_after_lines(events)
+        cleanup = MagicMock()
+
+        with patch("app.provider._TERMINAL_STREAM_GRACE_SECONDS", 0.05), \
+             patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.get_provider_name", return_value="codex"), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", return_value=(proc, cleanup)), \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s):
+            with pytest.raises(RuntimeError, match="provider exploded"):
+                run_command_streaming("hi", "/tmp", [], timeout=10)
 
 
 class TestSummarizeStreamEvent:

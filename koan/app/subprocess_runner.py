@@ -5,12 +5,17 @@ spread across ``run.py``, ``cli_exec.py``, and ``provider/__init__.py``.
 """
 
 import contextlib
+import ctypes
 import os
 import signal
 import subprocess
 import sys
 import threading
 from typing import Callable, Optional
+
+# Linux prctl(2) option that asks the kernel to deliver a signal to the
+# calling process when its parent dies. See ``pdeathsig_preexec``.
+_PR_SET_PDEATHSIG = 1
 
 
 def kill_process_group(
@@ -59,6 +64,43 @@ def force_kill_process_group(proc: Optional[subprocess.Popen]) -> None:
     except (OSError, ProcessLookupError):
         with contextlib.suppress(OSError, ProcessLookupError):
             proc.kill()
+
+
+def pdeathsig_preexec(sig: int = signal.SIGKILL) -> Optional[Callable[[], None]]:
+    """Return a ``preexec_fn`` that arms a parent-death signal, or ``None``.
+
+    A child started in its own process group (``start_new_session=True``) is
+    invisible to a process-group kill aimed at *its parent's* group. That is
+    exactly what happens when a provider CLI runs inside a skill subprocess:
+    ``run.py`` tears the skill subprocess down with ``kill_process_group()``
+    (``os.killpg(getpgid(skill_proc.pid), …)``) on abort/watchdog, but an
+    isolated provider child sits in a different group and survives as an
+    orphan. ``prctl(PR_SET_PDEATHSIG, sig)`` closes that gap: the kernel
+    delivers *sig* to the child the moment its parent dies — for any reason,
+    including a hard SIGKILL of the parent where no userspace handler runs.
+
+    Linux-only. On any other platform (macOS dev) there is no ``prctl`` and we
+    return ``None`` (the caller falls back to the existing SIGPIPE-on-next-
+    write behavior). The libc handle and constants are resolved here, in the
+    parent, so the returned closure — which runs post-``fork`` / pre-``exec``
+    where only minimal work is safe — only performs the syscall and a
+    ``getppid`` re-check.
+    """
+    if sys.platform != "linux":
+        return None
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    pr_set_pdeathsig = _PR_SET_PDEATHSIG
+
+    def _arm_parent_death_signal() -> None:
+        libc.prctl(pr_set_pdeathsig, sig, 0, 0, 0)
+        # If the parent already exited in the window between fork() and this
+        # call, PDEATHSIG never fires. Bail so Popen aborts the child instead
+        # of leaking an unsupervised process (getppid()==1 → reparented).
+        if os.getppid() == 1:
+            raise RuntimeError("parent exited before PR_SET_PDEATHSIG was armed")
+
+    return _arm_parent_death_signal
 
 
 class ProcessWatchdog:

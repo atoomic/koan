@@ -1829,19 +1829,27 @@ class TestRunClaudeReview:
         assert "Exit code 1" in captured.err
 
     @patch("app.cli_provider.run_command_streaming")
+    @patch("app.config.get_review_idle_timeout", return_value=600)
+    @patch("app.config.get_review_max_duration", return_value=7200)
     @patch("app.config.get_model_config", return_value={"review_mode": "review-model", "mission": "mission-model"})
     @patch("app.config.get_skill_max_turns", return_value=200)
-    def test_default_timeout_is_600(
-        self, mock_max_turns, mock_models, mock_run,
+    def test_default_uses_idle_and_max_duration(
+        self, mock_max_turns, mock_models, mock_max_dur, mock_idle, mock_run,
     ):
-        """Default timeout increased from 300 to 600 for large PRs."""
+        """Review forwards a generous max-duration plus an idle deadline.
+
+        The old behavior passed timeout=600 as a *total* wall-clock cap, which
+        killed large reviews that streamed past 10 minutes. The fix decouples
+        the two: timeout becomes max-duration (get_review_max_duration), and a
+        reset-on-line idle deadline (get_review_idle_timeout) bounds silence.
+        """
         from app.review_runner import _run_claude_review
 
         mock_run.return_value = "ok"
         _run_claude_review("prompt", "/tmp/project")
-        # Verify run_command_streaming was called with timeout=600
         _, kwargs = mock_run.call_args
-        assert kwargs.get("timeout") == 600
+        assert kwargs.get("timeout") == 7200
+        assert kwargs.get("idle_timeout") == 600
 
     @patch("app.cli_provider.run_command_streaming")
     @patch("app.config.get_model_config")

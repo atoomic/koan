@@ -13,6 +13,7 @@ from app.subprocess_runner import (
     ProcessWatchdog,
     force_kill_process_group,
     kill_process_group,
+    pdeathsig_preexec,
 )
 
 
@@ -222,3 +223,34 @@ class TestLivenessWatchdog:
             lw.cancel()
 
         assert lw.fired is True
+
+
+# ── pdeathsig_preexec ───────────────────────────────────────────────────
+
+class TestPdeathsigPreexec:
+    def test_non_linux_returns_none(self):
+        """No prctl on macOS/Windows — caller falls back to SIGPIPE behavior."""
+        with patch("app.subprocess_runner.sys.platform", "darwin"):
+            assert pdeathsig_preexec(signal.SIGKILL) is None
+
+    def test_linux_closure_arms_pdeathsig(self):
+        """On Linux the closure calls prctl(PR_SET_PDEATHSIG, sig, 0, 0, 0)."""
+        fake_libc = MagicMock()
+        with patch("app.subprocess_runner.sys.platform", "linux"), \
+             patch("app.subprocess_runner.ctypes.CDLL", return_value=fake_libc), \
+             patch("app.subprocess_runner.os.getppid", return_value=4321):
+            preexec = pdeathsig_preexec(signal.SIGKILL)
+            assert preexec is not None
+            preexec()
+        # PR_SET_PDEATHSIG == 1
+        fake_libc.prctl.assert_called_once_with(1, signal.SIGKILL, 0, 0, 0)
+
+    def test_linux_closure_bails_if_parent_already_dead(self):
+        """getppid()==1 means the parent died in the fork window — abort."""
+        fake_libc = MagicMock()
+        with patch("app.subprocess_runner.sys.platform", "linux"), \
+             patch("app.subprocess_runner.ctypes.CDLL", return_value=fake_libc), \
+             patch("app.subprocess_runner.os.getppid", return_value=1):
+            preexec = pdeathsig_preexec(signal.SIGKILL)
+            with pytest.raises(RuntimeError, match="parent exited"):
+                preexec()

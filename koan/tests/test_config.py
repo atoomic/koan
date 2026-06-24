@@ -924,6 +924,34 @@ class TestGetRebaseReviewMaxDuration:
             assert get_rebase_review_max_duration() == 10800
 
 
+class TestGetReviewIdleTimeout:
+    def test_defaults_to_first_output_timeout(self):
+        from app.config import get_review_idle_timeout
+
+        with _mock_config({"first_output_timeout": 600}):
+            assert get_review_idle_timeout() == 600
+
+    def test_uses_override(self):
+        from app.config import get_review_idle_timeout
+
+        with _mock_config({"first_output_timeout": 600, "review_idle_timeout": 900}):
+            assert get_review_idle_timeout() == 900
+
+
+class TestGetReviewMaxDuration:
+    def test_defaults_to_skill_timeout(self):
+        from app.config import get_review_max_duration
+
+        with _mock_config({"skill_timeout": 7200}):
+            assert get_review_max_duration() == 7200
+
+    def test_uses_override(self):
+        from app.config import get_review_max_duration
+
+        with _mock_config({"skill_timeout": 7200, "review_max_duration": 10800}):
+            assert get_review_max_duration() == 10800
+
+
 class TestGetRebaseCiIdleTimeout:
     def test_defaults_to_rebase_first_output_timeout(self):
         from app.config import get_rebase_ci_idle_timeout

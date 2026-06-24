@@ -23,12 +23,16 @@ Package structure:
 import contextlib
 import json
 import os
+import queue
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Re-export base class and constants for convenience
 from app.provider.base import (  # noqa: F401
@@ -617,6 +621,16 @@ def _extract_assistant_text_chunks(event: Dict[str, Any]) -> List[str]:
     caller instead of an empty string.
     """
     chunks: List[str] = []
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        message = payload.get("message")
+        if isinstance(message, str) and payload.get("type") in {
+            "agent_message",
+            "assistant_message",
+            "message",
+        }:
+            chunks.append(message)
+
     if event.get("type") == "assistant":
         msg = event.get("message") or {}
         blocks = msg.get("content") or []
@@ -684,6 +698,16 @@ def _extract_result_text(event: Dict[str, Any]) -> Optional[str]:
                 "task_complete",
             }
         ):
+            payload = event.get("payload")
+            if not (
+                isinstance(payload, dict)
+                and payload.get("type") in {"task_complete", "task.completed"}
+            ):
+                return None
+            for key in ("last_agent_message", "output_text", "message"):
+                result = payload.get(key)
+                if isinstance(result, str) and result:
+                    return result
             return None
         for key in ("output_text", "last_agent_message"):
             result = event.get(key)
@@ -705,6 +729,13 @@ _STREAM_JSON_MAX_TURNS_SUBTYPES = frozenset({
     "max_turns",
 })
 
+_TERMINAL_STREAM_EVENT_TYPES = frozenset({
+    "task_complete",
+})
+
+_TERMINAL_STREAM_GRACE_SECONDS = 5.0
+_STREAM_POLL_SECONDS = 0.2
+
 
 def _is_stream_json_max_turns(event: Dict[str, Any]) -> bool:
     """Detect the stream-json equivalent of the legacy 'Reached max turns' line."""
@@ -712,6 +743,109 @@ def _is_stream_json_max_turns(event: Dict[str, Any]) -> bool:
         return False
     subtype = str(event.get("subtype", "") or "").lower()
     return subtype in _STREAM_JSON_MAX_TURNS_SUBTYPES
+
+
+def _is_terminal_stream_event(event: Dict[str, Any]) -> bool:
+    """Return True when a JSONL event means the provider task is complete.
+
+    Codex can emit ``task_complete`` and then keep the process alive. Once
+    Koan has captured a terminal event and final text, EOF is no longer the
+    only safe completion signal.
+    """
+    if str(event.get("type") or "") in _TERMINAL_STREAM_EVENT_TYPES:
+        return True
+    payload = event.get("payload")
+    return (
+        isinstance(payload, dict)
+        and str(payload.get("type") or "") in _TERMINAL_STREAM_EVENT_TYPES
+    )
+
+
+def _consume_stdout_with_deadline(
+    proc: subprocess.Popen,
+    *,
+    timeout: float,
+    on_line: Callable[[str], bool],
+    idle_timeout: Optional[float] = None,
+    terminal_grace: float = _TERMINAL_STREAM_GRACE_SECONDS,
+) -> Tuple[bool, bool, bool]:
+    """Consume stdout without blocking forever after terminal completion.
+
+    The reader thread owns the blocking pipe read. The caller can still enforce
+    deadlines from this thread, then kill the process group so the reader
+    unblocks. ``on_line`` returns True when the line represented a terminal
+    provider event.
+
+    Two independent deadlines bound the run:
+
+    * ``timeout`` — hard wall-clock cap on *total* runtime (max-duration).
+    * ``idle_timeout`` — inactivity cap that resets on every line received, so
+      an actively-streaming session is never killed for taking a long time;
+      only genuine silence trips it. ``None``/``0`` disables it.
+
+    Returns ``(killed_after_terminal, timed_out, idle_timed_out)``.
+    """
+    from app.subprocess_runner import force_kill_process_group
+
+    output: "queue.Queue[Optional[str]]" = queue.Queue()
+
+    def _reader() -> None:
+        try:
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    output.put(line)
+        finally:
+            output.put(None)
+
+    thread = threading.Thread(target=_reader, daemon=True)
+    thread.start()
+
+    start = time.monotonic()
+    last_activity = start
+    terminal_deadline: Optional[float] = None
+    killed_after_terminal = False
+    timed_out = False
+    idle_timed_out = False
+
+    while True:
+        now = time.monotonic()
+        if terminal_deadline is not None and now >= terminal_deadline:
+            if proc.poll() is None:
+                force_kill_process_group(proc)
+                killed_after_terminal = True
+            break
+        if timeout > 0 and now - start >= timeout:
+            force_kill_process_group(proc)
+            timed_out = True
+            break
+        if idle_timeout and idle_timeout > 0 and now - last_activity >= idle_timeout:
+            force_kill_process_group(proc)
+            idle_timed_out = True
+            break
+
+        wait_for = _STREAM_POLL_SECONDS
+        if terminal_deadline is not None:
+            wait_for = min(wait_for, max(0.0, terminal_deadline - now))
+        if timeout > 0:
+            wait_for = min(wait_for, max(0.0, timeout - (now - start)))
+        if idle_timeout and idle_timeout > 0:
+            wait_for = min(wait_for, max(0.0, idle_timeout - (now - last_activity)))
+
+        try:
+            line = output.get(timeout=wait_for)
+        except queue.Empty:
+            continue
+
+        if line is None:
+            break
+
+        last_activity = time.monotonic()
+        is_terminal = on_line(line)
+        if is_terminal and terminal_deadline is None:
+            terminal_deadline = time.monotonic() + terminal_grace
+
+    thread.join(timeout=1.0)
+    return killed_after_terminal, timed_out, idle_timed_out
 
 
 def _usage_snapshot_from_event(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -818,6 +952,7 @@ def run_command_streaming(
     max_turns: int = 10,
     timeout: int = 300,
     max_turns_source: Optional[str] = "skill_max_turns",
+    idle_timeout: Optional[int] = None,
 ) -> str:
     """Build and run a CLI command, streaming progress to stdout in real time.
 
@@ -837,9 +972,16 @@ def run_command_streaming(
     original raw text path; lines that fail to parse as JSON are still
     printed and contribute to the return value.
 
+    Args:
+        timeout: Hard wall-clock cap on total runtime (max-duration).
+        idle_timeout: Optional inactivity cap that resets on every streamed
+            line; ``None`` disables it. Use a generous *timeout* plus an
+            *idle_timeout* for long, actively-streaming sessions (e.g. large
+            reviews) so they are only killed on genuine silence, not duration.
+
     Raises:
         RuntimeError: If the command exits with non-zero code (except
-            max-turns, which returns partial output).
+            max-turns, which returns partial output), or if a deadline trips.
     """
     from app.config import get_model_config
 
@@ -875,8 +1017,24 @@ def run_command_streaming(
     final_result: Optional[str] = None
     usage_snapshot: Optional[Dict[str, Any]] = None
     saw_max_turns_event = False
+    saw_terminal_event = False
+    saw_provider_error_event = False
+    killed_after_terminal = False
     stderr_text = ""
     try:
+        # start_new_session=True makes the child its own process-group leader.
+        # This is the safety contract for force_kill_process_group(): the kill
+        # path below resolves getpgid(proc.pid) and SIGKILLs that whole group.
+        # Without isolation the child inherits *our* group, so terminating a
+        # stuck provider (terminal-event grace or hard timeout) would also kill
+        # the skill subprocess running this function before it can return the
+        # captured text. Mirrors cli_exec.stream_with_timeout's precondition.
+        #
+        # That isolation, however, also hides the child from run.py's teardown
+        # of *this* skill subprocess (kill_process_group aims at our group, not
+        # the child's), which would orphan the provider on /abort or a watchdog
+        # kill. parent_death_signal arms PR_SET_PDEATHSIG so the kernel SIGKILLs
+        # the child the moment this skill subprocess dies (Linux; no-op on mac).
         proc, cleanup = popen_cli(
             cmd,
             provider=provider,
@@ -885,50 +1043,89 @@ def run_command_streaming(
             encoding="utf-8",
             errors="replace",
             cwd=project_path,
+            start_new_session=True,
+            parent_death_signal=signal.SIGKILL,
         )
         # Every print() in this loop is the load-bearing watchdog signal —
         # run.py's skill-runner liveness watchdog (600s) resets on each line
         # emitted to stdout. Do not silence these prints; doing so reintroduces
         # the silent-CLI hang this PR fixes (see PR #1372).
+        def _handle_stdout_line(line: str) -> bool:
+            nonlocal final_result
+            nonlocal saw_max_turns_event
+            nonlocal saw_provider_error_event
+            nonlocal saw_terminal_event
+            nonlocal usage_snapshot
+
+            stripped = line.rstrip("\n")
+            raw_lines.append(stripped)
+            if not stripped:
+                return False
+            event: Optional[Dict[str, Any]] = None
+            if use_stream_json:
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, dict):
+                        event = parsed
+                except (json.JSONDecodeError, ValueError):
+                    event = None
+            if event is not None:
+                print(_summarize_stream_event(event), flush=True)
+                event_usage = _usage_snapshot_from_event(event)
+                if event_usage is not None:
+                    usage_snapshot = event_usage
+                if str(event.get("type") or "") in PROVIDER_ERROR_EVENT_TYPES:
+                    saw_provider_error_event = True
+                # Accumulate assistant text blocks so a stream that dies
+                # before the final ``result`` event (timeout, watchdog
+                # kill, SIGPIPE) still returns whatever the provider managed
+                # to print, instead of silently returning "".
+                text_lines.extend(_extract_assistant_text_chunks(event))
+                result_text = _extract_result_text(event)
+                if result_text is not None:
+                    final_result = result_text
+                if _is_stream_json_max_turns(event):
+                    saw_max_turns_event = True
+                if _is_terminal_stream_event(event):
+                    saw_terminal_event = True
+                    return True
+            else:
+                # Non-JSON: provider doesn't speak stream-json or a stray
+                # warning slipped in. Print and remember for the fallback.
+                print(stripped, flush=True)
+                text_lines.append(stripped)
+            return False
+
         try:
-            for line in proc.stdout:
-                stripped = line.rstrip("\n")
-                raw_lines.append(stripped)
-                if not stripped:
-                    continue
-                event: Optional[Dict[str, Any]] = None
-                if use_stream_json:
-                    try:
-                        parsed = json.loads(stripped)
-                        if isinstance(parsed, dict):
-                            event = parsed
-                    except (json.JSONDecodeError, ValueError):
-                        event = None
-                if event is not None:
-                    print(_summarize_stream_event(event), flush=True)
-                    event_usage = _usage_snapshot_from_event(event)
-                    if event_usage is not None:
-                        usage_snapshot = event_usage
-                    # Accumulate assistant text blocks so a stream that dies
-                    # before the final ``result`` event (timeout, watchdog
-                    # kill, SIGPIPE) still returns whatever the provider managed
-                    # to print, instead of silently returning "".
-                    text_lines.extend(_extract_assistant_text_chunks(event))
-                    result_text = _extract_result_text(event)
-                    if result_text is not None:
-                        final_result = result_text
-                    if _is_stream_json_max_turns(event):
-                        saw_max_turns_event = True
-                else:
-                    # Non-JSON: provider doesn't speak stream-json or a stray
-                    # warning slipped in. Print and remember for the fallback.
-                    print(stripped, flush=True)
-                    text_lines.append(stripped)
+            killed_after_terminal, timed_out, idle_timed_out = (
+                _consume_stdout_with_deadline(
+                    proc,
+                    timeout=timeout,
+                    idle_timeout=idle_timeout,
+                    on_line=_handle_stdout_line,
+                    terminal_grace=_TERMINAL_STREAM_GRACE_SECONDS,
+                )
+            )
+            if timed_out or idle_timed_out:
+                # _consume_stdout_with_deadline already force-killed the group;
+                # reap it and surface a clear, deadline-specific error. Idle is
+                # distinct from max-duration: a silent stream vs an overlong one.
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=5)
+                if idle_timed_out:
+                    raise RuntimeError(
+                        f"CLI invocation produced no output for {idle_timeout}s"
+                    )
+                raise RuntimeError(f"CLI invocation timed out after {timeout}s")
             stderr_text = proc.stderr.read() if proc.stderr else ""
-            proc.wait(timeout=timeout)
+            wait_timeout = 5 if killed_after_terminal else timeout
+            proc.wait(timeout=wait_timeout)
         except subprocess.TimeoutExpired as e:
-            proc.kill()
-            proc.wait()
+            from app.subprocess_runner import force_kill_process_group
+
+            force_kill_process_group(proc)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=5)
             raise RuntimeError(f"CLI invocation timed out after {timeout}s") from e
         finally:
             if proc.stdout:
@@ -953,7 +1150,21 @@ def run_command_streaming(
         else:
             return_text = "\n".join(text_lines)
 
-        if proc.returncode != 0:
+        terminal_completion_ok = (
+            killed_after_terminal
+            and saw_terminal_event
+            and not saw_provider_error_event
+            and bool(return_text.strip())
+        )
+        if terminal_completion_ok:
+            print(
+                "[cli] provider emitted terminal event but did not exit; "
+                "terminated process group after grace period",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        if proc.returncode != 0 and not terminal_completion_ok:
             # Max-turns is a graceful limit — return partial output so callers
             # can extract useful results from an incomplete session.
             if hit_max_turns:

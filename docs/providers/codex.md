@@ -86,6 +86,68 @@ a plan, executes it, and returns the result. Streaming skill calls use
 assistant response, so Kōan can show live activity without relying on
 Codex event shapes for the final answer.
 
+### Stream Completion (`task_complete` hang mitigation)
+
+Codex sometimes emits its final answer and a `task_complete` event but then
+keeps the `codex exec` process alive instead of exiting. A naive reader that
+waits for stdout EOF would block indefinitely, so the skill that launched
+Codex (e.g. `/review`, `/plan`) could never commit, push, or finalize.
+
+Kōan treats `task_complete` as a **logical terminal event**:
+
+1. When the event arrives, Kōan keeps reading for a short grace period so a
+   process that is about to exit cleanly still does.
+2. If the process is still alive after the grace window, Kōan terminates the
+   Codex process group and returns the captured final message, logging
+   `provider emitted terminal event but did not exit` to stderr.
+3. If a provider **error** event (`error`, `turn.failed`, `response.failed`,
+   `task.failed`) was seen at any point, completion is *not* treated as
+   successful — the run still surfaces as a failure.
+
+The Codex child is started in its own process group (`start_new_session=True`)
+so this terminate step kills only the Codex tree, never the Kōan skill process
+that is waiting to return. A normal, finite stream is unaffected: it reaches
+EOF before the grace logic engages and returns exactly as before.
+
+### Process-group teardown contract (all stream-json providers)
+
+The streaming path (`run_command_streaming`) runs *inside* a skill subprocess
+that `run.py` spawns and monitors. Isolating the provider into its own process
+group (above) is required so the streamer's internal kill doesn't take down the
+skill subprocess — but it also hides the provider from `run.py`'s teardown of
+that skill subprocess (`kill_process_group()` targets the skill's group, not the
+provider's). Left unaddressed, a `/abort` or a liveness/duration watchdog would
+kill the skill subprocess while orphaning the provider CLI.
+
+To close that gap the provider child is also armed with a **parent-death
+signal** (`prctl(PR_SET_PDEATHSIG, SIGKILL)`, wired via `popen_cli`'s
+`parent_death_signal` argument). The kernel then SIGKILLs the provider the
+moment its skill subprocess dies — for any reason, including a hard kill where
+no userspace handler could run. This is **Linux-only** (production runs on
+Linux); on macOS dev there is no `prctl`, and the provider instead dies via
+`SIGPIPE` on its next stdout write after the skill subprocess exits. The same
+contract applies to the `claude` provider and to `claude_step` (used by
+`/rebase`, `/recreate`, PR review).
+
+### Streaming timeouts: idle vs max-duration
+
+Streaming runs are bounded by two **independent** deadlines:
+
+- **max-duration** (`timeout`) — a hard wall-clock cap on total runtime.
+- **idle timeout** (`idle_timeout`) — an inactivity cap that **resets on every
+  streamed line**, so an actively-working session is never killed merely for
+  taking a long time; only genuine silence trips it. `None`/`0` disables it.
+
+This matters for long-but-active sessions like large PR reviews. `/review` uses
+a generous max-duration with a separate idle deadline, configurable via:
+
+| Config key            | Default                        | Meaning                          |
+|-----------------------|--------------------------------|----------------------------------|
+| `review_max_duration` | `skill_timeout` (7200s)        | Hard cap on total review runtime |
+| `review_idle_timeout` | `first_output_timeout` (600s)  | Silence cap (resets per line)    |
+
+(`/plan` and `/ai` pass only a max-duration; they leave `idle_timeout` unset.)
+
 ### Execution Modes
 
 | Kōan Setting          | Codex Flag       | Behavior                        |

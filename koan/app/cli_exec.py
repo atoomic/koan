@@ -199,14 +199,35 @@ def run_cli(
 def popen_cli(
     cmd,
     provider: Optional[CLIProvider] = None,
+    parent_death_signal: Optional[int] = None,
     **kwargs,
 ) -> Tuple[subprocess.Popen, Callable[[], None]]:
     """Start a :class:`~subprocess.Popen` process with the prompt via temp-file stdin.
 
     Returns ``(proc, cleanup)`` where *cleanup()* **must** be called after
     the process exits to close the file handle and delete the temp file.
+
+    When *parent_death_signal* is set (e.g. ``signal.SIGKILL``) and the child is
+    isolated with ``start_new_session=True``, the child is armed via
+    ``prctl(PR_SET_PDEATHSIG)`` so the kernel kills it when this parent dies.
+    This keeps a provider CLI spawned inside a skill subprocess reachable by
+    ``run.py``'s process-group teardown even though it lives in its own group.
+    No-op on non-Linux. See :func:`app.subprocess_runner.pdeathsig_preexec`.
     """
     provider = provider or _get_cli_provider()
+    if parent_death_signal is not None:
+        from app.subprocess_runner import pdeathsig_preexec
+
+        preexec = pdeathsig_preexec(parent_death_signal)
+        if preexec is not None:
+            existing = kwargs.get("preexec_fn")
+            if existing is not None:
+                def _chained(_existing=existing, _new=preexec):
+                    _existing()
+                    _new()
+                kwargs["preexec_fn"] = _chained
+            else:
+                kwargs["preexec_fn"] = preexec
     cmd, prompt_path = prepare_prompt_file(cmd, provider=provider)
     cli_lock = _ProviderInvocationLock(provider.invocation_lock_name())
     cli_lock.__enter__()

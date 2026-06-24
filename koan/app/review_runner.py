@@ -749,29 +749,43 @@ def build_review_prompt(
 def _run_claude_review(
     prompt: str,
     project_path: str,
-    timeout: int = 600,
+    timeout: Optional[int] = None,
     model: Optional[str] = None,
+    idle_timeout: Optional[int] = None,
 ) -> Tuple[str, str]:
     """Run provider CLI with read-only tools and return the output text.
 
     Args:
         prompt: The review prompt.
         project_path: Path to the project for codebase context.
-        timeout: Maximum seconds to wait (default 600s — large PRs need
-                 more time than the old 300s default).
+        timeout: Hard wall-clock cap (max-duration). When None, uses
+                 ``get_review_max_duration()`` (7200s) so a large review that
+                 is actively streaming is not killed mid-stream.
         model: Optional model override. When None, uses models["review_mode"]
                if configured, otherwise models["mission"].
+        idle_timeout: Inactivity cap that resets on every streamed line. When
+                 None, uses ``get_review_idle_timeout()`` (600s). This is what
+                 bounds a *stuck* review, decoupled from total duration.
 
     Returns:
         (output, error) tuple. output is the provider's review text (empty on
         failure), error is the failure reason (empty on success).
     """
     from app.cli_provider import run_command_streaming
-    from app.config import get_model_config, get_skill_max_turns
+    from app.config import (
+        get_model_config,
+        get_review_idle_timeout,
+        get_review_max_duration,
+        get_skill_max_turns,
+    )
 
     if model is None:
         models = get_model_config()
         model = models.get("review_mode") or models.get("mission", "")
+    if timeout is None:
+        timeout = get_review_max_duration()
+    if idle_timeout is None:
+        idle_timeout = get_review_idle_timeout()
 
     try:
         output = run_command_streaming(
@@ -782,6 +796,7 @@ def _run_claude_review(
             model=model,
             max_turns=get_skill_max_turns(),
             timeout=timeout,
+            idle_timeout=idle_timeout,
         )
         return output, ""
     except RuntimeError as e:
