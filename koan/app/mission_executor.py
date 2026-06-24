@@ -208,9 +208,19 @@ def _handle_skill_dispatch(
             and "— skipping" in _skill_stdout
         )
         if not _skill_already_notified:
+            # Tracked skills (/review, /fix, /rebase, /plan, /implement) render a
+            # concise "✅ [project] 🔍 Reviewed <pr-url>" line. The skill runners
+            # emit their transcript (which carries the PR URL) to stdout rather
+            # than pending.md, so extract it here and thread it through —
+            # otherwise the URL falls back to a pending.md-only read that the
+            # skill path rarely populates. Empty result still falls back to the
+            # pending.md re-read inside _notify_mission_end.
+            from app.mission_runner import _extract_pr_url
+            _skill_pr_url = _extract_pr_url(_skill_stdout)
             _run._notify_mission_end(
                 instance, project_name, run_num, max_runs,
                 exit_code, mission_title,
+                pr_url=_skill_pr_url,
             )
         was_stagnated = _run._last_mission_stagnated.is_set()
         _run._finalize_mission(instance, mission_title, project_name, exit_code)
