@@ -40,7 +40,7 @@ def handle(ctx):
             "Use --now to queue at the top: /rebase --now <url>"
         )
 
-    pr_url, _ = result
+    pr_url, context = result
 
     try:
         owner, repo, pr_number = parse_pr_url(pr_url)
@@ -66,7 +66,7 @@ def handle(ctx):
         )
 
     duplicate = _gh_helpers.queue_github_mission_once(
-        ctx, "rebase", pr_url, project_name, urgent=urgent,
+        ctx, "rebase", pr_url, project_name, context, urgent=urgent,
         type_label="PR", number=pr_number, owner=owner, repo=repo,
     )
     if duplicate:
