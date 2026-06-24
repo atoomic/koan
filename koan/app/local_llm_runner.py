@@ -280,11 +280,15 @@ def _tool_skill(arguments: Dict[str, Any], cwd: str) -> str:
     if skill is None:
         return f"Error: skill '{skill_name}' not found"
 
+    # Best-effort project hint: the working directory's basename is the
+    # project slug for workspace projects. Skills that need a precise project
+    # still parse it from args; this only seeds ctx.memory's default.
     ctx = SkillContext(
         koan_root=koan_root,
         instance_dir=instance_dir,
         command_name=skill_name,
         args=args,
+        project_name=Path(cwd).name if cwd else "",
     )
     result = execute_skill(skill, ctx)
     if isinstance(result, SkillError) or (

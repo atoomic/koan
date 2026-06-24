@@ -673,6 +673,21 @@ class SkillContext:
     args: str = ""
     send_message: Optional[Callable[[str], Any]] = None
     handle_chat: Optional[Callable[[str], Any]] = None
+    project_name: str = ""
+    _memory: Any = field(init=False, default=None, repr=False)
+
+    @property
+    def memory(self):
+        """Lazy :class:`~app.skill_memory_accessor.MemoryAccessor` instance.
+
+        Constructed on first access so skills that never touch memory pay
+        nothing. Read methods take ``project`` as a parameter; pass
+        ``ctx.project_name`` when no explicit project is in scope.
+        """
+        if self._memory is None:
+            from app.skill_memory_accessor import MemoryAccessor
+            self._memory = MemoryAccessor(self.instance_dir)
+        return self._memory
 
 
 def execute_skill(skill: Skill, ctx: SkillContext) -> Optional[Union[str, SkillError]]:
