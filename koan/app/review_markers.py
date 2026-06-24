@@ -181,3 +181,48 @@ def replace_commit_block(body: str, shas: List[str]) -> str:
     if m:
         return body[:m.start()] + new_block + body[m.end():]
     return body + "\n" + new_block
+
+
+# ---------------------------------------------------------------------------
+# Prior-review extraction (turn a posted koan-summary comment back into the
+# human-readable review text, for re-injection as context on re-review)
+# ---------------------------------------------------------------------------
+
+
+def strip_hidden_sections(body: str) -> str:
+    """Remove all machine-only marker blocks from a comment body.
+
+    Strips the hidden commit block (both the single-comment and legacy
+    two-marker forms) plus the raw/short-summary and release-notes blocks, so
+    only human-readable content remains. Markers that are absent are no-ops.
+    """
+    body = _HIDDEN_COMMITS_RE.sub("", body)
+    for start, end in (
+        (COMMIT_IDS_START, COMMIT_IDS_END),
+        (RAW_SUMMARY_START, RAW_SUMMARY_END),
+        (SHORT_SUMMARY_START, SHORT_SUMMARY_END),
+        (RELEASE_NOTES_START, RELEASE_NOTES_END),
+    ):
+        body = remove_section(body, start, end)
+    return body
+
+
+def extract_prior_review_body(body: str) -> str:
+    """Recover the readable review text from a posted ``koan-summary`` comment.
+
+    The bot posts its review as ``{SUMMARY_TAG}\\n[## Code Review\\n\\n]<text>``
+    followed by a ``\\n---\\n<footer>`` and a hidden commit block. This reverses
+    that: strip the hidden blocks, drop a leading ``SUMMARY_TAG``, and drop the
+    footer (everything from the LAST ``\\n---`` onward, so a review whose own
+    body contains ``---`` rules keeps them). Returns ``""`` when nothing
+    readable remains.
+    """
+    if not body:
+        return ""
+    text = strip_hidden_sections(body).strip()
+    if text.startswith(SUMMARY_TAG):
+        text = text[len(SUMMARY_TAG):]
+    footer_idx = text.rfind("\n---")
+    if footer_idx != -1:
+        text = text[:footer_idx]
+    return text.strip()

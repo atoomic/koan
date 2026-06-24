@@ -1286,6 +1286,230 @@ class TestGetClaudeFlagsForRole:
             assert call_kwargs["model"] == "sonnet"
 
 
+# --- private_review_gate ---
+
+
+class TestPrivateReviewGateConfig:
+    def test_defaults_disabled(self):
+        # Opt-in during the testing phase: the gate is off unless enabled.
+        from app.config import get_private_review_gate_config
+
+        with _mock_config({}), \
+             patch("app.config._load_project_overrides", return_value={}):
+            result = get_private_review_gate_config("app", skill_origin="rebase")
+
+        assert result == {
+            "enabled": False,
+            "max_rounds": 3,
+            "min_severity": "warning",
+            "enabled_skills": ["fix", "implement", "rebase"],
+            "budget_aware": True,
+            "dedup": True,
+            "tracker_max_age_days": 30,
+        }
+
+    def test_global_config_overrides_defaults(self):
+        from app.config import get_private_review_gate_config
+
+        with _mock_config({
+            "private_review_gate": {
+                "enabled": False,
+                "max_rounds": "5",
+                "min_severity": "critical",
+                "enabled_skills": ["fix"],
+            }
+        }), patch("app.config._load_project_overrides", return_value={}):
+            result = get_private_review_gate_config("app", skill_origin="fix")
+
+        assert result["enabled"] is False
+        assert result["max_rounds"] == 5
+        assert result["min_severity"] == "critical"
+        assert result["enabled_skills"] == ["fix"]
+
+    def test_project_override_wins(self):
+        from app.config import get_private_review_gate_config
+
+        project_overrides = {
+            "private_review_gate": {
+                "enabled": "false",
+                "max_rounds": 1,
+                "min_severity": "important",
+                "enabled_skills": "implement,rebase",
+            }
+        }
+        with _mock_config({
+            "private_review_gate": {
+                "enabled": True,
+                "max_rounds": 3,
+                "min_severity": "critical",
+            }
+        }), patch("app.config._load_project_overrides",
+                  return_value=project_overrides):
+            result = get_private_review_gate_config("app", skill_origin="rebase")
+
+        assert result == {
+            "enabled": False,
+            "max_rounds": 1,
+            "min_severity": "warning",
+            "enabled_skills": ["implement", "rebase"],
+            "budget_aware": True,
+            "dedup": True,
+            "tracker_max_age_days": 30,
+        }
+
+    def test_malformed_values_fall_back(self):
+        from app.config import get_private_review_gate_config
+
+        with _mock_config({
+            "private_review_gate": {
+                "enabled": "maybe",
+                "max_rounds": "bad",
+                "min_severity": "unknown",
+                "enabled_skills": 123,
+            }
+        }), patch("app.config._load_project_overrides", return_value={}):
+            result = get_private_review_gate_config("app", skill_origin="fix")
+
+        assert result == {
+            "enabled": False,
+            "max_rounds": 3,
+            "min_severity": "warning",
+            "enabled_skills": ["fix", "implement", "rebase"],
+            "budget_aware": True,
+            "dedup": True,
+            "tracker_max_age_days": 30,
+        }
+
+    def test_legacy_key_is_ignored(self):
+        # The pre-release implementation_review_gate key is no longer read;
+        # only private_review_gate is honored.
+        from app.config import get_private_review_gate_config
+
+        with _mock_config({
+            "implementation_review_gate": {
+                "enabled": False,
+                "max_rounds": 1,
+                "enabled_skills": ["fix"],
+            }
+        }), patch("app.config._load_project_overrides", return_value={}):
+            result = get_private_review_gate_config("app", skill_origin="rebase")
+
+        assert result == {
+            "enabled": False,
+            "max_rounds": 3,
+            "min_severity": "warning",
+            "enabled_skills": ["fix", "implement", "rebase"],
+            "budget_aware": True,
+            "dedup": True,
+            "tracker_max_age_days": 30,
+        }
+
+    def test_new_subsystem_flags_parsed(self):
+        from app.config import get_private_review_gate_config
+
+        with _mock_config({
+            "private_review_gate": {
+                "enabled": True,
+                "budget_aware": "off",
+                "dedup": False,
+                "tracker_max_age_days": "7",
+            }
+        }), patch("app.config._load_project_overrides", return_value={}):
+            result = get_private_review_gate_config("app", skill_origin="fix")
+
+        assert result["budget_aware"] is False
+        assert result["dedup"] is False
+        assert result["tracker_max_age_days"] == 7
+
+
+# --- review_memory ---
+
+
+class TestReviewMemoryConfig:
+    def test_disabled_by_default(self):
+        from app.config import get_review_memory_config
+
+        with _mock_config({}):
+            result = get_review_memory_config()
+
+        assert result == {"enabled": False, "max_entries": 8}
+
+    def test_enabled_with_custom_max_entries(self):
+        from app.config import get_review_memory_config
+
+        with _mock_config({
+            "review_memory": {"enabled": True, "max_entries": "5"}
+        }):
+            result = get_review_memory_config()
+
+        assert result == {"enabled": True, "max_entries": 5}
+
+    def test_malformed_values_fall_back(self):
+        from app.config import get_review_memory_config
+
+        with _mock_config({
+            "review_memory": {"enabled": "maybe", "max_entries": "lots"}
+        }):
+            result = get_review_memory_config()
+
+        assert result == {"enabled": False, "max_entries": 8}
+
+    def test_negative_max_entries_clamped(self):
+        from app.config import get_review_memory_config
+
+        with _mock_config({"review_memory": {"max_entries": -3}}):
+            result = get_review_memory_config()
+
+        assert result["max_entries"] == 0
+
+
+class TestReviewContextConfig:
+    def test_defaults_fall_back_to_rebase_flag(self):
+        from app.config import get_review_context_config
+
+        # No review_context key and no rebase flag -> rebase default (True).
+        with _mock_config({}):
+            result = get_review_context_config()
+
+        assert result == {"include_bot_feedback": True, "prior_review_max_chars": 10000}
+
+    def test_include_bot_feedback_inherits_rebase_flag(self):
+        from app.config import get_review_context_config
+
+        with _mock_config({"rebase_include_bot_feedback": False}):
+            result = get_review_context_config()
+
+        assert result["include_bot_feedback"] is False
+
+    def test_explicit_review_context_overrides_rebase_flag(self):
+        from app.config import get_review_context_config
+
+        with _mock_config({
+            "rebase_include_bot_feedback": False,
+            "review_context": {"include_bot_feedback": True},
+        }):
+            result = get_review_context_config()
+
+        assert result["include_bot_feedback"] is True
+
+    def test_custom_and_clamped_max_chars(self):
+        from app.config import get_review_context_config
+
+        with _mock_config({"review_context": {"prior_review_max_chars": "500"}}):
+            assert get_review_context_config()["prior_review_max_chars"] == 500
+
+        with _mock_config({"review_context": {"prior_review_max_chars": -10}}):
+            assert get_review_context_config()["prior_review_max_chars"] == 0
+
+    def test_non_dict_review_context_safe_defaults(self):
+        from app.config import get_review_context_config
+
+        with _mock_config({"review_context": "garbage"}):
+            result = get_review_context_config()
+
+        assert result == {"include_bot_feedback": True, "prior_review_max_chars": 10000}
+
+
 # --- backward compatibility ---
 
 

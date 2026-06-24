@@ -34,11 +34,13 @@ from app.pr_submit import (
     submit_draft_pr,
 )
 from app.prompts import load_prompt_or_skill
+from app.private_review_gate import format_gate_note, run_gate_for_skill
 
 logger = logging.getLogger(__name__)
 
 # Path to the plan skill directory (used for loading the plan-review prompt)
 _PLAN_SKILL_DIR = Path(__file__).resolve().parent.parent / "plan"
+_REVIEW_SKILL_DIR = Path(__file__).resolve().parent.parent / "review"
 
 
 def _progress(msg: str) -> None:
@@ -299,14 +301,24 @@ def run_implement(
     # Build notification and summary
     branch = get_current_branch(project_path)
     on_base_branch = branch in (effective_base_branch, "main", "master")
+    gate_result = run_gate_for_skill(
+        project_path=project_path,
+        project_name=project_name,
+        pr_url=pr_url or "",
+        notify_fn=notify_fn,
+        skill_origin="implement",
+        review_skill_dir=_REVIEW_SKILL_DIR,
+        plan_url=issue_url,
+    )
+    gate_note = format_gate_note(gate_result)
     if pr_url:
         notify_fn(
             f"\u2705 Implementation complete for issue {label}"
-            f"{context_label}\nDraft PR: {pr_url}"
+            f"{context_label}\nDraft PR: {pr_url}{gate_note}"
         )
         summary = (
             f"Implementation complete for {label}{context_label}"
-            f"\nDraft PR: {pr_url}"
+            f"\nDraft PR: {pr_url}{gate_note}"
         )
     elif not on_base_branch:
         skip_reason = (

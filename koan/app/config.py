@@ -1304,6 +1304,146 @@ def get_plan_review_config() -> dict:
     }
 
 
+_PRIVATE_REVIEW_GATE_DEFAULTS = {
+    "enabled": False,
+    "max_rounds": 3,
+    "min_severity": "warning",
+    "enabled_skills": ["fix", "implement", "rebase"],
+    "budget_aware": True,
+    "dedup": True,
+    "tracker_max_age_days": 30,
+}
+
+_PRIVATE_REVIEW_SEVERITY_ALIASES = {
+    "critical": "critical",
+    "blocking": "critical",
+    "warning": "warning",
+    "important": "warning",
+    "high": "warning",
+    "suggestion": "suggestion",
+    "suggestions": "suggestion",
+    "all": "suggestion",
+}
+
+
+def _safe_bool(value, default: bool) -> bool:
+    """Safely coerce common config bool shapes."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "yes", "1", "on", "enabled"):
+            return True
+        if normalized in ("false", "no", "0", "off", "disabled", ""):
+            return False
+    return default
+
+
+def _normalize_private_review_severity(value) -> str:
+    """Map user-facing severity tokens to review schema severities."""
+    token = str(value or "").strip().lower()
+    return _PRIVATE_REVIEW_SEVERITY_ALIASES.get(
+        token,
+        _PRIVATE_REVIEW_GATE_DEFAULTS["min_severity"],
+    )
+
+
+def _normalize_private_review_gate_skills(value) -> list:
+    """Return configured skill names for the shared private review gate."""
+    default = list(_PRIVATE_REVIEW_GATE_DEFAULTS["enabled_skills"])
+    if value is None:
+        return default
+    if isinstance(value, str):
+        raw_items = value.replace(",", " ").split()
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        return default
+    return [
+        item for item in (
+            str(raw).strip().lower() for raw in raw_items
+        )
+        if item
+    ]
+
+
+def _review_gate_section(config: dict, key: str) -> dict:
+    section = config.get(key, {})
+    return section if isinstance(section, dict) else {}
+
+
+def get_private_review_gate_config(
+    project_name: str = "",
+    skill_origin: str = "",
+) -> dict:
+    """Get the shared private review gate configuration.
+
+    Config key: private_review_gate.
+
+      - enabled (bool): run the backend-only PR review/fix loop. Default:
+        False (opt-in during the testing phase; enable per-instance/project).
+      - max_rounds (int): maximum review/fix rounds. Default: 3.
+      - min_severity (str): lowest severity to auto-fix. Default: warning
+        (aliases: important/high).
+      - enabled_skills (list[str] or str): skills that use the gate.
+        Default: fix, implement, rebase.
+      - budget_aware (bool): skip/limit rounds under quota pressure via the
+        usage governor. Default: True.
+      - dedup (bool): skip re-reviewing a PR head already reviewed clean.
+        Default: True.
+      - tracker_max_age_days (int): dedup tracker entry retention. Default: 30.
+
+    Per-project overrides in projects.yaml use the same key and override
+    global values one field at a time.
+    """
+    config = _load_config()
+    merged = {
+        **_PRIVATE_REVIEW_GATE_DEFAULTS,
+        **_review_gate_section(config, "private_review_gate"),
+    }
+
+    project_overrides = _load_project_overrides(project_name)
+    merged.update(
+        _review_gate_section(project_overrides, "private_review_gate")
+    )
+
+    max_rounds = _safe_int(
+        merged.get("max_rounds"),
+        _PRIVATE_REVIEW_GATE_DEFAULTS["max_rounds"],
+    )
+    enabled_skills = _normalize_private_review_gate_skills(
+        merged.get("enabled_skills"),
+    )
+    enabled = _safe_bool(
+        merged.get("enabled"),
+        _PRIVATE_REVIEW_GATE_DEFAULTS["enabled"],
+    )
+    skill = str(skill_origin or "").strip().lower()
+    if skill and skill not in enabled_skills:
+        enabled = False
+
+    return {
+        "enabled": enabled,
+        "max_rounds": max(0, max_rounds),
+        "min_severity": _normalize_private_review_severity(
+            merged.get("min_severity"),
+        ),
+        "enabled_skills": enabled_skills,
+        "budget_aware": _safe_bool(
+            merged.get("budget_aware"),
+            _PRIVATE_REVIEW_GATE_DEFAULTS["budget_aware"],
+        ),
+        "dedup": _safe_bool(
+            merged.get("dedup"),
+            _PRIVATE_REVIEW_GATE_DEFAULTS["dedup"],
+        ),
+        "tracker_max_age_days": max(0, _safe_int(
+            merged.get("tracker_max_age_days"),
+            _PRIVATE_REVIEW_GATE_DEFAULTS["tracker_max_age_days"],
+        )),
+    }
+
+
 def get_skill_allowed_hosts() -> List[str]:
     """Return the optional Git-host allow-list for /skill install.
 
@@ -1640,6 +1780,68 @@ def get_review_reflect_config() -> dict:
     except (TypeError, ValueError):
         threshold = 5
     return {"threshold": max(0, min(10, threshold))}
+
+
+def get_review_memory_config() -> dict:
+    """Get the review session-memory injection configuration from config.yaml.
+
+    When enabled, the review prompt also includes recent typed project memory
+    (decisions, observations — not learnings, which are already injected) from
+    the persistent FTS5 memory index, ranked against the PR content. Off by
+    default so the extra prompt tokens are opt-in.
+
+    Config key: review_memory
+      - enabled (bool): inject recent session memory into reviews.
+        Default: False.
+      - max_entries (int): maximum memory entries to include. Default: 8.
+
+    Returns:
+        Dict with keys: enabled (bool), max_entries (int >= 0).
+    """
+    config = _load_config()
+    mem_cfg = config.get("review_memory", {}) or {}
+    if not isinstance(mem_cfg, dict):
+        mem_cfg = {}
+    max_entries = _safe_int(mem_cfg.get("max_entries"), 8)
+    return {
+        "enabled": _safe_bool(mem_cfg.get("enabled"), False),
+        "max_entries": max(0, max_entries),
+    }
+
+
+def get_review_context_config() -> dict:
+    """Get the /review existing-comment context configuration from config.yaml.
+
+    Controls how `/review` surfaces existing PR comments in its prompt. The
+    bot's own most recent structured review is injected into a dedicated
+    ``{PRIOR_REVIEW}`` prompt slot (head-preserving budget) so re-reviews build
+    on it instead of losing it to the recency-truncated conversation thread.
+
+    Config key: review_context
+      - include_bot_feedback (bool): include bot-authored feedback (the prior
+        review). When absent, falls back to ``rebase_include_bot_feedback``
+        (default True) so existing behavior is preserved.
+      - prior_review_max_chars (int): cap for the prior-review slot, head-kept.
+        Default: 10000.
+
+    Returns:
+        Dict with keys: include_bot_feedback (bool), prior_review_max_chars (int >= 0).
+    """
+    config = _load_config()
+    ctx = config.get("review_context", {}) or {}
+    if not isinstance(ctx, dict):
+        ctx = {}
+
+    if "include_bot_feedback" in ctx:
+        include_bot_feedback = _safe_bool(ctx.get("include_bot_feedback"), True)
+    else:
+        include_bot_feedback = get_rebase_include_bot_feedback()
+
+    max_chars = _safe_int(ctx.get("prior_review_max_chars"), 10000)
+    return {
+        "include_bot_feedback": include_bot_feedback,
+        "prior_review_max_chars": max(0, max_chars),
+    }
 
 
 def get_review_triage_config() -> dict:

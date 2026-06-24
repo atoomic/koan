@@ -6,8 +6,12 @@ from app.review_markers import (
     SUMMARY_TAG,
     COMMIT_IDS_START,
     COMMIT_IDS_END,
+    RAW_SUMMARY_START,
+    RAW_SUMMARY_END,
     extract_between_markers,
     extract_commit_shas,
+    extract_prior_review_body,
+    strip_hidden_sections,
     build_hidden_commit_block,
     replace_commit_block,
     remove_section,
@@ -222,3 +226,56 @@ class TestReplaceCommitBlock:
         block = build_hidden_commit_block(shas)
         extracted = extract_commit_shas(block)
         assert extracted == shas
+
+
+class TestStripHiddenSections:
+    def test_removes_hidden_commit_block(self):
+        body = "review text\n<!-- koan-commits\nabc\ndef\n-->\nmore"
+        result = strip_hidden_sections(body)
+        assert "abc" not in result
+        assert "koan-commits" not in result
+        assert "review text" in result and "more" in result
+
+    def test_removes_raw_summary_block(self):
+        body = "visible" + wrap_section("cached", RAW_SUMMARY_START, RAW_SUMMARY_END)
+        result = strip_hidden_sections(body)
+        assert "cached" not in result
+        assert "visible" in result
+
+    def test_noop_when_no_markers(self):
+        body = "just a plain review body"
+        assert strip_hidden_sections(body) == body
+
+
+class TestExtractPriorReviewBody:
+    def test_strips_tag_header_footer_and_commit_block(self):
+        body = (
+            f"{SUMMARY_TAG}\n## Code Review\n\n"
+            "FINDING: validate the token\n\n"
+            "---\nReviewed by koan · model x"
+            "\n<!-- koan-commits\nabc123\n-->"
+        )
+        result = extract_prior_review_body(body)
+        assert "FINDING: validate the token" in result
+        assert SUMMARY_TAG not in result
+        assert "Reviewed by koan" not in result   # footer dropped
+        assert "abc123" not in result             # hidden block dropped
+
+    def test_keeps_inner_horizontal_rules(self):
+        # Only the LAST '---' (the footer separator) is dropped.
+        body = (
+            f"{SUMMARY_TAG}\nSection A\n\n---\n\nSection B\n\n---\nfooter line"
+        )
+        result = extract_prior_review_body(body)
+        assert "Section A" in result
+        assert "Section B" in result
+        assert "footer line" not in result
+
+    def test_no_footer_returns_full_text(self):
+        body = f"{SUMMARY_TAG}\n## Code Review\n\nonly findings, no footer"
+        result = extract_prior_review_body(body)
+        assert "only findings, no footer" in result
+
+    def test_empty_or_marker_only_returns_empty(self):
+        assert extract_prior_review_body("") == ""
+        assert extract_prior_review_body(SUMMARY_TAG) == ""

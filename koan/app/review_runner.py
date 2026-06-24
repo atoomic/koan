@@ -41,6 +41,7 @@ from app.review_markers import (
     COMMIT_IDS_END,
     extract_between_markers,
     extract_commit_shas,
+    extract_prior_review_body,
     replace_commit_block,
     replace_section,
 )
@@ -48,25 +49,6 @@ from app.review_schema import validate_review, _VALID_REPLY_ACTIONS
 
 _ISSUE_URL_RE = re.compile(ISSUE_URL_PATTERN)
 _QUOTE_RE = re.compile(r'^>\s*@(\S+):\s*(.+)')
-
-
-def load_project_learnings(project_name: Optional[str]) -> str:
-    """Return learnings.md content for the given project as a formatted section.
-
-    Returns an empty string if project_name is None, the file is missing,
-    or the file is empty — so callers can pass the result directly into the
-    prompt template without extra checks.
-    """
-    if not project_name:
-        return ""
-    try:
-        learnings_path = KOAN_ROOT / "instance" / "memory" / "projects" / project_name / "learnings.md"
-        content = learnings_path.read_text().strip()
-        if not content:
-            return ""
-        return f"## Project best practices\n\n{content}\n\n---\n\n"
-    except (FileNotFoundError, OSError):
-        return ""
 
 
 def _resolve_bot_username() -> str:
@@ -516,6 +498,92 @@ def _truncate_plan(plan_body: str) -> str:
     return plan_body[:5000] + "\n\n...(plan truncated)"
 
 
+def _build_review_session_memory(project_name: str, task_text: str) -> str:
+    """Return an opt-in block of recent typed project memory for reviews.
+
+    Pulls recent non-learning session entries (decisions, observations, etc.)
+    from the persistent FTS5 memory index, ranked against the PR content.
+    Learnings are excluded here because they are already injected via the
+    project-memory block (``build_memory_block_for_skill``). Returns "" when
+    the feature is disabled, the project is unscoped, or there is nothing to
+    show — so callers can append the result unconditionally.
+    """
+    if not project_name:
+        return ""
+    from app.config import get_review_memory_config
+
+    cfg = get_review_memory_config()
+    if not cfg["enabled"] or cfg["max_entries"] <= 0:
+        return ""
+
+    from app.memory_manager import read_memory_window
+
+    instance = str(KOAN_ROOT / "instance")
+    try:
+        entries = read_memory_window(
+            instance,
+            project_name,
+            max_entries=cfg["max_entries"],
+            query_text=task_text,
+            current_skill="review",
+        )
+    except Exception as exc:  # memory retrieval must never break a review
+        print(
+            f"[review_runner] session memory lookup failed: {exc}",
+            file=sys.stderr,
+        )
+        return ""
+
+    lines = [
+        f"[{e.get('ts', '')}] {e.get('type', '')}: {e.get('content', '')}"
+        for e in entries
+        if e.get("type") != "learning"
+    ]
+    if not lines:
+        return ""
+
+    body = "\n".join(lines)
+    return (
+        "\n\n<session-memory>\n# Recent project memory\n\n"
+        f"{body}\n</session-memory>\n"
+    )
+
+
+def _strip_bot_summary_from_thread(issue_comments: str) -> str:
+    """Remove the bot's own ``koan-summary`` comment from the flattened thread.
+
+    The conversation thread is a string of ``@login: body`` blocks joined by
+    newlines (a single body may span many lines). When the prior structured
+    review is surfaced in its own ``{PRIOR_REVIEW}`` slot, we drop it from the
+    thread so the (recency-truncated) thread budget serves human discussion
+    instead of echoing the bot's own review.
+
+    Best-effort: a body line that itself begins with ``@`` could, worst case,
+    cause one adjacent comment to be trimmed — preferable to echoing the whole
+    review. Returns the input unchanged when no summary marker is present.
+    """
+    if not issue_comments or SUMMARY_TAG not in issue_comments:
+        return issue_comments
+    tag_idx = issue_comments.find(SUMMARY_TAG)
+    start = issue_comments.rfind("\n@", 0, tag_idx)
+    block_start = 0 if start == -1 else start + 1
+    nxt = issue_comments.find("\n@", tag_idx)
+    block_end = len(issue_comments) if nxt == -1 else nxt + 1
+    cleaned = issue_comments[:block_start] + issue_comments[block_end:]
+    return cleaned.strip("\n")
+
+
+def _format_prior_review(prior_review: Optional[str], max_chars: int) -> str:
+    """Render the dedicated prior-review block, head-preserving and budgeted."""
+    text = (prior_review or "").strip()
+    if not text:
+        return "(No prior automated review.)"
+    if max_chars and len(text) > max_chars:
+        from app.utils import truncate_text
+        text = truncate_text(text, max_chars)
+    return text
+
+
 def build_review_prompt(
     context: dict,
     skill_dir: Optional[Path] = None,
@@ -525,6 +593,8 @@ def build_review_prompt(
     plan_body: Optional[str] = None,
     project_path: Optional[str] = None,
     triaged_files: Optional[list] = None,
+    project_name: str = "",
+    prior_review: Optional[str] = None,
 ) -> str:
     """Build a prompt for Claude to review a PR.
 
@@ -552,6 +622,21 @@ def build_review_prompt(
 
     repliable_text = _format_repliable_comments(repliable_comments or [])
 
+    # Dedicated prior-review slot: surface the bot's last structured review as
+    # authoritative context (head-preserving budget) and drop it from the
+    # recency-truncated conversation thread so it no longer competes with — or
+    # is evicted by — human discussion.
+    from app.config import get_review_context_config
+    ctx_cfg = get_review_context_config()
+    if not ctx_cfg["include_bot_feedback"]:
+        prior_review = None
+    issue_comments_text = context.get("issue_comments", "")
+    if prior_review:
+        issue_comments_text = _strip_bot_summary_from_thread(issue_comments_text)
+    prior_review_block = _format_prior_review(
+        prior_review, ctx_cfg["prior_review_max_chars"],
+    )
+
     project_memory = ""
     if project_path:
         from app.skill_memory import build_memory_block_for_skill
@@ -568,7 +653,10 @@ def build_review_prompt(
             context.get("body", ""),
             diff[:2000],
         )))
-        project_memory = build_memory_block_for_skill(project_path, task_text)
+        project_memory = build_memory_block_for_skill(
+            project_path, task_text, project_name=project_name,
+        )
+        project_memory += _build_review_session_memory(project_name, task_text)
 
     raw_diff = context["diff"]
     skipped_note = ""
@@ -606,8 +694,9 @@ def build_review_prompt(
         DIFF=raw_diff,
         REVIEW_COMMENTS=context["review_comments"],
         REVIEWS=context["reviews"],
-        ISSUE_COMMENTS=context["issue_comments"],
+        ISSUE_COMMENTS=issue_comments_text,
         REPLIABLE_COMMENTS=repliable_text,
+        PRIOR_REVIEW=prior_review_block,
         PROJECT_MEMORY=project_memory,
         SKIPPED_FILES=skipped_note,
     )
@@ -1967,6 +2056,196 @@ def _submit_review_verdict(
         return False
 
 
+def _apply_review_diff_filters(
+    context: dict, *, label: str = "",
+) -> Tuple[dict, list]:
+    """Filter a PR diff for review and report what was dropped.
+
+    Applies the configured ``review_ignore`` glob/regex filters, then
+    content-aware triage of trivial file changes, returning the (possibly
+    reduced) context and the list of triaged files. *label* prefixes the
+    diagnostic output so callers can distinguish e.g. private-gate runs.
+    """
+    from app.config import get_review_ignore_config, get_review_triage_config
+    from app.diff_triage import triage_diff_files
+    from app.utils import filter_diff_by_ignore
+
+    review_ignore = get_review_ignore_config()
+    glob_pats = review_ignore.get("glob", [])
+    regex_pats = review_ignore.get("regex", [])
+    if glob_pats or regex_pats:
+        filtered_diff, skipped = filter_diff_by_ignore(
+            context.get("diff", ""), glob_pats, regex_pats,
+        )
+        if skipped:
+            print(
+                f"[review_runner] {label}ignoring {len(skipped)} "
+                f"file(s): {skipped}",
+                file=sys.stderr,
+            )
+        context = {**context, "diff": filtered_diff}
+
+    triage_config = get_review_triage_config()
+    triaged_diff, triaged_files = triage_diff_files(
+        context.get("diff", ""), triage_config,
+    )
+    if triaged_files:
+        triage_summary = ", ".join(
+            f"{t.path} ({t.reason})" for t in triaged_files
+        )
+        log(
+            "review",
+            f"{label}triaged {len(triaged_files)} trivial file(s): "
+            f"{triage_summary}",
+        )
+        context = {**context, "diff": triaged_diff}
+
+    return context, triaged_files
+
+
+def _run_review_analysis(
+    prompt: str,
+    project_path: str,
+    diff: str,
+    skill_dir: Optional[Path] = None,
+) -> Tuple[Optional[dict], str, Optional[str]]:
+    """Run the provider review and parse it into structured review data.
+
+    Invokes the provider once, retries once with an explicit JSON-only
+    instruction when the first response is not valid JSON, then runs the
+    reflection pass over any findings.
+
+    Returns ``(review_data, raw_output, error)``:
+      - ``review_data``: parsed + reflected review dict, or ``None`` when the
+        provider produced output that could not be parsed as JSON.
+      - ``raw_output``: the first provider response ("" when the provider
+        produced nothing); callers may use it for a regex fallback.
+      - ``error``: short provider error string, set only when the provider
+        produced no output at all.
+    """
+    raw_output, error = _run_claude_review(prompt, project_path)
+    if not raw_output:
+        return None, "", error
+
+    review_data = _parse_review_json(raw_output)
+    if review_data is None:
+        retry_prompt = (
+            prompt
+            + "\n\nIMPORTANT: Your previous response was not valid JSON. "
+            "You MUST respond with ONLY a valid JSON object matching the "
+            "schema described above. No markdown, no text, just JSON."
+        )
+        retry_output, _ = _run_claude_review(retry_prompt, project_path)
+        if retry_output:
+            review_data = _parse_review_json(retry_output)
+
+    if review_data is not None and review_data.get("file_comments"):
+        from app.config import get_model_config, get_review_reflect_config
+        models = get_model_config()
+        reflect_cfg = get_review_reflect_config()
+        reflect_model = models.get("reflect") or models.get("lightweight")
+        reflect_threshold = reflect_cfg.get("threshold", 5)
+        review_data["file_comments"] = _reflect_findings(
+            review_data["file_comments"],
+            diff,
+            project_path,
+            reflect_model,
+            reflect_threshold,
+            skill_dir=skill_dir,
+        )
+
+    return review_data, raw_output, error
+
+
+def run_private_review(
+    owner: str,
+    repo: str,
+    pr_number: str,
+    project_path: str,
+    notify_fn=None,
+    skill_dir: Optional[Path] = None,
+    architecture: bool = False,
+    plan_url: Optional[str] = None,
+    project_name: Optional[str] = None,
+    comments: bool = False,
+    ultra: bool = False,
+    force: bool = False,
+) -> Tuple[bool, str, Optional[dict], dict]:
+    """Run the review analysis pipeline without writing to GitHub.
+
+    This is the backend-only counterpart to :func:`run_review`. It reuses the
+    same PR context loading, diff ignore/triage, prompt, JSON parsing, retry,
+    and reflection behavior, then returns structured review data to callers.
+    It deliberately skips posting comments, replying to threads, submitting
+    verdicts, closing PRs, bot-comment triage, and incremental SHA skipping.
+    """
+    if ultra:
+        architecture = True
+
+    if notify_fn is None:
+        def notify_fn(_msg):
+            return None
+
+    try:
+        owner, repo = resolve_pr_location(owner, repo, pr_number, project_path)
+    except RuntimeError as e:
+        return False, str(e), None, {}
+
+    if not force:
+        pr_state = _fetch_pr_state(owner, repo, pr_number)
+        if pr_state in ("MERGED", "CLOSED"):
+            return (
+                True,
+                f"PR #{pr_number} is {pr_state.lower()} — skipping private review.",
+                None,
+                {},
+            )
+
+    full_repo = f"{owner}/{repo}"
+    notify_fn(f"Privately reviewing PR #{pr_number} ({full_repo})...")
+
+    try:
+        context = fetch_pr_context(owner, repo, pr_number, project_path)
+    except Exception as e:
+        return False, f"Failed to fetch PR context: {e}", None, {}
+
+    context, triaged_files = _apply_review_diff_filters(
+        context, label="Private review ",
+    )
+
+    if not context.get("diff"):
+        if context.get("diff_error"):
+            return False, f"PR #{pr_number} diff unavailable — cannot review.", None, context
+        return True, f"PR #{pr_number} has no diff — nothing to review.", None, context
+
+    plan_body = _resolve_plan_body(plan_url, context.get("body", ""))
+
+    prompt = build_review_prompt(
+        context,
+        skill_dir=skill_dir,
+        architecture=architecture,
+        comments=comments,
+        repliable_comments=[],
+        plan_body=plan_body or None,
+        project_path=project_path,
+        triaged_files=triaged_files,
+        project_name=project_name or "",
+    )
+
+    notify_fn(f"Analyzing code changes on `{context['branch']}` privately...")
+    review_data, raw_output, error = _run_review_analysis(
+        prompt, project_path, context.get("diff", ""), skill_dir=skill_dir,
+    )
+    if not raw_output:
+        detail = f" ({error})" if error else ""
+        return False, f"Provider review failed for PR #{pr_number}{detail}.", None, context
+
+    if review_data is None:
+        return False, f"Private review output for PR #{pr_number} was unparseable.", None, context
+
+    return True, f"Private review completed for PR #{pr_number}.", review_data, context
+
+
 def run_review(
     owner: str,
     repo: str,
@@ -2074,43 +2353,8 @@ def run_review(
             owner, repo, pr_number, parallel=False, bot_username=bot_username,
         )
 
-    # Step 1a: Apply review_ignore filters to the diff (from config.yaml)
-    from app.config import get_review_ignore_config
-    from app.utils import filter_diff_by_ignore
-
-    _review_ignore = get_review_ignore_config()
-    _glob_pats = _review_ignore.get("glob", [])
-    _regex_pats = _review_ignore.get("regex", [])
-    if _glob_pats or _regex_pats:
-        filtered_diff, skipped = filter_diff_by_ignore(
-            context.get("diff", ""),
-            _glob_pats,
-            _regex_pats,
-        )
-        if skipped:
-            print(
-                f"[review_runner] Ignoring {len(skipped)} file(s): {skipped}",
-                file=sys.stderr,
-            )
-        context = {**context, "diff": filtered_diff}
-
-    # Step 1a′: Content-aware triage — skip trivial file changes
-    from app.config import get_review_triage_config
-    from app.diff_triage import triage_diff_files
-
-    _triage_config = get_review_triage_config()
-    _triaged_diff, _triaged_files = triage_diff_files(
-        context.get("diff", ""), _triage_config,
-    )
-    if _triaged_files:
-        _triage_summary = ", ".join(
-            f"{t.path} ({t.reason})" for t in _triaged_files
-        )
-        log(
-            "review",
-            f"Triaged {len(_triaged_files)} trivial file(s): {_triage_summary}",
-        )
-        context = {**context, "diff": _triaged_diff}
+    # Step 1a: Apply review_ignore filters + content triage to the diff.
+    context, _triaged_files = _apply_review_diff_filters(context)
 
     if not context.get("diff"):
         if context.get("diff_error"):
@@ -2188,12 +2432,18 @@ def run_review(
     # Track review wall-clock time for footer attribution
     _review_start = time.monotonic()
 
-    # Step 2: Build review prompt
+    # Step 2: Build review prompt. Surface the bot's last structured review (if
+    # any) as authoritative prior context so a re-review builds on it.
+    prior_review_text = (
+        extract_prior_review_body(existing_comment.get("body", ""))
+        if existing_comment else None
+    )
     prompt = build_review_prompt(
         context, skill_dir=skill_dir, architecture=architecture,
         comments=comments, repliable_comments=repliable_comments,
         plan_body=plan_body or None, project_path=project_path,
-        triaged_files=_triaged_files,
+        triaged_files=_triaged_files, project_name=project_name or "",
+        prior_review=prior_review_text,
     )
 
     # Resolve provider/model for footer attribution
@@ -2208,40 +2458,12 @@ def run_review(
 
     # Step 3: Run provider review (read-only)
     notify_fn(f"Analyzing code changes on `{context['branch']}`...")
-    raw_output, error = _run_claude_review(prompt, project_path)
+    review_data, raw_output, error = _run_review_analysis(
+        prompt, project_path, context.get("diff", ""), skill_dir=skill_dir,
+    )
     if not raw_output:
         detail = f" ({error})" if error else ""
         return False, f"Provider review failed for PR #{pr_number}{detail}.", None
-
-    # Step 4: Parse structured JSON review (with retry)
-    review_data = _parse_review_json(raw_output)
-    if review_data is None:
-        # Retry once with explicit JSON instruction
-        retry_prompt = (
-            prompt
-            + "\n\nIMPORTANT: Your previous response was not valid JSON. "
-            "You MUST respond with ONLY a valid JSON object matching the "
-            "schema described above. No markdown, no text, just JSON."
-        )
-        retry_output, _ = _run_claude_review(retry_prompt, project_path)
-        if retry_output:
-            review_data = _parse_review_json(retry_output)
-
-    # Step 4b: Reflection pass — filter low-signal findings
-    if review_data is not None and review_data.get("file_comments"):
-        from app.config import get_model_config, get_review_reflect_config
-        _models = get_model_config()
-        reflect_cfg = get_review_reflect_config()
-        reflect_model = _models.get("reflect") or _models.get("lightweight")
-        reflect_threshold = reflect_cfg.get("threshold", 5)
-        review_data["file_comments"] = _reflect_findings(
-            review_data["file_comments"],
-            context.get("diff", ""),
-            project_path,
-            reflect_model,
-            reflect_threshold,
-            skill_dir=skill_dir,
-        )
 
     # Step 5: Convert to markdown for posting
     if review_data is not None:

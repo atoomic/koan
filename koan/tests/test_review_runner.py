@@ -11,8 +11,8 @@ import pytest
 from app.review_runner import (
     build_review_prompt,
     fetch_repliable_comments,
-    load_project_learnings,
     run_review,
+    run_private_review,
     _collapse_old_review,
     _detect_plan_url,
     _fetch_plan_body,
@@ -64,7 +64,8 @@ def review_skill_dir(tmp_path):
     prompts_dir.mkdir()
     (prompts_dir / "review.md").write_text(
         "Review PR: {TITLE}\nAuthor: {AUTHOR}\nBranch: {BRANCH} -> {BASE}\n"
-        "Body: {BODY}\n{SKIPPED_FILES}Diff: {DIFF}\n"
+        "Body: {BODY}\n{PROJECT_MEMORY}\n{SKIPPED_FILES}Diff: {DIFF}\n"
+        "Prior: {PRIOR_REVIEW}\n"
         "Reviews: {REVIEWS}\nComments: {REVIEW_COMMENTS}\n"
         "Issue: {ISSUE_COMMENTS}\n"
         "Repliable: {REPLIABLE_COMMENTS}\n"
@@ -181,50 +182,214 @@ class TestBuildReviewPrompt:
 
 
 # ---------------------------------------------------------------------------
-# load_project_learnings
+# Dedicated prior-review slot
 # ---------------------------------------------------------------------------
 
-class TestLoadProjectLearnings:
-    def test_returns_content_when_file_present(self, tmp_path, monkeypatch):
-        """Returns formatted section when learnings.md exists."""
-        instance_dir = tmp_path / "instance" / "memory" / "projects" / "my-project"
-        instance_dir.mkdir(parents=True)
-        (instance_dir / "learnings.md").write_text("Always use type hints.")
+class TestPriorReviewSlot:
+    def _cfg(self, include_bot_feedback=True, prior_review_max_chars=10000):
+        return {
+            "include_bot_feedback": include_bot_feedback,
+            "prior_review_max_chars": prior_review_max_chars,
+        }
 
-        import app.review_runner as rr_mod
-        monkeypatch.setattr(rr_mod, "KOAN_ROOT", tmp_path)
+    def test_prior_review_embedded(self, pr_context, review_skill_dir):
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                prior_review="FINDING_ALPHA: validate the token",
+            )
+        assert "FINDING_ALPHA: validate the token" in prompt
+        assert "{PRIOR_REVIEW}" not in prompt
 
-        result = load_project_learnings("my-project")
-        assert "Project best practices" in result
-        assert "Always use type hints." in result
+    def test_placeholder_when_no_prior_review(self, pr_context, review_skill_dir):
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir, prior_review=None,
+            )
+        assert "(No prior automated review.)" in prompt
+        assert "{PRIOR_REVIEW}" not in prompt
 
-    def test_returns_empty_when_file_absent(self, tmp_path, monkeypatch):
-        """Returns empty string when learnings.md does not exist."""
-        import app.review_runner as rr_mod
-        monkeypatch.setattr(rr_mod, "KOAN_ROOT", tmp_path)
+    def test_dedup_strips_bot_summary_from_thread(self, pr_context, review_skill_dir):
+        from app.review_markers import SUMMARY_TAG
 
-        result = load_project_learnings("no-such-project")
-        assert result == ""
+        pr_context = dict(pr_context)
+        pr_context["issue_comments"] = (
+            "@human: PLEASE_LOOK at the imports\n"
+            f"@bot: {SUMMARY_TAG}\n## Code Review\n\nBOT_SUMMARY_BODY here\n"
+            "@human2: THANKS_REVIEWER"
+        )
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                prior_review="prior review text",
+            )
+        # Human discussion stays in the thread; the bot's own summary is gone.
+        assert "PLEASE_LOOK" in prompt
+        assert "THANKS_REVIEWER" in prompt
+        assert "BOT_SUMMARY_BODY" not in prompt
 
-    def test_returns_empty_when_project_name_none(self, tmp_path, monkeypatch):
-        """Returns empty string when project_name is None."""
-        import app.review_runner as rr_mod
-        monkeypatch.setattr(rr_mod, "KOAN_ROOT", tmp_path)
+    def test_thread_untouched_when_no_prior_review(self, pr_context, review_skill_dir):
+        # Gate path (prior_review=None) must not strip the thread.
+        from app.review_markers import SUMMARY_TAG
 
-        result = load_project_learnings(None)
-        assert result == ""
+        pr_context = dict(pr_context)
+        pr_context["issue_comments"] = f"@bot: {SUMMARY_TAG}\nKEEP_THIS_BODY"
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir, prior_review=None,
+            )
+        assert "KEEP_THIS_BODY" in prompt
 
-    def test_returns_empty_when_file_empty(self, tmp_path, monkeypatch):
-        """Returns empty string when learnings.md is empty."""
-        instance_dir = tmp_path / "instance" / "memory" / "projects" / "proj"
-        instance_dir.mkdir(parents=True)
-        (instance_dir / "learnings.md").write_text("")
+    def test_prior_review_head_truncated_over_cap(self, pr_context, review_skill_dir):
+        long_text = "HEAD_KEPT " + ("x" * 200) + " TAIL_DROPPED"
+        with patch(
+            "app.config.get_review_context_config",
+            return_value=self._cfg(prior_review_max_chars=20),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir, prior_review=long_text,
+            )
+        assert "HEAD_KEPT" in prompt
+        assert "TAIL_DROPPED" not in prompt
+        assert "...(truncated)" in prompt
 
-        import app.review_runner as rr_mod
-        monkeypatch.setattr(rr_mod, "KOAN_ROOT", tmp_path)
+    def test_bot_feedback_disabled_forces_placeholder(self, pr_context, review_skill_dir):
+        with patch(
+            "app.config.get_review_context_config",
+            return_value=self._cfg(include_bot_feedback=False),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                prior_review="SHOULD_NOT_APPEAR",
+            )
+        assert "SHOULD_NOT_APPEAR" not in prompt
+        assert "(No prior automated review.)" in prompt
 
-        result = load_project_learnings("proj")
-        assert result == ""
+    def test_partial_resolves_and_interpolates_in_real_template(self, pr_context):
+        """The shared review-context partial resolves in the real review
+        template AND all its variables ({PRIOR_REVIEW}, {REVIEWS}, comment
+        sections) are interpolated — includes are resolved before placeholder
+        substitution."""
+        pr_context = dict(pr_context)
+        pr_context["reviews"] = "@human (CHANGES_REQUESTED): EXISTING_VERDICT"
+        review_dir = (
+            Path(__file__).parent.parent / "skills" / "core" / "review"
+        )
+        with patch(
+            "app.config.get_review_context_config", return_value=self._cfg(),
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_dir,
+                prior_review="FINDING_BETA: handle the proxy case",
+            )
+        # Directive resolved and every placeholder in the partial interpolated.
+        assert "{@include" not in prompt
+        assert "{PRIOR_REVIEW}" not in prompt
+        assert "{REVIEWS}" not in prompt
+        assert "{REPLIABLE_COMMENTS}" not in prompt
+        # The full review-context block is present.
+        assert "Prior Automated Review (authoritative)" in prompt
+        assert "FINDING_BETA: handle the proxy case" in prompt
+        assert "## Existing Reviews" in prompt
+        assert "EXISTING_VERDICT" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Project memory: project_name threading + opt-in session memory
+# ---------------------------------------------------------------------------
+
+class TestReviewProjectMemory:
+    def test_explicit_project_name_threaded_to_memory_lookup(
+        self, pr_context, review_skill_dir,
+    ):
+        """build_review_prompt forwards the known project_name to the memory
+        block builder instead of letting it fall back to basename guessing."""
+        with patch(
+            "app.skill_memory.build_memory_block_for_skill", return_value="",
+        ) as mock_build:
+            build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                project_path="/fake/proj", project_name="my-toolkit",
+            )
+        assert mock_build.call_args.kwargs.get("project_name") == "my-toolkit"
+
+    def test_session_memory_disabled_by_default(
+        self, pr_context, review_skill_dir,
+    ):
+        """With review_memory disabled, no session-memory lookup or block."""
+        with patch(
+            "app.skill_memory.build_memory_block_for_skill", return_value="",
+        ), patch(
+            "app.memory_manager.read_memory_window",
+        ) as mock_read, patch(
+            "app.config.get_review_memory_config",
+            return_value={"enabled": False, "max_entries": 8},
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                project_path="/fake/proj", project_name="my-toolkit",
+            )
+        mock_read.assert_not_called()
+        assert "<session-memory>" not in prompt
+
+    def test_session_memory_enabled_injects_and_excludes_learnings(
+        self, pr_context, review_skill_dir,
+    ):
+        """When enabled, recent typed entries are injected; learnings (already
+        delivered via the project-memory block) are excluded."""
+        entries = [
+            {"ts": "2026-06-20T00:00:00Z", "type": "decision",
+             "content": "Deprecate the legacy adapter."},
+            {"ts": "2026-06-19T00:00:00Z", "type": "learning",
+             "content": "LEARNING-SHOULD-NOT-APPEAR"},
+            {"ts": "2026-06-18T00:00:00Z", "type": "observation",
+             "content": "Flaky test in payments."},
+        ]
+        with patch(
+            "app.skill_memory.build_memory_block_for_skill", return_value="",
+        ), patch(
+            "app.memory_manager.read_memory_window", return_value=entries,
+        ) as mock_read, patch(
+            "app.config.get_review_memory_config",
+            return_value={"enabled": True, "max_entries": 8},
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                project_path="/fake/proj", project_name="my-toolkit",
+            )
+        mock_read.assert_called_once()
+        assert "<session-memory>" in prompt
+        assert "Deprecate the legacy adapter." in prompt
+        assert "Flaky test in payments." in prompt
+        assert "LEARNING-SHOULD-NOT-APPEAR" not in prompt
+
+    def test_session_memory_skipped_without_project_name(
+        self, pr_context, review_skill_dir,
+    ):
+        """Session memory requires a scoped project_name to avoid pulling
+        cross-project entries; absent it, the lookup is skipped."""
+        with patch(
+            "app.skill_memory.build_memory_block_for_skill", return_value="",
+        ), patch(
+            "app.memory_manager.read_memory_window",
+        ) as mock_read, patch(
+            "app.config.get_review_memory_config",
+            return_value={"enabled": True, "max_entries": 8},
+        ):
+            prompt = build_review_prompt(
+                pr_context, skill_dir=review_skill_dir,
+                project_path="/fake/proj",
+            )
+        mock_read.assert_not_called()
+        assert "<session-memory>" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1376,6 +1541,66 @@ class TestRunReview:
 
         assert success is False
         assert "failed to post" in summary.lower()
+
+
+# ---------------------------------------------------------------------------
+# run_private_review
+# ---------------------------------------------------------------------------
+
+class TestRunPrivateReview:
+    """Backend-only review analysis used by the implementation gate."""
+
+    @patch("app.review_runner._post_comment_replies")
+    @patch("app.review_runner._post_review_comment")
+    @patch("app.review_runner._reflect_findings", side_effect=lambda findings, *a, **kw: findings)
+    @patch("app.review_runner._run_claude_review")
+    @patch("app.review_runner.fetch_pr_context")
+    @patch("app.review_runner._fetch_pr_state", return_value="OPEN")
+    @patch("app.review_runner.resolve_pr_location", return_value=("owner", "repo"))
+    def test_private_review_returns_data_without_posting(
+        self, _mock_resolve, _mock_state, mock_fetch, mock_claude,
+        _mock_reflect, mock_post, mock_replies, pr_context, review_skill_dir,
+    ):
+        mock_fetch.return_value = pr_context
+        mock_claude.return_value = (json.dumps(VALID_REVIEW_JSON), "")
+
+        success, summary, review_data, context = run_private_review(
+            "owner", "repo", "42", "/tmp/project",
+            notify_fn=MagicMock(),
+            skill_dir=review_skill_dir,
+            project_name="app",
+        )
+
+        assert success is True
+        assert "Private review completed" in summary
+        assert review_data["file_comments"][0]["severity"] == "critical"
+        assert context["title"] == pr_context["title"]
+        mock_post.assert_not_called()
+        mock_replies.assert_not_called()
+
+    @patch("app.review_runner._post_review_comment")
+    @patch("app.review_runner._run_claude_review")
+    @patch("app.review_runner.fetch_pr_context")
+    @patch("app.review_runner._fetch_pr_state", return_value="OPEN")
+    @patch("app.review_runner.resolve_pr_location", return_value=("owner", "repo"))
+    def test_private_review_unparseable_does_not_post(
+        self, _mock_resolve, _mock_state, mock_fetch, mock_claude,
+        mock_post, pr_context, review_skill_dir,
+    ):
+        mock_fetch.return_value = pr_context
+        mock_claude.return_value = ("not json", "")
+
+        success, summary, review_data, _context = run_private_review(
+            "owner", "repo", "42", "/tmp/project",
+            notify_fn=MagicMock(),
+            skill_dir=review_skill_dir,
+        )
+
+        assert success is False
+        assert review_data is None
+        assert "unparseable" in summary
+        assert mock_claude.call_count == 2
+        mock_post.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

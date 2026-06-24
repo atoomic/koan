@@ -35,19 +35,7 @@ each plan requirement independently against the actual diff.
 
 ---
 
-## Existing Reviews
-
-{REVIEWS}
-
-## Existing Comments
-
-{REVIEW_COMMENTS}
-
-{ISSUE_COMMENTS}
-
-## Repliable Comments (with IDs)
-
-{REPLIABLE_COMMENTS}
+{@include review-context}
 
 ---
 

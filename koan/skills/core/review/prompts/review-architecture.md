@@ -23,19 +23,7 @@ respect boundaries, manage dependencies, and uphold design principles.
 
 ---
 
-## Existing Reviews
-
-{REVIEWS}
-
-## Existing Comments
-
-{REVIEW_COMMENTS}
-
-{ISSUE_COMMENTS}
-
-## Repliable Comments (with IDs)
-
-{REPLIABLE_COMMENTS}
+{@include review-context}
 
 ---
 

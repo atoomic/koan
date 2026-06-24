@@ -30,10 +30,12 @@ from app.pr_submit import (
 )
 from app.prompts import load_prompt_or_skill
 from app.github_url_parser import parse_pr_url
+from app.private_review_gate import format_gate_note, run_gate_for_skill
 
 logger = logging.getLogger(__name__)
 
 _SKIP_DIAGNOSE_RE = re.compile(r'\s*--skip-diagnose\s*', re.IGNORECASE)
+_REVIEW_SKILL_DIR = Path(__file__).resolve().parent.parent / "review"
 
 
 def _extract_skip_diagnose(context):
@@ -252,20 +254,43 @@ def run_fix(
 
     # In-place fix: the PR already exists, just report the branch.
     if existing_branch:
-        notify_fn(
-            f"✅ Fix applied to existing PR branch `{branch}`{context_label}"
+        gate_result = run_gate_for_skill(
+            project_path=project_path,
+            project_name=project_name,
+            pr_url=issue_url,
+            notify_fn=notify_fn,
+            skill_origin="fix",
+            review_skill_dir=_REVIEW_SKILL_DIR,
         )
-        return True, f"Fix applied to existing PR branch {branch}{context_label}"
+        gate_note = format_gate_note(gate_result)
+        notify_fn(
+            f"✅ Fix applied to existing PR branch `{branch}`"
+            f"{context_label}{gate_note}"
+        )
+        return (
+            True,
+            f"Fix applied to existing PR branch {branch}{context_label}"
+            f"{gate_note}",
+        )
 
     on_base_branch = branch in (effective_base_branch, "main", "master")
+    gate_result = run_gate_for_skill(
+        project_path=project_path,
+        project_name=project_name,
+        pr_url=pr_url or "",
+        notify_fn=notify_fn,
+        skill_origin="fix",
+        review_skill_dir=_REVIEW_SKILL_DIR,
+    )
+    gate_note = format_gate_note(gate_result)
     if pr_url:
         notify_fn(
             f"✅ Fix complete for issue {label}"
-            f"{context_label}\nDraft PR: {pr_url}"
+            f"{context_label}\nDraft PR: {pr_url}{gate_note}"
         )
         summary = (
             f"Fix complete for {label}{context_label}"
-            f"\nDraft PR: {pr_url}"
+            f"\nDraft PR: {pr_url}{gate_note}"
         )
     elif not on_base_branch:
         skip_reason = (
