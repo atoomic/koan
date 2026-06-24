@@ -27,7 +27,7 @@ from typing import List, Optional, Tuple
 from urllib.parse import quote
 
 from app.claude_step import resolve_pr_location
-from app.config import get_review_bot_triage_config, get_review_reply_config, get_review_verdict_config, is_review_compressor_enabled
+from app.config import get_review_bot_triage_config, get_review_inline_comments_config, get_review_reply_config, get_review_verdict_config, is_review_compressor_enabled
 from app.run_log import log
 from app.diff_compressor import compress_diff
 from app.github import run_gh, sanitize_github_comment, find_bot_comment
@@ -1857,6 +1857,98 @@ def _post_comment_replies(
     return posted
 
 
+def _format_inline_finding_body(item: dict) -> str:
+    """Render a single finding as a flat (non-collapsible) inline comment body.
+
+    Mirrors the collapsible summary entry: severity marker + level label +
+    title header, then the full comment, then the code snippet (if any).
+    """
+    sev = item.get("severity", "suggestion")
+    if sev not in _SEVERITY_EMOJI:
+        sev = "suggestion"
+    emoji = _SEVERITY_EMOJI[sev]
+    heading = _SEVERITY_HEADING[sev]
+    title = item.get("title", "").strip() or "Finding"
+
+    lines = [f"{emoji} {heading}: {title}", ""]
+    comment = item.get("comment", "")
+    if comment:
+        lines.append(_fix_nested_fences(comment))
+    snippet = item.get("code_snippet")
+    if snippet:
+        fence = _safe_code_fence(snippet)
+        lines.append("")
+        lines.append(fence)
+        lines.append(snippet)
+        lines.append(fence)
+    return "\n".join(lines).strip()
+
+
+def _post_inline_finding_comments(
+    owner: str,
+    repo: str,
+    pr_number: str,
+    comments: list,
+    head_sha: str,
+    max_comments: int,
+) -> int:
+    """Post each resolvable finding as a new inline PR review comment.
+
+    Additive to the main summary comment. Best-effort: a finding whose line
+    is not part of the diff (GitHub 422) is skipped without aborting the rest.
+    Returns the number of inline comments successfully posted.
+    """
+    if not comments or not head_sha or max_comments <= 0:
+        return 0
+
+    full_repo = f"{owner}/{repo}"
+    posted = 0
+    for item in comments:
+        if posted >= max_comments:
+            break
+        line_start = item.get("line_start") or 0
+        if line_start <= 0 or not item.get("file"):
+            continue
+        line = item.get("line_end") or line_start
+        body = sanitize_github_comment(_format_inline_finding_body(item))
+        try:
+            run_gh(
+                "api", f"repos/{full_repo}/pulls/{pr_number}/comments",
+                "-X", "POST",
+                "-f", f"body={body}",
+                "-f", f"commit_id={head_sha}",
+                "-f", f"path={item['file']}",
+                "-F", f"line={line}",
+                "-f", "side=RIGHT",
+            )
+            posted += 1
+        except Exception as e:
+            print(
+                f"[review_runner] failed to post inline comment on "
+                f"{item.get('file')}:{line}: {e}",
+                file=sys.stderr,
+            )
+    return posted
+
+
+def _maybe_post_inline_comments(
+    owner: str, repo: str, pr_number: str,
+    review_data: Optional[dict], head_sha: str,
+) -> int:
+    """Config-gated inline posting of structured findings (additive)."""
+    cfg = get_review_inline_comments_config()
+    if not cfg["enabled"]:
+        return 0
+    if not isinstance(review_data, dict):
+        return 0
+    findings = review_data.get("file_comments") or []
+    if not findings:
+        return 0
+    return _post_inline_finding_comments(
+        owner, repo, pr_number, findings, head_sha, cfg["max_comments"],
+    )
+
+
 def _patch_comment_body(
     owner: str, repo: str, comment_id: int, body: str,
 ) -> bool:
@@ -2609,6 +2701,17 @@ def run_review(
         model=review_model,
         duration_seconds=_review_duration,
     )
+
+    # Step 7c: Optionally post each finding as an inline PR comment (opt-in).
+    # Additive to the summary comment above and independently failable, so an
+    # inline-posting error never affects the already-posted summary.
+    if posted:
+        inline_count = _maybe_post_inline_comments(
+            owner, repo, pr_number, review_data,
+            current_shas[-1] if current_shas else "",
+        )
+        if inline_count:
+            notify_fn(f"Posted {inline_count} inline comment(s) on PR #{pr_number}.")
 
     # Step 7b: Submit formal review verdict (APPROVE / REQUEST_CHANGES)
     # so the bot's decision shows in GitHub's Reviewers panel.  Only
