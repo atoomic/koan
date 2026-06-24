@@ -615,7 +615,10 @@ def _record_skill_outcome(
         content = " | ".join(parts)[:300]
 
         from app.memory_manager import append_memory_entry
-        append_memory_entry(instance_dir, "skill_outcome", project_name or None, content)
+        append_memory_entry(
+            instance_dir, "skill_outcome", project_name or None, content,
+            source_skill=skill_name,
+        )
     except Exception as e:
         _log_runner("error", f"Skill outcome recording failed: {e}")
 
