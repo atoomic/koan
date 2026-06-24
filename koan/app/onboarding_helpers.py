@@ -62,6 +62,15 @@ def create_env_file(koan_root: Path | None = None) -> bool:
     return False
 
 
+def required_env_present() -> bool:
+    """Return True when the minimum required config is in the environment.
+
+    KOAN_ROOT is the only value the app needs at import time; when it is
+    present we can safely run env-var-only (no .env file needed).
+    """
+    return bool(os.environ.get("KOAN_ROOT", "").strip())
+
+
 def update_env_var(key: str, value: str, env_file: Path | None = None) -> bool:
     """Update or add an environment variable in a .env file."""
     path = env_file or ENV_FILE
