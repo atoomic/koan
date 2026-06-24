@@ -1326,6 +1326,9 @@ def _run_iteration(
         log("koan", "Starting post-mission pipeline...")
         _status_prefix = f"Run {run_num}/{max_runs}"
         _run.set_status(koan_root, f"{_status_prefix} — finalizing")
+        # PR URL captured during post-mission processing (before pending.md is
+        # deleted) so the concise completion line can attach it afterward.
+        _completion_pr_url = ""
         try:
             from app.mission_runner import run_post_mission
             from app.restart_manager import RESTART_EXIT_CODE
@@ -1347,6 +1350,7 @@ def _run_iteration(
                 provider_name=provider_name,
             )
 
+            _completion_pr_url = post_result.get("pr_url", "")
             if post_result.get("pending_archived"):
                 log("health", f"pending.md archived to journal ({provider_label} didn't clean up)")
             if post_result.get("auto_merge_branch"):
@@ -1404,6 +1408,7 @@ def _run_iteration(
     _run._notify_mission_end(
         instance, project_name, run_num, max_runs,
         claude_exit, mission_title,
+        pr_url=_completion_pr_url,
     )
 
     # Commit instance

@@ -576,28 +576,41 @@ def _notify_mission_end(
     max_runs: int,
     exit_code: int,
     mission_title: str = "",
+    pr_url: str = "",
 ):
     """Send a notification when a mission or autonomous run completes.
 
     Honors messaging.level:
     - normal (default): one short line for tracked skill missions
-      (✅ [project] 🔍 Reviewed <pr-url>); autonomous-run successes are
-      logged only (no bridge push); failures always surface (short form).
+      (✅ [project] 🔍 Reviewed <pr-url>); operator-initiated missions get a
+      minimal one-line success (✅ [project] Done: <title>); genuinely
+      autonomous background runs (no mission title) are logged only (no bridge
+      push); failures always surface (short form).
     - debug: full lifecycle line + journal summary (legacy behavior).
     """
     if not is_debug():
         skill = _tracked_skill(mission_title)
         if exit_code == 0:
             if skill is None:
-                from app.run_log import log_safe
-                log_safe(
-                    "mission",
-                    f"[{project_name}] Run {run_num}/{max_runs} done "
-                    "(normal mode, suppressed)",
-                )
+                # Genuinely autonomous background runs carry no mission title —
+                # suppress those (log only). An operator-initiated mission (a
+                # user/Telegram-queued task with a real title) still gets a
+                # minimal completion signal so explicitly-requested work isn't
+                # silently dropped.
+                if not (mission_title or "").strip():
+                    from app.run_log import log_safe
+                    log_safe(
+                        "mission",
+                        f"[{project_name}] Run {run_num}/{max_runs} done "
+                        "(normal mode, autonomous run suppressed)",
+                    )
+                    return
+                _notify(instance, f"✅ [{project_name}] Done: {mission_title.strip()}")
                 return
             emoji, verb = skill
-            url = _completion_pr_url(instance, project_name)
+            # Prefer the URL captured during post-mission processing (before
+            # pending.md was deleted); fall back to a best-effort re-read.
+            url = pr_url or _completion_pr_url(instance, project_name)
             line = f"✅ [{project_name}] {emoji} {verb}"
             _notify(instance, f"{line} {url}".rstrip())
             return
@@ -1569,6 +1582,7 @@ def _parallel_reap_sessions(
             _notify_mission_end(
                 instance, session.project_name, run_num, max_runs,
                 result.exit_code, session.mission_text,
+                pr_url=post.get("pr_url", ""),
             )
         except Exception as e:
             log("error", f"[parallel] notification failed for {session.id}: {e}")

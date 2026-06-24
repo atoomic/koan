@@ -1571,6 +1571,7 @@ def run_post_mission(
         "quota_exhausted": False,
         "quota_info": None,
         "cost_tracking_failed": False,
+        "pr_url": "",
     }
 
     tracker = _PipelineTracker()
@@ -1787,6 +1788,13 @@ def run_post_mission(
         pending_content = _read_pending_content(instance_dir)
         if not pending_content.strip():
             pending_content = _read_stdout_summary(stdout_file)
+        # Capture the PR URL now, while pending.md / stdout are still live —
+        # archive_pending() (below) deletes pending.md, so the concise normal-mode
+        # completion line cannot re-read it afterward. Prefer pending.md, then fall
+        # back to the full (untruncated) stdout where PR URLs often appear.
+        result["pr_url"] = _extract_pr_url(pending_content)
+        if not result["pr_url"] and stdout_file:
+            result["pr_url"] = _extract_pr_url(_read_full_stdout_text(stdout_file))
         result["pending_archived"] = archive_pending(instance_dir, project_name, run_num)
         tracker.record("journal_archive", "success" if result["pending_archived"] else "skipped",
                         "archived" if result["pending_archived"] else "nothing to archive")

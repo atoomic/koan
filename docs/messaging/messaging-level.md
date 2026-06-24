@@ -51,7 +51,8 @@ without rewriting YAML — handy for temporary debugging.
 |-------|----------|---------|
 | Mission start (`🚀 … Starting/Autonomous/Skill`) | log only | sent |
 | Tracked skill completion (`/review` `/fix` `/rebase` `/plan` `/implement`) | one short line: `✅ [project] 🔍 Reviewed <pr-url>` | verbose summary |
-| Autonomous-run success | log only | sent with journal summary |
+| Operator-initiated mission success (a user/Telegram-queued task with a real title) | one short line: `✅ [project] Done: <title>` | sent with journal summary |
+| Autonomous-run success (no mission title) | log only | sent with journal summary |
 | Mission failure | sent (short form) | sent with failure context |
 | GitHub/Jira per-mention queue line | log only | sent |
 | GitHub/Jira queued aggregate | `📬 GitHub: N new missions queued.` (when N > 0) | not emitted (per-mention lines already shown) |

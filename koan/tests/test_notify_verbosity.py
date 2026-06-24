@@ -21,6 +21,32 @@ def test_normal_mode_autonomous_success_is_suppressed(monkeypatch):
     assert sent == []  # logged only, not pushed to bridge
 
 
+def test_normal_mode_operator_mission_success_is_one_line(monkeypatch):
+    # A user-queued, non-skill mission (real title, no leading slash) is
+    # operator-initiated work — it should still get a minimal completion line,
+    # not be silently suppressed like a background autonomous run.
+    sent = []
+    monkeypatch.setattr(koan_run, "_notify", lambda inst, msg: sent.append(msg))
+    monkeypatch.setattr(koan_run, "is_debug", lambda: False)
+    koan_run._notify_mission_end("/i", "proj", 1, 3, 0, mission_title="fix the parser bug")
+    assert sent == ["✅ [proj] Done: fix the parser bug"]
+
+
+def test_normal_mode_skill_success_prefers_threaded_pr_url(monkeypatch):
+    # The PR URL captured during post-mission processing (pending.md already
+    # deleted by then) is threaded in via pr_url and must win over a re-read.
+    sent = []
+    monkeypatch.setattr(koan_run, "_notify", lambda inst, msg: sent.append(msg))
+    monkeypatch.setattr(koan_run, "is_debug", lambda: False)
+    monkeypatch.setattr(koan_run, "_completion_pr_url", lambda *a, **k: "")
+    koan_run._notify_mission_end(
+        "/i", "proj", 1, 3, 0,
+        mission_title="/review fix the parser",
+        pr_url="https://github.com/Org/repo/pull/713",
+    )
+    assert sent == ["✅ [proj] 🔍 Reviewed https://github.com/Org/repo/pull/713"]
+
+
 def test_normal_mode_failure_still_shown(monkeypatch):
     sent = []
     monkeypatch.setattr(koan_run, "_notify", lambda inst, msg: sent.append(msg))
