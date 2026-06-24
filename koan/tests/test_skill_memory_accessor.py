@@ -61,6 +61,30 @@ class TestReadContext:
         assert acc.read_context("") == ""
 
 
+class TestPathTraversalGuard:
+    """read_context / read_learnings must refuse names that escape the tree."""
+
+    def test_read_context_rejects_traversal(self, instance_dir):
+        # Plant a readable file outside the memory tree.
+        outside = instance_dir.parent / "secret"
+        outside.mkdir()
+        (outside / "context.md").write_text("TOP SECRET\n")
+        acc = MemoryAccessor(instance_dir)
+        # ../../secret would resolve to the planted file without the guard.
+        assert acc.read_context("../../secret") == ""
+
+    def test_read_context_rejects_separators_and_dotfiles(self, instance_dir):
+        acc = MemoryAccessor(instance_dir)
+        assert acc.read_context("a/b") == ""
+        assert acc.read_context("..") == ""
+        assert acc.read_context(".hidden") == ""
+
+    def test_read_learnings_rejects_traversal(self, instance_dir):
+        acc = MemoryAccessor(instance_dir)
+        assert acc.read_learnings("../../etc") == ""
+        assert acc.read_learnings("a/b") == ""
+
+
 class TestReadBlock:
     def test_returns_empty_for_blank_project(self, instance_dir):
         acc = MemoryAccessor(instance_dir)

@@ -49,7 +49,13 @@ class MemoryAccessor:
         """
         if not project:
             return ""
-        from app.skill_memory import _load_filtered_learnings, _load_recall_defaults
+        from app.skill_memory import (
+            _is_safe_project_name,
+            _load_filtered_learnings,
+            _load_recall_defaults,
+        )
+        if not _is_safe_project_name(project):
+            return ""
         max_learnings, recent_hedge = _load_recall_defaults()
         if max_k is not None:
             max_learnings = max_k
@@ -65,7 +71,13 @@ class MemoryAccessor:
         """
         if not project:
             return ""
-        from app.skill_memory import _CONTEXT_CAP_LINES, _read_capped
+        from app.skill_memory import (
+            _CONTEXT_CAP_LINES,
+            _is_safe_project_name,
+            _read_capped,
+        )
+        if not _is_safe_project_name(project):
+            return ""
         path = Path(self._instance_dir) / "memory" / "projects" / project / "context.md"
         return _read_capped(path, _CONTEXT_CAP_LINES)
 
