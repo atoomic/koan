@@ -92,7 +92,9 @@ class MemoryAccessor:
         """Return a full formatted memory block (context + priorities + learnings).
 
         Delegates to :func:`app.skill_memory.build_memory_block`.
-        Drop-in replacement for ``build_memory_block_for_skill()``.
+        Drop-in replacement for ``build_memory_block()`` (not
+        ``build_memory_block_for_skill()``, which additionally resolves the
+        project name from the registry). Pass an already-resolved project name.
         Returns ``""`` when the project name is empty or no memory exists.
         """
         if not project:
