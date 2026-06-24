@@ -3784,7 +3784,20 @@ class TestMaybeQueueAutoreview:
 
 
 class TestSkillOutcomeCapture:
-    """Test _record_skill_outcome() fired from run_post_mission pipeline."""
+    """Outcome label folded into the single session JSONL row (no duplicate).
+
+    The PR originally wrote a separate ``skill_outcome`` row; review feedback
+    found it duplicated the ``session`` row already written for the same
+    mission. The outcome is now recorded once on the session row, classified
+    consistently with the bandit pipeline.
+    """
+
+    @staticmethod
+    def _session_calls(mock_append):
+        return [
+            c for c in mock_append.call_args_list
+            if len(c.args) >= 2 and c.args[1] == "session"
+        ]
 
     @patch("app.memory_manager.append_memory_entry")
     @patch("app.mission_runner.check_auto_merge", return_value=None)
@@ -3792,7 +3805,7 @@ class TestSkillOutcomeCapture:
     @patch("app.mission_runner.archive_pending", return_value=False)
     @patch("app.quota_handler.handle_quota_exhaustion", return_value=None)
     @patch("app.mission_runner.update_usage", return_value=True)
-    def test_skill_outcome_recorded_for_skill_mission(
+    def test_no_duplicate_skill_outcome_row(
         self, mock_usage, mock_quota, mock_archive, mock_reflect,
         mock_merge, mock_append, tmp_path,
     ):
@@ -3813,14 +3826,19 @@ class TestSkillOutcomeCapture:
             start_time=int(time.time()) - 180,
         )
 
+        # No separate skill_outcome row — outcome lives on the session row.
         skill_calls = [
             c for c in mock_append.call_args_list
             if len(c.args) >= 2 and c.args[1] == "skill_outcome"
         ]
-        assert len(skill_calls) == 1
-        content = skill_calls[0].args[3]
-        assert "review" in content
-        assert "success" in content
+        assert len(skill_calls) == 0
+
+        session_calls = self._session_calls(mock_append)
+        assert len(session_calls) == 1
+        content = session_calls[0].args[3]
+        assert "/review" in content
+        # /review is a productive skill → classify_session() → "productive".
+        assert "Outcome: productive" in content
 
     @patch("app.memory_manager.append_memory_entry")
     @patch("app.mission_runner.check_auto_merge", return_value=None)
@@ -3828,7 +3846,7 @@ class TestSkillOutcomeCapture:
     @patch("app.mission_runner.archive_pending", return_value=False)
     @patch("app.quota_handler.handle_quota_exhaustion", return_value=None)
     @patch("app.mission_runner.update_usage", return_value=True)
-    def test_skill_outcome_records_failure(
+    def test_nonzero_exit_records_failure_outcome(
         self, mock_usage, mock_quota, mock_archive, mock_reflect,
         mock_merge, mock_append, tmp_path,
     ):
@@ -3848,14 +3866,10 @@ class TestSkillOutcomeCapture:
             mission_title="/rebase https://github.com/org/repo/pull/10",
         )
 
-        skill_calls = [
-            c for c in mock_append.call_args_list
-            if len(c.args) >= 2 and c.args[1] == "skill_outcome"
-        ]
-        assert len(skill_calls) == 1
-        content = skill_calls[0].args[3]
-        assert "rebase" in content
-        assert "failure" in content
+        session_calls = self._session_calls(mock_append)
+        assert len(session_calls) == 1
+        content = session_calls[0].args[3]
+        assert "Outcome: failure" in content
 
     @patch("app.memory_manager.append_memory_entry")
     @patch("app.mission_runner.check_auto_merge", return_value=None)
@@ -3863,10 +3877,13 @@ class TestSkillOutcomeCapture:
     @patch("app.mission_runner.archive_pending", return_value=False)
     @patch("app.quota_handler.handle_quota_exhaustion", return_value=None)
     @patch("app.mission_runner.update_usage", return_value=True)
-    def test_skill_outcome_skipped_for_non_skill_mission(
+    def test_outcome_classification_matches_pipeline(
         self, mock_usage, mock_quota, mock_archive, mock_reflect,
         mock_merge, mock_append, tmp_path,
     ):
+        # A zero-exit non-skill mission with no journal content classifies as
+        # "empty" — the same label the bandit/auto-merge pipeline would assign,
+        # not a bare exit-code "success".
         from app.mission_runner import run_post_mission
 
         instance_dir = str(tmp_path / "instance")
@@ -3883,82 +3900,10 @@ class TestSkillOutcomeCapture:
             mission_title="Fix the login bug on the dashboard",
         )
 
-        skill_calls = [
-            c for c in mock_append.call_args_list
-            if len(c.args) >= 2 and c.args[1] == "skill_outcome"
-        ]
-        assert len(skill_calls) == 0
-
-    @patch("app.memory_manager.append_memory_entry")
-    @patch("app.mission_runner.check_auto_merge", return_value=None)
-    @patch("app.mission_runner.trigger_reflection", return_value=False)
-    @patch("app.mission_runner.archive_pending", return_value=False)
-    @patch("app.quota_handler.handle_quota_exhaustion", return_value=None)
-    @patch("app.mission_runner.update_usage", return_value=True)
-    def test_skill_outcome_includes_provider(
-        self, mock_usage, mock_quota, mock_archive, mock_reflect,
-        mock_merge, mock_append, tmp_path,
-    ):
-        from app.mission_runner import run_post_mission
-
-        instance_dir = str(tmp_path / "instance")
-        os.makedirs(instance_dir, exist_ok=True)
-
-        run_post_mission(
-            instance_dir=instance_dir,
-            project_name="koan",
-            project_path=str(tmp_path),
-            run_num=1,
-            exit_code=0,
-            stdout_file="/tmp/out.json",
-            stderr_file="/tmp/err.txt",
-            mission_title="/check koan",
-            provider_name="copilot",
-        )
-
-        skill_calls = [
-            c for c in mock_append.call_args_list
-            if len(c.args) >= 2 and c.args[1] == "skill_outcome"
-        ]
-        assert len(skill_calls) == 1
-        content = skill_calls[0].args[3]
-        assert "copilot" in content
-
-    @patch("app.memory_manager.append_memory_entry")
-    @patch("app.mission_runner.check_auto_merge", return_value=None)
-    @patch("app.mission_runner.trigger_reflection", return_value=False)
-    @patch("app.mission_runner.archive_pending", return_value=False)
-    @patch("app.quota_handler.handle_quota_exhaustion", return_value=None)
-    @patch("app.mission_runner.update_usage", return_value=True)
-    def test_skill_outcome_truncates_long_summary(
-        self, mock_usage, mock_quota, mock_archive, mock_reflect,
-        mock_merge, mock_append, tmp_path,
-    ):
-        from app.mission_runner import run_post_mission
-
-        instance_dir = str(tmp_path / "instance")
-        os.makedirs(instance_dir, exist_ok=True)
-
-        long_arg = "x" * 500
-        run_post_mission(
-            instance_dir=instance_dir,
-            project_name="koan",
-            project_path=str(tmp_path),
-            run_num=1,
-            exit_code=0,
-            stdout_file="/tmp/out.json",
-            stderr_file="/tmp/err.txt",
-            mission_title=f"/plan {long_arg}",
-            start_time=int(time.time()) - 60,
-        )
-
-        skill_calls = [
-            c for c in mock_append.call_args_list
-            if len(c.args) >= 2 and c.args[1] == "skill_outcome"
-        ]
-        assert len(skill_calls) == 1
-        content = skill_calls[0].args[3]
-        assert len(content) <= 300
+        session_calls = self._session_calls(mock_append)
+        assert len(session_calls) == 1
+        content = session_calls[0].args[3]
+        assert "Outcome: empty" in content
 
     @patch("app.memory_manager.append_memory_entry", side_effect=OSError("disk full"))
     @patch("app.mission_runner.check_auto_merge", return_value=None)
@@ -3966,7 +3911,7 @@ class TestSkillOutcomeCapture:
     @patch("app.mission_runner.archive_pending", return_value=False)
     @patch("app.quota_handler.handle_quota_exhaustion", return_value=None)
     @patch("app.mission_runner.update_usage", return_value=True)
-    def test_skill_outcome_swallows_errors(
+    def test_outcome_recording_swallows_errors(
         self, mock_usage, mock_quota, mock_archive, mock_reflect,
         mock_merge, mock_append, tmp_path,
     ):

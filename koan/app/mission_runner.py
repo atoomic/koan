@@ -526,6 +526,7 @@ def _record_session_outcome(
     provider: str = "",
     model: str = "",
     last_action: str = "",
+    exit_code: Optional[int] = None,
 ) -> None:
     """Record session outcome for staleness tracking (fire-and-forget).
 
@@ -536,6 +537,9 @@ def _record_session_outcome(
         provider: CLI provider name (e.g. "claude", "copilot").
         model: Model identifier extracted from token output.
         last_action: Last tool action from JSONL session data (e.g. "Edit").
+        exit_code: Mission exit code. When provided, an "Outcome:" label is
+            added to the JSONL row, classified consistently with the bandit
+            pipeline (non-zero → failure; otherwise classify_session()).
     """
     try:
         from app.session_tracker import record_outcome
@@ -565,6 +569,17 @@ def _record_session_outcome(
             summary_parts.append(f"Mode: {autonomous_mode}")
         if duration_minutes:
             summary_parts.append(f"Duration: {duration_minutes}min")
+        # Record the mission outcome on this single session row, classified
+        # consistently with the bandit/auto-merge pipeline (non-zero exit →
+        # failure; otherwise the session classifier decides). This avoids a
+        # second near-duplicate row competing in the same recency/boost window.
+        if exit_code is not None:
+            if exit_code != 0:
+                outcome = "failure"
+            else:
+                from app.session_tracker import classify_session
+                outcome = classify_session(journal_content, mission_title=mission_title)
+            summary_parts.append(f"Outcome: {outcome}")
         if journal_content:
             summary_parts.append(journal_content[:500])
         content = " | ".join(summary_parts) if summary_parts else mission_title or "session"
@@ -579,48 +594,6 @@ def _record_session_outcome(
         )
     except Exception as e:
         _log_runner("error", f"JSONL session log failed: {e}")
-
-
-def _record_skill_outcome(
-    instance_dir: str,
-    project_name: str,
-    mission_title: str,
-    exit_code: int,
-    duration_seconds: int,
-    provider: str = "",
-) -> None:
-    """Record skill mission outcome to JSONL memory log (fire-and-forget)."""
-    try:
-        from app.skill_dispatch import (
-            is_skill_mission,
-            mission_command_name,
-            parse_skill_mission,
-        )
-        if not is_skill_mission(mission_title):
-            return
-
-        skill_name = mission_command_name(mission_title) or "unknown"
-        outcome = "success" if exit_code == 0 else "failure"
-
-        parts = [f"skill:{skill_name}", outcome]
-        if duration_seconds > 0:
-            parts.append(f"{duration_seconds}s")
-        if provider:
-            parts.append(f"provider:{provider}")
-
-        _, _, skill_args = parse_skill_mission(mission_title)
-        if skill_args:
-            parts.append(skill_args[:150])
-
-        content = " | ".join(parts)[:300]
-
-        from app.memory_manager import append_memory_entry
-        append_memory_entry(
-            instance_dir, "skill_outcome", project_name or None, content,
-            source_skill=skill_name,
-        )
-    except Exception as e:
-        _log_runner("error", f"Skill outcome recording failed: {e}")
 
 
 def _record_skill_metric(
@@ -1942,14 +1915,9 @@ def run_post_mission(
             provider=provider_name,
             model=_tokens.get("model", "") if _tokens else "",
             last_action=_jsonl_data.get("last_action", "") if _jsonl_data else "",
+            exit_code=exit_code,
         )
         tracker.record("session_outcome", "success")
-
-        # 7a. Record skill outcome to memory log (fire-and-forget).
-        _record_skill_outcome(
-            instance_dir, project_name, mission_title,
-            exit_code, duration_seconds, provider=provider_name,
-        )
 
         # 7a-bis. Record skill-level metrics for fix/implement missions.
         _record_skill_metric(
