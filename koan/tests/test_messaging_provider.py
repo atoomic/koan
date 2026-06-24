@@ -369,6 +369,66 @@ class TestProviderResolution:
             ):
                 assert _resolve_provider_name() == "slack"
 
+    # -- Credential auto-detection (no explicit provider chosen) -------------
+
+    _CRED_ENV = (
+        "KOAN_MESSAGING_PROVIDER",
+        "KOAN_SLACK_BOT_TOKEN",
+        "KOAN_MATRIX_ACCESS_TOKEN",
+        "KOAN_DISCORD_BOT_TOKEN",
+    )
+
+    def _clean_env(self, **overrides):
+        env = {k: "" for k in self._CRED_ENV}
+        env.update(overrides)
+        return patch.dict(os.environ, env)
+
+    def test_detects_slack_from_env_credentials(self):
+        """Setting KOAN_SLACK_BOT_TOKEN without messaging.provider resolves to
+        slack rather than defaulting to telegram — so the bridge connects and
+        no spurious telegram-credentials warning fires."""
+        from app.messaging import _resolve_provider_name
+
+        with self._clean_env(KOAN_SLACK_BOT_TOKEN="xoxb-test"):
+            with patch("app.utils.load_config", return_value={}):
+                assert _resolve_provider_name() == "slack"
+
+    def test_detects_matrix_from_config_block(self):
+        from app.messaging import _resolve_provider_name
+
+        with self._clean_env():
+            with patch(
+                "app.utils.load_config",
+                return_value={"messaging": {"matrix": {"access_token": "syt_x"}}},
+            ):
+                assert _resolve_provider_name() == "matrix"
+
+    def test_ambiguous_credentials_fall_back_to_telegram(self):
+        """When two non-telegram providers are configured, resolution is
+        ambiguous and we keep the telegram default rather than guessing."""
+        from app.messaging import _resolve_provider_name
+
+        with self._clean_env(
+            KOAN_SLACK_BOT_TOKEN="xoxb-test", KOAN_DISCORD_BOT_TOKEN="bot-test"
+        ):
+            with patch("app.utils.load_config", return_value={}):
+                assert _resolve_provider_name() == "telegram"
+
+    def test_no_credentials_defaults_to_telegram(self):
+        from app.messaging import _resolve_provider_name
+
+        with self._clean_env():
+            with patch("app.utils.load_config", return_value={}):
+                assert _resolve_provider_name() == "telegram"
+
+    def test_explicit_telegram_wins_over_detected_slack(self):
+        from app.messaging import _resolve_provider_name
+
+        with self._clean_env(
+            KOAN_MESSAGING_PROVIDER="telegram", KOAN_SLACK_BOT_TOKEN="xoxb-test"
+        ):
+            assert _resolve_provider_name() == "telegram"
+
 
 # ---------------------------------------------------------------------------
 # DEFAULT_MAX_MESSAGE_SIZE constant consistency

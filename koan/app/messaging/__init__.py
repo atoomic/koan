@@ -132,12 +132,44 @@ def reset_provider():
         _instance = None
 
 
+# Primary credential signal for each non-telegram provider. Slack credentials
+# only come from env vars; matrix/discord also accept a config.yaml block.
+_NON_TELEGRAM_ENV_CREDENTIAL = {
+    "slack": "KOAN_SLACK_BOT_TOKEN",
+    "matrix": "KOAN_MATRIX_ACCESS_TOKEN",
+    "discord": "KOAN_DISCORD_BOT_TOKEN",
+}
+
+
+def _detect_provider_from_credentials(config: dict) -> str:
+    """Infer a non-telegram provider from credentials already configured.
+
+    When the user sets up e.g. Slack (KOAN_SLACK_* env vars) but leaves
+    messaging.provider unset, the default would be telegram — producing a
+    spurious "set telegram credentials" warning and a bridge that can't connect.
+    If exactly one non-telegram provider is configured, honor it. Ambiguous
+    setups (zero or multiple) return "" and fall back to the telegram default.
+    """
+    found = {
+        name for name, var in _NON_TELEGRAM_ENV_CREDENTIAL.items()
+        if os.environ.get(var, "").strip()
+    }
+    messaging = config.get("messaging", {}) if isinstance(config, dict) else {}
+    if isinstance(messaging, dict):
+        for name in ("matrix", "discord"):
+            block = messaging.get(name)
+            if isinstance(block, dict) and any(str(v).strip() for v in block.values()):
+                found.add(name)
+    return next(iter(found)) if len(found) == 1 else ""
+
+
 def resolve_provider_name() -> str:
-    """Resolve provider name from env var or config."""
+    """Resolve provider name from env var, config, or detected credentials."""
     name = os.environ.get("KOAN_MESSAGING_PROVIDER", "")
     if name:
         return name.lower().strip()
 
+    config = {}
     try:
         from app.utils import load_config
         config = load_config()
@@ -150,6 +182,12 @@ def resolve_provider_name() -> str:
         pass
     except Exception as e:
         _write_error(f"Error reading messaging config: {e}")
+
+    # No explicit provider chosen: if exactly one non-telegram platform is
+    # already set up, use it rather than defaulting to telegram.
+    detected = _detect_provider_from_credentials(config)
+    if detected:
+        return detected
 
     return "telegram"
 
