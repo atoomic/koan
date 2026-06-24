@@ -581,6 +581,45 @@ def _record_session_outcome(
         _log_runner("error", f"JSONL session log failed: {e}")
 
 
+def _record_skill_outcome(
+    instance_dir: str,
+    project_name: str,
+    mission_title: str,
+    exit_code: int,
+    duration_seconds: int,
+    provider: str = "",
+) -> None:
+    """Record skill mission outcome to JSONL memory log (fire-and-forget)."""
+    try:
+        from app.skill_dispatch import (
+            is_skill_mission,
+            mission_command_name,
+            parse_skill_mission,
+        )
+        if not is_skill_mission(mission_title):
+            return
+
+        skill_name = mission_command_name(mission_title) or "unknown"
+        outcome = "success" if exit_code == 0 else "failure"
+
+        parts = [f"skill:{skill_name}", outcome]
+        if duration_seconds > 0:
+            parts.append(f"{duration_seconds}s")
+        if provider:
+            parts.append(f"provider:{provider}")
+
+        _, _, skill_args = parse_skill_mission(mission_title)
+        if skill_args:
+            parts.append(skill_args[:150])
+
+        content = " | ".join(parts)[:300]
+
+        from app.memory_manager import append_memory_entry
+        append_memory_entry(instance_dir, "skill_outcome", project_name or None, content)
+    except Exception as e:
+        _log_runner("error", f"Skill outcome recording failed: {e}")
+
+
 def _record_skill_metric(
     instance_dir: str,
     project_name: str,
@@ -1902,6 +1941,12 @@ def run_post_mission(
             last_action=_jsonl_data.get("last_action", "") if _jsonl_data else "",
         )
         tracker.record("session_outcome", "success")
+
+        # 7a. Record skill outcome to memory log (fire-and-forget).
+        _record_skill_outcome(
+            instance_dir, project_name, mission_title,
+            exit_code, duration_seconds, provider=provider_name,
+        )
 
         # 7a-bis. Record skill-level metrics for fix/implement missions.
         _record_skill_metric(
