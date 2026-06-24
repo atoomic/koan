@@ -6,6 +6,8 @@ from typing import List, Optional
 
 from app.provider.base import CLIProvider
 
+_DEPRECATION_WARNED = False
+
 
 class LocalLLMProvider(CLIProvider):
     """Local LLM provider via OpenAI-compatible API.
@@ -29,6 +31,20 @@ class LocalLLMProvider(CLIProvider):
     """
 
     name = "local"
+
+    def __init__(self) -> None:
+        global _DEPRECATION_WARNED
+        super().__init__()
+        if not _DEPRECATION_WARNED:
+            _DEPRECATION_WARNED = True
+            print(
+                "[provider] WARNING: the 'local' CLI provider is deprecated and "
+                "will be removed in an upcoming release. Use 'ollama-launch' "
+                "(ollama launch claude) or point the Claude CLI at your local "
+                "endpoint instead. See docs/providers/ollama-launch.md.",
+                file=sys.stderr,
+                flush=True,
+            )
 
     def _get_config(self) -> dict:
         """Get local_llm config section from config.yaml."""

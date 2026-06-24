@@ -1,5 +1,11 @@
 # Local LLM Provider
 
+> **⚠️ Deprecated.** The `local` provider is deprecated and will be removed
+> in an upcoming release. To run local models, use
+> [`ollama-launch`](ollama-launch.md) (the Claude CLI driven by
+> `ollama launch claude`) — a far more reliable harness. This page is kept
+> only for users still on `cli_provider: local`.
+
 The local provider connects Koan to any OpenAI-compatible LLM server
 running on your machine. This gives you full offline operation with no
 API costs — ideal for experimentation, privacy-sensitive work, or when

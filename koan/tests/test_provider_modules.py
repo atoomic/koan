@@ -417,6 +417,14 @@ class TestLocalLLMProvider:
     def test_name(self):
         assert LocalLLMProvider.name == "local"
 
+    def test_local_provider_emits_deprecation_warning(self, capsys):
+        import app.provider.local as local_mod
+        local_mod._DEPRECATION_WARNED = False  # reset module guard
+        local_mod.LocalLLMProvider()
+        err = capsys.readouterr().err
+        assert "deprecated" in err.lower()
+        assert "ollama-launch" in err.lower()
+
     def test_binary_is_python(self):
         p = LocalLLMProvider()
         assert p.binary() == sys.executable
