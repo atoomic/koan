@@ -3223,3 +3223,34 @@ class TestValidateSkillMetadata:
             "Core skills with validation warnings:\n"
             + "\n".join(f"  - {f}" for f in failures)
         )
+
+
+class TestSkillContextMemory:
+    def test_memory_returns_accessor(self, tmp_path):
+        ctx = SkillContext(
+            koan_root=tmp_path,
+            instance_dir=tmp_path / "instance",
+        )
+        from app.skill_memory_accessor import MemoryAccessor
+        assert isinstance(ctx.memory, MemoryAccessor)
+
+    def test_memory_is_cached(self, tmp_path):
+        ctx = SkillContext(
+            koan_root=tmp_path,
+            instance_dir=tmp_path / "instance",
+        )
+        assert ctx.memory is ctx.memory
+
+    def test_memory_not_created_until_accessed(self, tmp_path):
+        ctx = SkillContext(
+            koan_root=tmp_path,
+            instance_dir=tmp_path / "instance",
+        )
+        assert ctx._memory is None
+
+    def test_project_name_field_defaults_empty(self, tmp_path):
+        ctx = SkillContext(
+            koan_root=tmp_path,
+            instance_dir=tmp_path / "instance",
+        )
+        assert ctx.project_name == ""
