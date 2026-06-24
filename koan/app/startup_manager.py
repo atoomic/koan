@@ -20,8 +20,14 @@ def _messaging_notice_sentinel(instance: str) -> Path:
 
 
 def _notify_raw(instance, msg):
-    from app.notify import format_and_send
-    format_and_send(msg, instance_dir=instance)
+    # Send straight to Telegram, skipping the Claude-CLI personality
+    # reformatter (mirrors run.py::_notify_raw). The advisory contains literal
+    # instructions (/messaging_level debug, messaging.level: debug) the
+    # reformatter could garble, and an extra Claude CLI call at startup is
+    # wasteful — especially when quota is exhausted. Exceptions propagate so the
+    # caller's sentinel is written only after a successful send (retry next boot).
+    from app.notify import send_telegram
+    send_telegram(msg)
 
 
 def maybe_send_messaging_level_notice(instance: str) -> None:
