@@ -501,7 +501,14 @@ def _sanitize_commit_args(commit_args: list) -> list:
 
 
 def _has_hook_created_worktree_changes(cwd: str) -> bool:
-    """Return True when a hook left unstaged or untracked changes behind."""
+    """Return True when a hook left unstaged/untracked changes behind.
+
+    On an *undeterminable* worktree state (``git status`` cannot run or exits
+    non-zero) this returns True, not False: assume the hook *may* have written
+    formatter edits and let the caller stage-and-retry rather than drop them.
+    The retry re-runs the hook, which re-rejects harmlessly if there were in
+    fact no edits — so the optimistic assumption never loses valid work.
+    """
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -509,17 +516,19 @@ def _has_hook_created_worktree_changes(cwd: str) -> bool:
             capture_output=True, text=True, cwd=cwd, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        # Could not inspect the worktree — surface it instead of silently
-        # treating a hook rejection as a hard rejection (no formatter retry).
-        log_safe("git", f"could not inspect worktree after hook rejection: {exc}")
-        return False
+        log_safe(
+            "git",
+            f"could not inspect worktree after hook rejection; "
+            f"assuming possible formatter edits: {exc}",
+        )
+        return True
     if result.returncode != 0:
         log_safe(
             "git",
             f"git status failed (exit {result.returncode}) inspecting worktree "
-            f"after hook rejection; treating as no hook edits",
+            f"after hook rejection; assuming possible formatter edits",
         )
-        return False
+        return True
     for line in result.stdout.splitlines():
         if line.startswith("??"):
             return True

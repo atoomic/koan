@@ -946,25 +946,26 @@ class TestCommitIfChanges:
             ["git", "commit", "--no-verify", "-m", "test msg"], cwd="/project",
         )
 
-    def test_worktree_check_logs_and_returns_false_on_status_error(self):
-        """A failed `git status` is surfaced, not silently treated as a hard
-        hook rejection (which would skip the formatter retry)."""
+    def test_worktree_check_assumes_edits_and_logs_on_status_error(self):
+        """A failed `git status` is logged and treated as 'maybe edits' (True)
+        so the caller stages-and-retries rather than dropping formatter edits
+        whose existence couldn't be confirmed."""
         from app.claude_step import _has_hook_created_worktree_changes
 
         with patch("app.cli_exec.subprocess.run", side_effect=OSError("git missing")), \
              patch("app.claude_step.log_safe") as mock_log:
-            assert _has_hook_created_worktree_changes("/project") is False
+            assert _has_hook_created_worktree_changes("/project") is True
         assert mock_log.called
 
-    def test_worktree_check_returns_false_on_nonzero_status_exit(self):
-        """A non-zero `git status` exit must not be parsed as authoritative
-        'no changes'."""
+    def test_worktree_check_assumes_edits_on_nonzero_status_exit(self):
+        """A non-zero `git status` exit is undeterminable, not authoritative
+        'no changes' — assume possible edits (True) and log."""
         from app.claude_step import _has_hook_created_worktree_changes
 
         with patch("app.cli_exec.subprocess.run",
                    return_value=MagicMock(returncode=128, stdout="")), \
              patch("app.claude_step.log_safe") as mock_log:
-            assert _has_hook_created_worktree_changes("/project") is False
+            assert _has_hook_created_worktree_changes("/project") is True
         assert mock_log.called
 
 
