@@ -213,6 +213,12 @@ class TestHandleSocketEvent:
         provider._handle_socket_event(MagicMock(), req)
         assert provider._message_queue.empty()
 
+    def test_leading_slash_path_not_command(self, provider):
+        # A leading slash followed by a non-letter (a pasted path) is ignored.
+        req = self._make_request("message", "C123", "/etc/hosts is the culprit")
+        provider._handle_socket_event(MagicMock(), req)
+        assert provider._message_queue.empty()
+
     def test_inline_mention_in_message_processed(self, provider):
         req = self._make_request("message", "C123", "hey <@U999> ship it")
         provider._handle_socket_event(MagicMock(), req)
