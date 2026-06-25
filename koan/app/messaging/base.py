@@ -136,6 +136,21 @@ class MessagingProvider(ABC):
         """
         return True  # No-op by default; providers override if needed
 
+    def add_reaction(self, reply_to_message_id: int, emoji: str) -> bool:
+        """Add an emoji reaction to a previously-received message.
+
+        Used to acknowledge a queued mission without posting a thread reply.
+        ``reply_to_message_id`` is the inbound message token from the reply
+        context (the same value passed to ``send_message``). ``emoji`` is a
+        Unicode emoji (e.g. "✅"); providers translate to their own naming.
+
+        Returns:
+            True if the reaction was applied. False means the provider does
+            not support reactions (or the call failed) — callers should fall
+            back to a text acknowledgement.
+        """
+        return False  # No-op by default; providers override if supported
+
     def chunk_message(self, text: str, max_size: int = DEFAULT_MAX_MESSAGE_SIZE) -> List[str]:
         """Split a message into chunks respecting the provider's size limit.
 

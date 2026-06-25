@@ -593,3 +593,15 @@ class TestThreadSafety:
         assert result.returncode == 0, (
             f"subprocess failed:\nstdout={result.stdout}\nstderr={result.stderr}"
         )
+
+
+def test_add_reaction_default_is_unsupported():
+    """Base provider reports no reaction support so callers fall back to text."""
+    class _Dummy(MessagingProvider):
+        def send_message(self, text, reply_to_message_id=0): return True
+        def poll_updates(self, offset=None): return []
+        def get_provider_name(self): return "dummy"
+        def get_channel_id(self): return "c"
+        def configure(self): return True
+
+    assert _Dummy().add_reaction(123, "✅") is False
