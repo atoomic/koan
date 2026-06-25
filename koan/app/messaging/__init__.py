@@ -148,21 +148,16 @@ _NON_TELEGRAM_CONFIG_CREDENTIAL = {
 }
 
 
-def _telegram_credentials_present(config: dict) -> bool:
+def _telegram_credentials_present() -> bool:
     """True when Telegram is already set up (token + chat id present).
 
-    Checks env vars first, then the messaging.telegram config block.
+    Checks only the KOAN_TELEGRAM_TOKEN / KOAN_TELEGRAM_CHAT_ID env vars — the
+    exact source the Telegram provider reads (see telegram.py configure()). The
+    provider never consults a messaging.telegram config block, so neither does
+    this guard.
     """
-    messaging = config.get("messaging", {}) if isinstance(config, dict) else {}
-    block = messaging.get("telegram", {}) if isinstance(messaging, dict) else {}
-    if not isinstance(block, dict):
-        block = {}
-    token = os.environ.get("KOAN_TELEGRAM_TOKEN", "").strip() or str(
-        block.get("token", "")
-    ).strip()
-    chat_id = os.environ.get("KOAN_TELEGRAM_CHAT_ID", "").strip() or str(
-        block.get("chat_id", "")
-    ).strip()
+    token = os.environ.get("KOAN_TELEGRAM_TOKEN", "").strip()
+    chat_id = os.environ.get("KOAN_TELEGRAM_CHAT_ID", "").strip()
     return bool(token and chat_id)
 
 
@@ -179,7 +174,7 @@ def _detect_provider_from_credentials(config: dict) -> str:
     from a working Telegram setup would silently swap providers. In that case we
     keep the telegram default and never auto-switch.
     """
-    if _telegram_credentials_present(config):
+    if _telegram_credentials_present():
         return ""
     found = {
         name for name, var in _NON_TELEGRAM_ENV_CREDENTIAL.items()
