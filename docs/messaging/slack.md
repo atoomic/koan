@@ -160,7 +160,12 @@ You should see in the logs:
   is not set — setting only the `KOAN_SLACK_*` tokens is not enough.
 - **You must @mention the bot.** Kōan ignores un-addressed channel chatter by
   design. Ping `@Koan ...` to start; after that you can keep replying in the
-  thread without re-mentioning.
+  thread without re-mentioning. (Messages beginning with `/` followed by a
+  letter — e.g. `/help` — are an exception: they are treated as commands and
+  answered without a mention. A leading slash before a non-letter, like a
+  `//` comment or a `/.bashrc` dotfile path, stays ignored — but a
+  letter-initial path such as `/Users/foo/log.txt` looks like a command and
+  is answered.)
 
 ### Bot not receiving messages
 
@@ -179,6 +184,14 @@ You should see in the logs:
 - **Mention to start**: In the configured channel, Kōan stays quiet until you
   @mention it (or it receives an `app_mention`). Ordinary channel chatter is
   ignored, so the bot is safe to drop into a shared channel.
+- **Commands need no mention**: A message beginning with `/` followed by a
+  letter (e.g. `/help`, `/status`) is treated as a command addressed to Kōan —
+  exactly like `@Koan /help`. It replies in a thread under the command, no
+  @mention required. A leading slash before a non-letter (`//` comments,
+  dotfile paths like `/.bashrc`, numeric/symbol prefixes) is ignored. This
+  heuristic cannot tell a command from a letter-initial path, so a pasted
+  path like `/Users/foo/log.txt` at the start of a message *is* treated as a
+  command and gets an (unrecognized-command) help reply.
 - **Replies go in a thread**: When you @mention Kōan on a channel-root message,
   it replies in a **thread** under your message rather than cluttering the
   channel.

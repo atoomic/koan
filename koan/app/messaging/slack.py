@@ -323,18 +323,28 @@ class SlackProvider(MessagingProvider):
         return self._is_addressed_to_bot(event)
 
     def _is_addressed_to_bot(self, event: dict) -> bool:
-        """Return True for app_mentions, direct @mentions, or engaged threads.
+        """Return True for app_mentions, direct @mentions, commands, or engaged threads.
+
+        A message whose text begins with ``/`` followed by a letter (e.g.
+        ``/help``) is treated as a command addressed to the bot, just like an
+        explicit ``@bot /help`` — no mention required. A leading slash followed
+        by a non-letter (``//`` comments, dotfile paths like ``/.bashrc``,
+        numeric/symbol prefixes) is ignored. Note that this heuristic cannot
+        distinguish a command from a letter-initial path: a pasted path like
+        ``/Users/foo/log.txt`` at message start *is* treated as a command and
+        falls through to an (unrecognized-command) help reply.
 
         Side effect: when the bot is addressed, the conversation's thread root is
         marked engaged so subsequent replies in that thread are handled too.
         """
         text = event.get("text", "")
         mentioned = bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in text
+        is_command = bool(re.match(r"/[a-zA-Z]", text.lstrip()))
         # For a channel-root message Slack omits thread_ts; the message's own ts
         # is the root of the thread the bot will reply into.
         thread_root = event.get("thread_ts") or event.get("ts", "")
 
-        if event.get("type") == "app_mention" or mentioned:
+        if event.get("type") == "app_mention" or mentioned or is_command:
             if thread_root:
                 self._mark_engaged(thread_root)
             return True
