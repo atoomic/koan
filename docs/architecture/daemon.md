@@ -39,8 +39,8 @@ daemon-thread lanes (`awake._run_in_worker(fn, lane=...)`):
 
 - **chat** — interactive replies (`handle_chat`). When busy, a second chat
   message is answered with "⏳ Busy with a previous message."
-- **bg** — background tasks: worker skills (Claude/API calls), GitHub
-  notification processing. When busy, additional bg tasks are dropped
+- **bg** — background tasks: worker skills (Claude/API/GitHub calls typed
+  in chat, e.g. `/review`, `/rebase`). When busy, additional bg tasks are dropped
   silently (no chat spam). `_run_in_worker` returns `True`/`False`
   (started vs dropped) so callers can tell. Autonomous background work
   ignores the result and stays silent; **user-initiated** worker skills

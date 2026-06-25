@@ -653,8 +653,8 @@ def _run_in_worker(fn, *args, lane: str = "chat") -> bool:
     """Run fn(*args) in a background thread on a named lane.
 
     Two lanes exist: ``"chat"`` (interactive replies) and ``"bg"``
-    (background tasks such as worker skills / GitHub notification
-    processing).  Each lane allows one worker at a time, but the lanes run
+    (background tasks such as worker skills typed in chat — ``/review``,
+    ``/rebase``, etc.).  Each lane allows one worker at a time, but the lanes run
     concurrently, so a background task never blocks a chat reply and vice
     versa.  The Telegram poll loop is never blocked by either.
 

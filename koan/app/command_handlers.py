@@ -286,8 +286,8 @@ def _dispatch_skill(skill: Skill, command_name: str, command_args: str):
         started = _run_in_worker_cb(_run_skill, lane="bg")
         if started is False:
             send_telegram(
-                f"⏳ Busy with a previous task — /{command_name} will have to "
-                "wait. Try again in a moment."
+                f"⏳ Busy with a previous task — please re-send /{command_name} "
+                "in a moment."
             )
         return
 
