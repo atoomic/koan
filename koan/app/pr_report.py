@@ -34,6 +34,7 @@ Known limitations of the ``involves:`` source:
 
 import json
 import subprocess
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -88,7 +89,9 @@ def resolve_repos(koan_root) -> List[Tuple[str, str]]:
             try:
                 from app.github import origin_repo
                 repo = origin_repo(path)
-            except Exception:
+            except Exception as e:
+                print(f"[pr_report] origin_repo failed for {name}: {e}",
+                      file=sys.stderr)
                 repo = None
         if not repo:
             continue
@@ -304,7 +307,8 @@ def build_report(koan_root, days: int) -> str:
     user = ""
     try:
         user = get_gh_username()
-    except Exception:
+    except Exception as e:
+        print(f"[pr_report] get_gh_username failed: {e}", file=sys.stderr)
         user = ""
     if not user:
         return "Could not resolve the GitHub user (gh auth). Cannot build the PR report."
@@ -317,7 +321,8 @@ def build_report(koan_root, days: int) -> str:
         from app import cost_tracker
         instance_dir = Path(koan_root) / "instance"
         usage_by_project = cost_tracker.summarize_by_project(instance_dir, days=days)
-    except Exception:
+    except Exception as e:
+        print(f"[pr_report] usage summary failed: {e}", file=sys.stderr)
         usage_by_project = {}
 
     return format_report(counts, usage_by_project, days, start, end, partial)
