@@ -45,7 +45,11 @@ def _get_messaging_provider():
     try:
         from app.messaging import get_messaging_provider
         return get_messaging_provider()
-    except (SystemExit, Exception):
+    except (SystemExit, Exception) as e:
+        # SystemExit is intentional (import-time KOAN_ROOT checks); still log so
+        # a genuinely broken messaging config is observable, not silently
+        # degraded to text replies forever.
+        log("warn", f"messaging provider unavailable: {e}")
         return None
 
 
@@ -61,14 +65,20 @@ def _show_queuing_status() -> None:
 def _acknowledge_queued(summary: str) -> None:
     """Acknowledge a queued mission.
 
-    On providers that support reactions (Slack), add a ✅ to the user's
-    original message and clear the thinking status — no thread reply.
-    Everywhere else (Telegram/Matrix/unconfigured, or any failure), send
-    the text acknowledgement, which also clears the status on Slack.
+    Add a ✅ reaction to the user's original message on reaction-capable
+    providers. The text reply is suppressed only when the provider treats a
+    reaction as a complete ack (Slack). Providers whose text ack carries info
+    users rely on (project / priority / preview, e.g. Telegram) still get the
+    full text reply — the reaction is additive there. Matrix / unconfigured /
+    any failure always falls back to the text acknowledgement.
     """
     reply_to = get_reply_context()
     provider = _get_messaging_provider()
-    if reply_to and provider is not None and provider.add_reaction(reply_to, ACK_EMOJI):
+    reacted = False
+    if reply_to and provider is not None:
+        with contextlib.suppress(Exception):
+            reacted = provider.add_reaction(reply_to, ACK_EMOJI)
+    if reacted and provider.reaction_acknowledges_mission():
         with contextlib.suppress(Exception):
             provider.stop_typing(reply_to_message_id=reply_to)
         return

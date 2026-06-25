@@ -395,8 +395,14 @@ class TelegramProvider(MessagingProvider):
                 },
                 timeout=5,
             )
-            return resp.json().get("ok", False)
-        except (requests.RequestException, ValueError):
+            body = resp.json()
+            if body.get("ok"):
+                return True
+            print(f"[telegram] setMessageReaction error: "
+                  f"{body.get('description', 'unknown')}", file=sys.stderr)
+            return False
+        except (requests.RequestException, ValueError) as e:
+            print(f"[telegram] setMessageReaction failed: {e}", file=sys.stderr)
             return False
 
     def reset_flood_state(self):

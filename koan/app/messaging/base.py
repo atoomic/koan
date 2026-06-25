@@ -151,6 +151,18 @@ class MessagingProvider(ABC):
         """
         return False  # No-op by default; providers override if supported
 
+    def reaction_acknowledges_mission(self) -> bool:
+        """Whether a successful reaction fully replaces the text ack.
+
+        Providers where a reaction is a complete acknowledgement (e.g. Slack)
+        return True; the queued-mission text reply is then suppressed.
+        Providers where the text ack carries information users rely on
+        (project / priority / preview, e.g. Telegram) return False so the
+        informative text reply is always sent, even when a reaction is also
+        applied. Default False keeps the text ack for existing providers.
+        """
+        return False
+
     def chunk_message(self, text: str, max_size: int = DEFAULT_MAX_MESSAGE_SIZE) -> List[str]:
         """Split a message into chunks respecting the provider's size limit.
 

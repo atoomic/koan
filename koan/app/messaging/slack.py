@@ -254,6 +254,10 @@ class SlackProvider(MessagingProvider):
             print(f"[slack] reactions_add failed: {e}", file=sys.stderr)
             return False
 
+    def reaction_acknowledges_mission(self) -> bool:
+        """On Slack a ✅ reaction is a complete ack; suppress the text reply."""
+        return True
+
     # -- Internal helpers -----------------------------------------------------
 
     def _thread_for_token(self, token: int) -> str:
