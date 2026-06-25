@@ -278,7 +278,7 @@ def _dispatch_skill(skill: Skill, command_name: str, command_args: str):
                     send_telegram(f"/{command_name} failed: {type(e).__name__}: {e}")
                 except Exception as notify_err:
                     log("error", f"Failed to notify user about '{command_name}' error: {notify_err}")
-        _run_in_worker_cb(_run_skill)
+        _run_in_worker_cb(_run_skill, lane="bg")
         return
 
     # Standard skill execution

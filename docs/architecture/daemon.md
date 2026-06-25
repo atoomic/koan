@@ -32,6 +32,23 @@ process does not stop cleanly.
 Bridge state that would otherwise create circular imports lives in
 `bridge_state.py`. Bridge logging lives in `bridge_log.py`.
 
+### Worker lanes (chat vs background)
+
+The bridge runs heavy work off the messaging poll loop in two independent
+daemon-thread lanes (`awake._run_in_worker(fn, lane=...)`):
+
+- **chat** — interactive replies (`handle_chat`). When busy, a second chat
+  message is answered with "⏳ Busy with a previous message."
+- **bg** — background tasks: worker skills (Claude/API calls), GitHub
+  notification processing. When busy, additional bg tasks are dropped
+  silently (no chat spam).
+
+Because the lanes run concurrently, a long-running background task never
+blocks an interactive chat reply, and neither blocks the poll loop. One
+in-flight task per lane provides back-pressure (no unbounded fan-out). No
+extra OS process is forked — the "dedicated chat channel vs bg tasks" split is
+realized with threads inside the existing bridge process.
+
 ## Agent Loop
 
 `run.py` owns background work. Its loop is split across focused modules:

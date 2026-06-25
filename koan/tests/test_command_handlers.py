@@ -1563,7 +1563,7 @@ class TestDispatchSkillWorkerNoCallback:
         skill.audience = "bridge"
 
         # Use a real function as worker callback that runs immediately
-        def run_immediately(fn):
+        def run_immediately(fn, **kwargs):
             fn()
 
         old_cb = mod._run_in_worker_cb
@@ -1598,7 +1598,7 @@ class TestDispatchSkillWorkerExceptionHandling:
 
         # Capture the closure and run it synchronously
         captured_fn = None
-        def capture_worker(fn):
+        def capture_worker(fn, **kwargs):
             nonlocal captured_fn
             captured_fn = fn
         set_callbacks(handle_chat=MagicMock(), run_in_worker=capture_worker)
@@ -1625,7 +1625,7 @@ class TestDispatchSkillWorkerExceptionHandling:
         skill.audience = "bridge"
 
         captured_fn = None
-        def capture_worker(fn):
+        def capture_worker(fn, **kwargs):
             nonlocal captured_fn
             captured_fn = fn
         set_callbacks(handle_chat=MagicMock(), run_in_worker=capture_worker)
@@ -1652,7 +1652,7 @@ class TestDispatchSkillWorkerExceptionHandling:
         skill.audience = "bridge"
 
         captured_fn = None
-        def capture_worker(fn):
+        def capture_worker(fn, **kwargs):
             nonlocal captured_fn
             captured_fn = fn
         set_callbacks(handle_chat=MagicMock(), run_in_worker=capture_worker)

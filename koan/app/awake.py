@@ -24,7 +24,7 @@ import threading
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from app.bridge_log import log
 from app.bridge_state import (
@@ -630,22 +630,47 @@ def _format_outbox_message(raw_content: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Worker thread — runs handle_chat in background so polling stays responsive
+# Worker lanes — chat replies and background tasks run independently so a
+# long background task never blocks an interactive reply, and neither ever
+# blocks the Telegram poll loop.  One in-flight task per lane (back-pressure).
 # ---------------------------------------------------------------------------
 
-_worker_thread: Optional[threading.Thread] = None
+_WORKER_LANES = ("chat", "bg")
+_worker_threads: Dict[str, Optional[threading.Thread]] = {
+    lane: None for lane in _WORKER_LANES
+}
 _worker_lock = threading.Lock()
 
+# The chat lane tells the user when it is busy; the bg lane stays silent so
+# background work (GitHub notification parsing, etc.) never spams the channel.
+_LANE_BUSY_MSG: Dict[str, Optional[str]] = {
+    "chat": "⏳ Busy with a previous message. Try again in a moment.",
+    "bg": None,
+}
 
-def _run_in_worker(fn, *args):
-    """Run fn(*args) in a background thread. One worker at a time.
 
-    Captures the current reply context so that send_telegram() calls
-    inside the worker thread reply to the correct message in groups.
+def _run_in_worker(fn, *args, lane: str = "chat"):
+    """Run fn(*args) in a background thread on a named lane.
+
+    Two lanes exist: ``"chat"`` (interactive replies) and ``"bg"``
+    (background tasks such as worker skills / GitHub notification
+    processing).  Each lane allows one worker at a time, but the lanes run
+    concurrently, so a background task never blocks a chat reply and vice
+    versa.  The Telegram poll loop is never blocked by either.
+
+    Captures the current reply context so that send_telegram() calls inside
+    the worker thread reply to the correct message in groups.
     """
-    from app.notify import get_reply_context
+    from app.notify import (
+        clear_reply_context,
+        get_reply_context,
+        send_telegram,
+        set_reply_context,
+    )
 
-    global _worker_thread
+    if lane not in _worker_threads:
+        raise ValueError(f"unknown worker lane: {lane!r}")
+
     reply_to = get_reply_context()
 
     def _wrapper():
@@ -656,11 +681,15 @@ def _run_in_worker(fn, *args):
             clear_reply_context()
 
     with _worker_lock:
-        if _worker_thread is not None and _worker_thread.is_alive():
-            send_telegram("⏳ Busy with a previous message. Try again in a moment.")
+        existing = _worker_threads[lane]
+        if existing is not None and existing.is_alive():
+            busy_msg = _LANE_BUSY_MSG.get(lane)
+            if busy_msg:
+                send_telegram(busy_msg)
             return
-        _worker_thread = threading.Thread(target=_wrapper, daemon=True)
-        _worker_thread.start()
+        thread = threading.Thread(target=_wrapper, daemon=True)
+        _worker_threads[lane] = thread
+        thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -763,7 +792,7 @@ def handle_message(text: str):
     if is_mission(text):
         handle_mission(text)
     else:
-        _run_in_worker(handle_chat, text)
+        _run_in_worker(handle_chat, text, lane="chat")
 
 
 def _check_group_chat_mode(provider) -> None:
