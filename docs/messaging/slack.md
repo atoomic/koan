@@ -93,9 +93,9 @@ pip install 'slack-sdk>=3.27'
 Edit your `.env` file:
 
 ```bash
-# Messaging provider — REQUIRED. Without this, Kōan defaults to Telegram and
-# ignores the KOAN_SLACK_* credentials entirely (the #1 "Slack isn't working"
-# cause). Setting only the three tokens below is not enough.
+# Messaging provider. Recommended but no longer strictly required: if you set
+# the KOAN_SLACK_* tokens below and no other provider, Kōan auto-detects Slack
+# instead of defaulting to Telegram. Set this explicitly to remove any ambiguity.
 KOAN_MESSAGING_PROVIDER=slack
 
 # Slack credentials (all required)
@@ -111,7 +111,21 @@ messaging:
   provider: "slack"
 ```
 
-The env var takes precedence over `config.yaml`.
+The env var takes precedence over `config.yaml`. When neither names a provider,
+Kōan resolves the one whose credentials are present — so configuring Slack alone
+won't trigger a spurious "set telegram credentials" warning. Auto-detection is
+deliberately conservative:
+
+- If Telegram is already configured (`KOAN_TELEGRAM_TOKEN` + `KOAN_TELEGRAM_CHAT_ID`),
+  Kōan never auto-switches away from it — selecting Slack would silently swap a
+  working setup. Set `KOAN_MESSAGING_PROVIDER=slack` to switch intentionally.
+- If credentials for more than one non-telegram provider are set, the choice is
+  ambiguous and Kōan falls back to Telegram; set `KOAN_MESSAGING_PROVIDER` to
+  disambiguate.
+
+When auto-detection does pick a provider, it logs a line to the bridge stderr
+(`auto-detected messaging provider 'slack' from credentials …`) so the
+resolution is traceable.
 
 ## Step 9: Start Kōan
 
