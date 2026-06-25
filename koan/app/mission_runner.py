@@ -526,6 +526,7 @@ def _record_session_outcome(
     provider: str = "",
     model: str = "",
     last_action: str = "",
+    exit_code: Optional[int] = None,
 ) -> None:
     """Record session outcome for staleness tracking (fire-and-forget).
 
@@ -536,6 +537,9 @@ def _record_session_outcome(
         provider: CLI provider name (e.g. "claude", "copilot").
         model: Model identifier extracted from token output.
         last_action: Last tool action from JSONL session data (e.g. "Edit").
+        exit_code: Mission exit code. When provided, an "Outcome:" label is
+            added to the JSONL row, classified consistently with the bandit
+            pipeline (non-zero → failure; otherwise classify_session()).
     """
     try:
         from app.session_tracker import record_outcome
@@ -565,6 +569,17 @@ def _record_session_outcome(
             summary_parts.append(f"Mode: {autonomous_mode}")
         if duration_minutes:
             summary_parts.append(f"Duration: {duration_minutes}min")
+        # Record the mission outcome on this single session row, classified
+        # consistently with the bandit/auto-merge pipeline (non-zero exit →
+        # failure; otherwise the session classifier decides). This avoids a
+        # second near-duplicate row competing in the same recency/boost window.
+        if exit_code is not None:
+            if exit_code != 0:
+                outcome = "failure"
+            else:
+                from app.session_tracker import classify_session
+                outcome = classify_session(journal_content, mission_title=mission_title)
+            summary_parts.append(f"Outcome: {outcome}")
         if journal_content:
             summary_parts.append(journal_content[:500])
         content = " | ".join(summary_parts) if summary_parts else mission_title or "session"
@@ -1921,6 +1936,7 @@ def run_post_mission(
             provider=provider_name,
             model=_tokens.get("model", "") if _tokens else "",
             last_action=_jsonl_data.get("last_action", "") if _jsonl_data else "",
+            exit_code=exit_code,
         )
         tracker.record("session_outcome", "success")
 
