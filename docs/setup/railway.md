@@ -57,6 +57,24 @@ On every boot, `KOAN_DEPLOY=railway` makes the entrypoint:
 - Configure **token-only Git**: all `git`/`gh` operations authenticate over
   HTTPS with the resolved token (`KOAN_GH_TOKEN` if set, else `GH_TOKEN`) —
   no SSH key.
+- **Start the web dashboard** on `0.0.0.0:5000` (supervisord `dashboard`
+  program). On Railway the dashboard is the primary UI; on every other deploy
+  the program stays idle. The port is overridable via `KOAN_DASHBOARD_PORT`
+  (falls back to `PORT`, then `5000`).
+
+## Dashboard passphrase (`KOAN_DASHBOARD_PWD`)
+
+Because the Railway dashboard binds to a public host, it is **gated by a single
+shared passphrase**. Set `KOAN_DASHBOARD_PWD` to any secret string; the first
+visit shows a login page, and entering the passphrase unlocks a browser session
+(cookie-based, HttpOnly, SameSite=Lax). API routes return `401` until
+authenticated. The session secret is derived from the passphrase, so sessions
+survive re-deploys.
+
+If `KOAN_DASHBOARD_PWD` is **unset on Railway, the dashboard refuses to start**
+(it would otherwise be world-open). Set the passphrase to enable it. When
+`KOAN_DEPLOY` is not `railway`, the gate is inert and the dashboard behaves as
+the local-only tool it has always been.
 
 `make koan` either **attaches** to the already-running daemon (status/logs/
 dashboard), or runs the onboarding **wizard** on an empty volume. Because the

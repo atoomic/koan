@@ -56,7 +56,7 @@ interactive terminal share the same writable state while running non-root.
 
 ## 3. Set the service variables
 
-Service → **Variables** → add all five:
+Service → **Variables** → add these:
 
 ```
 CLAUDE_CODE_OAUTH_TOKEN = <your token>
@@ -64,6 +64,7 @@ KOAN_GH_TOKEN           = <bot PAT>
 KOAN_TELEGRAM_TOKEN     = <bot token>
 KOAN_TELEGRAM_CHAT_ID   = <your chat id>
 KOAN_DEPLOY             = railway
+KOAN_DASHBOARD_PWD      = <a passphrase to unlock the web dashboard>
 ```
 
 > ⚠️ **Use `KOAN_GH_TOKEN`, not `GH_TOKEN`.** Railway's GitHub integration
@@ -73,7 +74,7 @@ KOAN_DEPLOY             = railway
 > operations, so the bot keeps its own identity. On platforms that don't hijack
 > `GH_TOKEN`, either variable works.
 
-When all five are present, the container **self-provisions non-interactively** —
+When the credentials are present, the container **self-provisions non-interactively** —
 no shell steps, no onboarding wizard. On boot the entrypoint:
 
 - normalizes volume ownership as root, then drops to the `koan` user (so
@@ -84,7 +85,16 @@ no shell steps, no onboarding wizard. On boot the entrypoint:
 - resolves `projects.yaml` and `workspace/` from `/app/instance` first,
 - auto-registers each `instance/workspace/<dir>` clone as a project,
 - configures **token-only Git** (all `git`/`gh` over HTTPS with the resolved
-  token — `KOAN_GH_TOKEN` if set, else `GH_TOKEN` — no SSH key).
+  token — `KOAN_GH_TOKEN` if set, else `GH_TOKEN` — no SSH key),
+- starts the **web dashboard** on `0.0.0.0:5000`, gated by `KOAN_DASHBOARD_PWD`
+  (see below). Expose it by adding a public domain to the service in Railway.
+
+> 🔒 **`KOAN_DASHBOARD_PWD` is required** to expose the dashboard on Railway.
+> The dashboard binds to a public host, so it is locked behind a single shared
+> passphrase: the first visit shows a login page, and the passphrase unlocks a
+> browser session. **If the passphrase is unset, the dashboard refuses to
+> start** (rather than going world-open). Override the port with
+> `KOAN_DASHBOARD_PORT` if needed (defaults to `PORT`, then `5000`).
 
 ---
 

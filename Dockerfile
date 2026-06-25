@@ -118,5 +118,9 @@ ENV PYTHONPATH=/app/koan
 # issues in some Docker setups. See: anthropics/claude-code#9376
 ENV NODE_OPTIONS="--dns-result-order=ipv4first"
 
+# Web dashboard (started by supervisord only when KOAN_DEPLOY=railway, gated by
+# KOAN_DASHBOARD_PWD). Railway routes external traffic to this port.
+EXPOSE 5000
+
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["start"]
