@@ -42,6 +42,7 @@ Then continue from Step 4 (Install to Workspace) to collect your tokens.
    | Scope | Purpose |
    |-------|---------|
    | `chat:write` | Send messages and set the "thinking" status |
+   | `reactions:write` | Acknowledge queued missions with a ✅ reaction (falls back to a text reply if missing) |
    | `assistant:write` | Show the assistant "thinking" status (optional; `chat:write` also works) |
    | `channels:history` | Read messages in public channels |
    | `groups:history` | Read messages in private channels |
@@ -205,6 +206,29 @@ You should see in the logs:
   code…", …) via Slack's assistant status API. It clears automatically when the
   reply posts. This is best-effort: if the API call fails it is silently skipped
   and never affects the reply itself. See "Thinking status" below.
+
+## Queued-mission acknowledgement
+
+When a slash command (`/fix`, `/rebase`, `/plan`, `/review`, …) or a plain
+mission is queued, Kōan acknowledges it with a ✅ **reaction** on the original
+message on platforms that support reactions (Slack; Telegram when enabled),
+instead of a thread reply. A brief "Queuing…" status is shown while the
+acknowledgement settles. On providers without reaction support (Matrix, or an
+unconfigured provider) and on any error, Kōan replies in-thread with the
+familiar "Mission received/queued: …" text.
+
+The Slack reaction lands on the user's *own* message (not the thread root), so
+an in-thread command is acknowledged on the right message. The reaction needs
+the `reactions:write` scope; without it `reactions.add` fails and Kōan falls
+back to the text reply. Errors and unsupported platforms always reply in text.
+
+Per-platform matrix:
+
+| Provider | Acknowledgement |
+|----------|-----------------|
+| Slack | ✅ reaction (text reply on failure / missing `reactions:write`) |
+| Telegram | ✅ reaction via `setMessageReaction` (text reply on failure) |
+| Matrix / unconfigured | Text reply ("Mission received/queued: …") |
 
 ## Thinking status
 
