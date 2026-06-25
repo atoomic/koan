@@ -6,7 +6,9 @@ import pytest
 from unittest.mock import patch, call
 
 from app.git_prep import (
+    _auth_diagnostics,
     _authenticated_fetch_url,
+    _AUTH_ERROR_RE,
     _fetch_branch_refspec,
     _fetch_with_https_fallback,
     _get_remote_url,
@@ -1247,3 +1249,43 @@ class TestRunIterationIntegration:
             )
 
         assert result is False
+
+
+class TestAuthDiagnostics:
+    """Auth-failure diagnostics appended to git-prep fetch errors."""
+
+    def test_error_regex_matches_403(self):
+        assert _AUTH_ERROR_RE.search(
+            "remote: Write access to repository not granted.\n"
+            "fatal: ... returned error: 403"
+        )
+
+    def test_error_regex_ignores_unrelated(self):
+        assert not _AUTH_ERROR_RE.search("fatal: couldn't find remote ref main")
+
+    def test_diagnostics_reports_token_source_and_prefix(self, monkeypatch):
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.setenv("KOAN_GH_TOKEN", "ghp_SECRETtokenvalue123456")
+        with patch("app.git_prep.subprocess.run") as mock_run:
+            mock_run.return_value = type(
+                "R", (), {"stdout": "Logged in as bot-account", "stderr": ""}
+            )()
+            out = _auth_diagnostics()
+        assert "KOAN_GH_TOKEN" in out
+        assert "ghp_SEC" in out          # short prefix shown
+        assert "SECRETtokenvalue" not in out  # full secret never leaked
+        assert "bot-account" in out
+
+    def test_diagnostics_handles_missing_token(self, monkeypatch):
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.delenv("KOAN_GH_TOKEN", raising=False)
+        with patch("app.git_prep.subprocess.run") as mock_run:
+            mock_run.return_value = type("R", (), {"stdout": "", "stderr": "x"})()
+            out = _auth_diagnostics()
+        assert "no GH token set" in out
+
+    def test_diagnostics_survives_gh_failure(self, monkeypatch):
+        monkeypatch.setenv("KOAN_GH_TOKEN", "ghp_abc")
+        with patch("app.git_prep.subprocess.run", side_effect=OSError("no gh")):
+            out = _auth_diagnostics()
+        assert "gh auth status failed" in out
