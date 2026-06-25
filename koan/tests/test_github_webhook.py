@@ -528,10 +528,12 @@ class TestPureFunctionEdges:
         monkeypatch.setattr(wh, "atomic_write", boom)
         assert wh.write_check_signal(str(tmp_path)) is False
 
-    def test_handle_event_swallows_write_failure(self, tmp_path, monkeypatch):
+    def test_handle_event_returns_false_when_signal_not_written(self, tmp_path, monkeypatch):
         import app.github_webhook as wh
 
-        # A signal-write failure must not propagate out of handle_event.
+        # handle_event propagates the debounced-write result: when the write
+        # reports failure (False), handle_event returns False for an otherwise
+        # actionable event.
         monkeypatch.setattr(wh, "write_check_signal_debounced",
                             lambda _root: False)
         payload = {"action": "created", "repository": {"full_name": "a/b"}}
