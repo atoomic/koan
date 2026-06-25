@@ -15,10 +15,23 @@ Configuration via environment:
 |----------|---------|---------|
 | `KOAN_DASHBOARD_HOST` | `127.0.0.1` | Bind host |
 | `KOAN_DASHBOARD_PORT` | `5001` | Bind port |
+| `KOAN_DASHBOARD_PWD` | _(unset)_ | Shared passphrase that gates access (see below) |
 | `KOAN_CHAT_TIMEOUT` | `180` | Seconds to wait for a chat reply from the CLI |
 
 The dashboard reads shared state from `instance/` (missions, journal, signals, memory,
 config) and exposes a JSON/SSE API under `/api/*`.
+
+### Passphrase gate
+
+By default the dashboard is unauthenticated and meant for local-only use
+(`127.0.0.1`). Setting `KOAN_DASHBOARD_PWD` turns on a passphrase gate: every
+request must carry an authenticated session, unauthenticated HTML requests are
+redirected to a `/login` page, and `/api/*` routes return `401`. Entering the
+passphrase unlocks a cookie-based session (HttpOnly, SameSite=Lax) whose secret
+is derived from the passphrase, so sessions survive restarts. Use this whenever
+the dashboard is exposed beyond loopback. On Railway (`KOAN_DEPLOY=railway`) the
+dashboard starts automatically on `0.0.0.0:5000` and **requires** the passphrase
+— it refuses to start without one. See [Railway setup](../setup/railway.md).
 
 ## Pages
 

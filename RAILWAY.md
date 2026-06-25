@@ -17,7 +17,7 @@ You need four secrets ready (you already have these):
 | Variable | What it is | Where to get it |
 |---|---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code subscription auth (or use `ANTHROPIC_API_KEY` for API billing) | `claude setup-token` locally, or an `sk-ant-…` API key |
-| `GH_TOKEN` | A GitHub PAT for the **bot account** (the identity that opens PRs) | github.com → Settings → Developer settings → Fine-grained / classic PAT with `repo` scope |
+| `KOAN_GH_TOKEN` | A GitHub PAT for the **bot account** (the identity that opens PRs) | github.com → Settings → Developer settings → Fine-grained / classic PAT with `repo` scope |
 | `KOAN_TELEGRAM_TOKEN` | Your Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` |
 | `KOAN_TELEGRAM_CHAT_ID` | The chat (you) the bot talks to | message your bot, then read `chat.id` from `https://api.telegram.org/bot<TOKEN>/getUpdates` |
 
@@ -47,34 +47,54 @@ This is the single most important step — **only the volume survives re-deploys
 1. Service → **Settings → Volumes → New Volume**.
 2. Mount path: **`/app/instance`** (exactly this path).
 
-Railway mounts the volume as `root:root`. That is fine: when `KOAN_DEPLOY=railway`
-is set, the entrypoint **chowns `/app/instance` to the running UID at every boot**,
-so the daemon and the interactive terminal share the same writable state.
+Railway mounts the volume as `root:root`. That is fine: the image boots as root,
+the entrypoint **chowns `/app/instance` to the `koan` user at every boot**, then
+**drops privileges via `gosu`** and re-execs as `koan` — so the daemon and the
+interactive terminal share the same writable state while running non-root.
 
 ---
 
 ## 3. Set the service variables
 
-Service → **Variables** → add all five:
+Service → **Variables** → add these:
 
 ```
 CLAUDE_CODE_OAUTH_TOKEN = <your token>
-GH_TOKEN                = <bot PAT>
+KOAN_GH_TOKEN           = <bot PAT>
 KOAN_TELEGRAM_TOKEN     = <bot token>
 KOAN_TELEGRAM_CHAT_ID   = <your chat id>
 KOAN_DEPLOY             = railway
+KOAN_DASHBOARD_PWD      = <a passphrase to unlock the web dashboard>
 ```
 
-When all five are present, the container **self-provisions non-interactively** —
+> ⚠️ **Use `KOAN_GH_TOKEN`, not `GH_TOKEN`.** Railway's GitHub integration
+> injects its own `GH_TOKEN` (a `ghu_*` token for the operator account) at
+> runtime and **overwrites** any `GH_TOKEN` you set. Kōan resolves
+> `KOAN_GH_TOKEN` with priority and exports it as `GH_TOKEN` for all `git`/`gh`
+> operations, so the bot keeps its own identity. On platforms that don't hijack
+> `GH_TOKEN`, either variable works.
+
+When the credentials are present, the container **self-provisions non-interactively** —
 no shell steps, no onboarding wizard. On boot the entrypoint:
 
-- normalizes volume ownership (so `/app/instance` is writable),
+- normalizes volume ownership as root, then drops to the `koan` user (so
+  `/app/instance` is writable and processes stay non-root),
 - regenerates `/app/.env` as a **mirror** of these service variables (no symlinks;
   the Railway variables are the source of truth — any extra keys you add to an
   on-disk `.env` are preserved),
 - resolves `projects.yaml` and `workspace/` from `/app/instance` first,
 - auto-registers each `instance/workspace/<dir>` clone as a project,
-- configures **token-only Git** (all `git`/`gh` over HTTPS with `GH_TOKEN`, no SSH key).
+- configures **token-only Git** (all `git`/`gh` over HTTPS with the resolved
+  token — `KOAN_GH_TOKEN` if set, else `GH_TOKEN` — no SSH key),
+- starts the **web dashboard** on `0.0.0.0:5000`, gated by `KOAN_DASHBOARD_PWD`
+  (see below). Expose it by adding a public domain to the service in Railway.
+
+> 🔒 **`KOAN_DASHBOARD_PWD` is required** to expose the dashboard on Railway.
+> The dashboard binds to a public host, so it is locked behind a single shared
+> passphrase: the first visit shows a login page, and the passphrase unlocks a
+> browser session. **If the passphrase is unset, the dashboard refuses to
+> start** (rather than going world-open). Override the port with
+> `KOAN_DASHBOARD_PORT` if needed (defaults to `PORT`, then `5000`).
 
 ---
 
@@ -120,7 +140,7 @@ cd /app/instance/workspace
 git clone https://github.com/<you>/<repo>.git
 ```
 The clone is auto-registered as a project keyed by its directory name on the next
-loop tick. (Git auth uses `GH_TOKEN` — no prompt.)
+loop tick. (Git auth uses the resolved bot token — no prompt.)
 
 **B — declare it in `instance/projects.yaml`** (also on the volume), then redeploy
 or `make restart`. Put project config in **`instance/projects.yaml`**, never in the
@@ -147,9 +167,10 @@ Push a commit (or hit Redeploy). After the rebuild:
 | Symptom | Cause / fix |
 |---|---|
 | No Telegram message on boot | A required variable is missing/typo'd; check `KOAN_TELEGRAM_TOKEN` + `KOAN_TELEGRAM_CHAT_ID`. |
-| Permission denied on `/app/instance` | Volume not mounted at exactly `/app/instance`, or `KOAN_DEPLOY=railway` not set (it's the chown trigger). |
+| Permission denied on `/app/instance` | Volume not mounted at exactly `/app/instance`. The image chowns it as root then drops to `koan`; an unwritable volume usually means a wrong mount path. |
 | Onboarding wizard reappears | A required service variable is missing → container can't self-provision. |
-| Git prompts for a username/password | `GH_TOKEN` unset or lacks `repo` scope. |
+| Git prompts for a username/password | No token set, or it lacks `repo` scope — set `KOAN_GH_TOKEN` (preferred on Railway). |
+| PRs/commits authored by the operator, not the bot | Railway injected its own `GH_TOKEN`; set `KOAN_GH_TOKEN` to the bot token (it overrides `GH_TOKEN`). |
 | Claude "not authenticated" in logs | `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) missing/expired. Run the `auth` entrypoint command to inspect. |
 | Projects gone after a redeploy | Config/clones were outside the volume — keep them under `instance/`. |
 

@@ -16,6 +16,8 @@ Usage:
 """
 
 import contextlib
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -27,7 +29,17 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, redirect, render_template, request, url_for
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    redirect,
+    render_template,
+    render_template_string,
+    request,
+    session,
+    url_for,
+)
 from app.cli_provider import build_full_command
 from app.log_reader import LOG_DEFAULT_LIMIT, read_logs
 from app.usage_service import build_usage_payload
@@ -99,6 +111,105 @@ app = Flask(
     static_folder=str(Path(__file__).parent.parent / "static"),
     static_url_path="/static",
 )
+
+
+# ---------------------------------------------------------------------------
+# Passphrase gate (opt-in via KOAN_DASHBOARD_PWD)
+# ---------------------------------------------------------------------------
+# When KOAN_DASHBOARD_PWD is set, every request must carry an authenticated
+# session. A single shared passphrase unlocks a browser session. This is the
+# mechanism that makes it safe to expose the dashboard on a public host (e.g.
+# Railway), where it binds to 0.0.0.0. When the env var is unset, the gate is
+# inert and the dashboard behaves exactly as before (local-only use).
+DASHBOARD_PWD = os.environ.get("KOAN_DASHBOARD_PWD", "").strip()
+
+# Derive a stable secret from the passphrase so sessions survive restarts.
+# Without a passphrase, use a random per-process key (sessions are unused).
+if DASHBOARD_PWD:
+    app.secret_key = hashlib.sha256(
+        ("koan-dashboard-session:" + DASHBOARD_PWD).encode()
+    ).digest()
+else:
+    app.secret_key = os.urandom(32)
+
+# Sane cookie hardening for the shared-secret session.
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
+
+_LOGIN_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kōan — Locked</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; background:#111; color:#eee;
+           display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
+    form { background:#1b1b1b; padding:2rem; border-radius:12px; width:300px;
+           box-shadow:0 8px 30px rgba(0,0,0,.5); }
+    h1 { font-size:1.2rem; margin:0 0 1rem; text-align:center; }
+    input { width:100%; padding:.6rem; margin:.4rem 0; box-sizing:border-box;
+            border:1px solid #333; border-radius:6px; background:#222; color:#eee; }
+    button { width:100%; padding:.6rem; margin-top:.6rem; border:0; border-radius:6px;
+             background:#4a7; color:#000; font-weight:600; cursor:pointer; }
+    .err { color:#e66; font-size:.85rem; text-align:center; min-height:1.2em; }
+  </style>
+</head>
+<body>
+  <form method="post" action="{{ url_for('login') }}">
+    <h1>🧘 Kōan Dashboard</h1>
+    <div class="err">{{ error }}</div>
+    <input type="password" name="passphrase" placeholder="Passphrase" autofocus>
+    <button type="submit">Unlock</button>
+    <input type="hidden" name="next" value="{{ next_url }}">
+  </form>
+</body>
+</html>"""
+
+
+def _is_authed() -> bool:
+    """True when the current session has cleared the passphrase gate."""
+    return bool(session.get("koan_dashboard_authed"))
+
+
+@app.before_request
+def _require_passphrase():
+    """Block every request unless authenticated. No-op when no passphrase set."""
+    if not DASHBOARD_PWD:
+        return None
+    # Allow the login endpoint and static assets through unauthenticated.
+    if request.endpoint in ("login", "logout", "static"):
+        return None
+    if _is_authed():
+        return None
+    # Unauthenticated: HTML clients get the login page, API clients get 401.
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "unauthorized"}), 401
+    return redirect(url_for("login", next=request.full_path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not DASHBOARD_PWD:
+        return redirect(url_for("index"))
+    error = ""
+    next_url = request.values.get("next") or url_for("index")
+    if request.method == "POST":
+        supplied = (request.form.get("passphrase") or "").strip()
+        if hmac.compare_digest(supplied, DASHBOARD_PWD):
+            session["koan_dashboard_authed"] = True
+            session.permanent = True
+            return redirect(next_url)
+        error = "Incorrect passphrase."
+    return render_template_string(_LOGIN_TEMPLATE, error=error, next_url=next_url)
+
+
+@app.route("/logout")
+def logout():
+    session.pop("koan_dashboard_authed", None)
+    return redirect(url_for("login"))
 
 
 @app.url_defaults

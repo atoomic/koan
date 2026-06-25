@@ -2322,3 +2322,50 @@ class TestRecurringPage:
     def test_api_recurring_run_not_found(self, app_client, instance_dir):
         resp = app_client.post("/api/recurring/nope/run")
         assert resp.status_code == 404
+
+
+class TestPassphraseGate:
+    """The dashboard passphrase gate (KOAN_DASHBOARD_PWD)."""
+
+    def test_no_passphrase_allows_access(self, app_client):
+        with patch.object(dashboard, "DASHBOARD_PWD", ""):
+            resp = app_client.get("/api/status")
+            assert resp.status_code == 200
+
+    def test_passphrase_blocks_html_with_redirect(self, app_client):
+        with patch.object(dashboard, "DASHBOARD_PWD", "s3cret"):
+            resp = app_client.get("/")
+            assert resp.status_code == 302
+            assert "/login" in resp.headers["Location"]
+
+    def test_passphrase_blocks_api_with_401(self, app_client):
+        with patch.object(dashboard, "DASHBOARD_PWD", "s3cret"):
+            resp = app_client.get("/api/status")
+            assert resp.status_code == 401
+
+    def test_login_page_renders(self, app_client):
+        with patch.object(dashboard, "DASHBOARD_PWD", "s3cret"):
+            resp = app_client.get("/login")
+            assert resp.status_code == 200
+            assert b"Passphrase" in resp.data
+
+    def test_wrong_passphrase_rejected(self, app_client):
+        with patch.object(dashboard, "DASHBOARD_PWD", "s3cret"):
+            resp = app_client.post("/login", data={"passphrase": "nope"})
+            assert resp.status_code == 200
+            assert b"Incorrect passphrase" in resp.data
+
+    def test_correct_passphrase_unlocks_session(self, app_client):
+        with patch.object(dashboard, "DASHBOARD_PWD", "s3cret"):
+            resp = app_client.post("/login", data={"passphrase": "s3cret"})
+            assert resp.status_code == 302
+            # Now an authenticated request goes through.
+            resp2 = app_client.get("/api/status")
+            assert resp2.status_code == 200
+
+    def test_logout_clears_session(self, app_client):
+        with patch.object(dashboard, "DASHBOARD_PWD", "s3cret"):
+            app_client.post("/login", data={"passphrase": "s3cret"})
+            app_client.get("/logout")
+            resp = app_client.get("/api/status")
+            assert resp.status_code == 401

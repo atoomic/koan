@@ -12,6 +12,7 @@ Two public functions:
 import logging
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -57,6 +58,55 @@ def _authenticated_fetch_url(
         return None, None
     owner, repo = m.group("owner"), m.group("repo")
     return f"https://x-access-token:{token}@github.com/{owner}/{repo}.git", token
+
+
+# Matches the stderr GitHub returns when the credential lacks access to a repo
+# (private repo + token without rights, expired/wrong token, etc.).
+_AUTH_ERROR_RE = re.compile(
+    r"\b403\b|not granted|access denied|permission denied|authentication failed"
+    r"|could not read Username|terminal prompts disabled|invalid username or password",
+    re.IGNORECASE,
+)
+
+
+def _auth_diagnostics() -> str:
+    """Build an operator-facing diagnostic block for a git auth failure.
+
+    Reveals *which* credential git is using without leaking the secret: the
+    env var that supplied the token plus its short prefix, and the output of
+    ``gh auth status`` (which masks the token itself). Intended to be appended
+    to a fetch error so the operator can tell, e.g., that Railway's injected
+    ``GH_TOKEN`` is being used instead of their ``KOAN_GH_TOKEN`` bot token.
+    """
+    lines = ["", "── GitHub auth diagnostics ──"]
+
+    # Which env var supplied the token, and its non-secret prefix.
+    src = ""
+    for name in ("KOAN_GH_TOKEN", "GH_TOKEN"):
+        val = os.environ.get(name, "").strip()
+        if val:
+            src = f"{name} = {val[:7]}…({len(val)} chars)"
+            break
+    lines.append(f"token source: {src or 'no GH token set in environment'}")
+
+    # gh's own view of the active token + account (gh masks the token).
+    try:
+        out = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True, text=True, timeout=15,
+            stdin=subprocess.DEVNULL,
+        )
+        status = (out.stdout + out.stderr).strip()
+        lines.append("gh auth status:\n" + (status or "(no output)"))
+    except Exception as e:  # noqa: BLE001 - diagnostics must never raise
+        lines.append(f"gh auth status failed: {e}")
+
+    lines.append(
+        "Hint: 403/'not granted' means the active token's account lacks write "
+        "access to this repo. Add the bot as a collaborator, or set "
+        "KOAN_GH_TOKEN (it overrides GH_TOKEN) to a token with repo access."
+    )
+    return "\n".join(lines)
 
 
 def _fetch_with_https_fallback(
@@ -313,6 +363,8 @@ def prepare_project_branch(
     if rc != 0:
         result.success = False
         result.error = f"fetch failed: {stderr}"
+        if _AUTH_ERROR_RE.search(stderr or ""):
+            result.error += _auth_diagnostics()
         return result
 
     # Stash dirty state if needed
