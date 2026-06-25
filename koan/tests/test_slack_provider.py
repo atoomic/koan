@@ -423,3 +423,33 @@ class TestSendRaw:
     def test_send_raw_error(self, provider):
         provider._web_client.chat_postMessage.side_effect = Exception("fail")
         assert provider._send_raw("test") is False
+
+
+class TestAddReaction:
+    def test_add_reaction_success(self, provider):
+        provider._ts_by_token[7] = "1700000000.000100"
+        provider._web_client.reactions_add.return_value = {"ok": True}
+        assert provider.add_reaction(7, "✅") is True
+        provider._web_client.reactions_add.assert_called_once_with(
+            channel="C123", timestamp="1700000000.000100", name="white_check_mark",
+        )
+
+    def test_add_reaction_unknown_token_returns_false(self, provider):
+        assert provider.add_reaction(999, "✅") is False
+        provider._web_client.reactions_add.assert_not_called()
+
+    def test_add_reaction_already_reacted_is_success(self, provider):
+        provider._ts_by_token[7] = "1700000000.000100"
+        provider._web_client.reactions_add.side_effect = Exception("already_reacted")
+        assert provider.add_reaction(7, "✅") is True
+
+    def test_add_reaction_api_not_ok_returns_false(self, provider):
+        provider._ts_by_token[7] = "1700000000.000100"
+        provider._web_client.reactions_add.return_value = {"ok": False, "error": "boom"}
+        assert provider.add_reaction(7, "✅") is False
+
+    def test_queue_update_records_message_ts(self, provider):
+        event = {"ts": "1700000000.000200", "channel": "C123", "user": "U1"}
+        provider._queue_update("hello", event, {"event": event})
+        token = next(iter(provider._ts_by_token))
+        assert provider._ts_by_token[token] == "1700000000.000200"
