@@ -1132,7 +1132,8 @@ def _owner_token_push(remote: str, branch: str, project_path: str) -> bool:
     owner, repo = slug.split("/", 1)
     try:
         token = run_gh("auth", "token", "--user", owner, timeout=15).strip()
-    except (RuntimeError, OSError):
+    except (RuntimeError, OSError) as e:
+        print(f"[claude_step] gh auth token --user {owner} failed: {e}", file=sys.stderr)
         token = ""
     if not token:
         return False
@@ -1145,7 +1146,8 @@ def _owner_token_push(remote: str, branch: str, project_path: str) -> bool:
             capture_output=True, text=True, timeout=120,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
-        print(f"[claude_step] owner-token push to {owner}/{repo} errored: {e}", file=sys.stderr)
+        msg = str(e).replace(token, "***")
+        print(f"[claude_step] owner-token push to {owner}/{repo} errored: {msg}", file=sys.stderr)
         return False
     if result.returncode == 0:
         print(f"[claude_step] owner-token push to {owner}/{repo} succeeded", file=sys.stderr)
