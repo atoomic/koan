@@ -70,12 +70,41 @@ def _search_query(metric: str, repo: str, user: str, start: date, end: date) -> 
     raise ValueError(f"unknown metric: {metric}")
 
 
+def _normalize_repo_slug(value: Optional[str]) -> Optional[str]:
+    """Normalize a configured ``github_url`` to an ``owner/repo`` slug.
+
+    Returns the slug for a clean ``owner/repo`` value or a full GitHub URL
+    (``https://github.com/owner/repo``, ``git@github.com:owner/repo.git``).
+    Returns ``None`` when the value cannot be reduced to a single
+    ``owner/repo`` pair so the caller can fall back to the git remote.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    if "://" in value or value.startswith("git@"):
+        try:
+            from app.github_url_parser import parse_github_url
+            owner, repo, _, _ = parse_github_url(value)
+            return f"{owner}/{repo}"
+        except Exception:
+            # Bare repo URL (no /pull|/issues suffix): strip scheme/host/.git.
+            tail = value.split("://", 1)[-1].split(":", 1)[-1]
+            parts = [p for p in tail.split("/") if p][-2:]
+            if len(parts) == 2:
+                owner, repo = parts[0], parts[1].removesuffix(".git")
+                if owner and repo:
+                    return f"{owner}/{repo}"
+        return None
+    return value if value.count("/") == 1 else None
+
+
 def resolve_repos(koan_root) -> List[Tuple[str, str]]:
     """Return ``[(project_name, owner/repo), ...]`` for known projects.
 
     Reads each project's ``github_url`` from ``projects.yaml`` (merged config),
-    falling back to the ``origin`` git remote when the field is absent.
-    Projects without a resolvable repo are skipped.
+    falling back to the ``origin`` git remote when the field is absent or not a
+    resolvable ``owner/repo`` slug. Projects without a resolvable repo are
+    skipped.
     """
     from app.utils import get_known_projects
     from app.projects_config import load_projects_config, get_project_config
@@ -84,7 +113,9 @@ def resolve_repos(koan_root) -> List[Tuple[str, str]]:
     repos: List[Tuple[str, str]] = []
     seen = set()
     for name, path in get_known_projects():
-        repo = (get_project_config(config, name) or {}).get("github_url")
+        repo = _normalize_repo_slug(
+            (get_project_config(config, name) or {}).get("github_url")
+        )
         if not repo and path:
             try:
                 from app.github import origin_repo
@@ -131,7 +162,7 @@ def _run_search_batch(
             alias_map[alias] = (name, metric)
             query = _search_query(metric, safe_repo, safe_user, start, end)
             fragments.append(
-                f'{alias}: search(query: "{query}", type: ISSUE, first: 0) '
+                f'{alias}: search(query: "{query}", type: ISSUE, first: 1) '
                 f'{{ issueCount }}'
             )
 
@@ -140,7 +171,10 @@ def _run_search_batch(
         output = run_gh("api", "graphql", "-f", f"query={gql}", timeout=30)
         data = json.loads(output).get("data", {}) or {}
     except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError,
-            OSError, TypeError, ValueError):
+            OSError, TypeError, ValueError) as e:
+        repos_label = ", ".join(repo for _, repo in batch)
+        print(f"[pr_report] search batch failed ({repos_label}): {e}",
+              file=sys.stderr)
         return None
 
     result: Dict[str, Dict[str, int]] = {name: _empty_counts() for name, _ in batch}
@@ -197,6 +231,9 @@ def fetch_pr_counts(
             if single is not None:
                 counts.update(single)
             else:
+                name, repo = one
+                print(f"[pr_report] could not fetch counts for {name} ({repo}); "
+                      f"reporting as 0", file=sys.stderr)
                 partial = True
 
     return counts, partial
