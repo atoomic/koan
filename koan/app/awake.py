@@ -36,7 +36,6 @@ from app.bridge_state import (
     MISSIONS_FILE,
     OUTBOX_FILE,
     POLL_INTERVAL,
-    PROJECT_PATH,
     SOUL,
     SUMMARY,
     CONVERSATION_HISTORY_FILE,
