@@ -566,7 +566,11 @@ def _in_progress_count(koan_root: Path) -> int:
         missions_file = Path(koan_root) / "instance" / "missions.md"
         content = missions_file.read_text() if missions_file.exists() else ""
         return len(parse_sections(content).get("in_progress", []))
-    except Exception:
+    except Exception as e:
+        # A chronic parse failure silently reports zero In Progress lines,
+        # which would suppress the zombie warning for the exact "In Progress
+        # but nothing launched" case this feature targets — log it (#2086).
+        print(f"[pid_manager] in-progress count failed: {e}", file=sys.stderr)
         return 0
 
 

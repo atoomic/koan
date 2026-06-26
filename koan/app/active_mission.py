@@ -6,9 +6,10 @@ have no live provider process (a *zombie*), or a hung provider keeps aging and
 reads as "running" forever. The run-loop heartbeat (``health_check.py``) only
 proves ``run.py`` itself is alive, not that it is actually executing a mission.
 
-This module records the live provider PID plus a start time and mission id into
-``.koan-active`` when ``run_claude_task`` spawns the subprocess, and clears it on
-exit. Status consumers (dashboard, ``make status``, REST ``/v1/status``) read it
+This module records the live provider PID plus a start time, project and run
+number into ``.koan-active`` when ``run_claude_task`` spawns the subprocess, and
+clears it on exit. Status consumers (dashboard, ``make status``, REST
+``/v1/status``) read it
 via :func:`get_execution_state` to report *observed* runtime state instead of an
 inferred timestamp. See issue #2086.
 """
@@ -37,7 +38,6 @@ def write_active(
     koan_root,
     *,
     pid: int,
-    mission: str = "",
     project: str = "",
     run_num: int = 0,
     stdout_file: str = "",
@@ -45,7 +45,6 @@ def write_active(
     """Record the live provider subprocess as the active mission."""
     record = {
         "pid": pid,
-        "mission": (mission or "").strip()[:200],
         "project": project or "",
         "run_num": run_num,
         "started_at": time.time(),
@@ -126,7 +125,12 @@ def _live_session_count(koan_root) -> int:
 
         instance_dir = Path(koan_root) / "instance"
         sessions = SessionRegistry(str(instance_dir)).get_active()
-    except Exception:
+    except Exception as e:
+        # A swallowed read failure both masks a genuinely working parallel
+        # session (reported idle) and can produce a false zombie flag, since
+        # live sessions are what suppress that flag — log it so a registry
+        # regression surfaces instead of degrading silently to zero (#2086).
+        log.warning("active-mission session registry read failed: %s", e)
         return 0
     return sum(1 for s in sessions if _pid_alive(getattr(s, "pid", None)))
 
@@ -134,9 +138,8 @@ def _live_session_count(koan_root) -> int:
 def get_execution_state(koan_root) -> dict:
     """Classify real provider execution from the ``.koan-active`` signal.
 
-    Returns a dict with keys ``state``, ``pid``, ``mission``, ``project``,
-    ``run_num``, ``elapsed``, ``last_output_age`` and ``sessions``. ``state``
-    is one of:
+    Returns a dict with keys ``state``, ``pid``, ``project``, ``run_num``,
+    ``elapsed``, ``last_output_age`` and ``sessions``. ``state`` is one of:
 
     - ``idle``    — no provider running (no active signal, no parallel session)
     - ``working`` — live PID and recent (or unknown) output, or a live parallel
@@ -151,7 +154,6 @@ def get_execution_state(koan_root) -> dict:
         return {
             "state": "working" if sessions > 0 else "idle",
             "pid": None,
-            "mission": "",
             "project": "",
             "run_num": 0,
             "elapsed": 0,
@@ -178,7 +180,6 @@ def get_execution_state(koan_root) -> dict:
     return {
         "state": state,
         "pid": pid,
-        "mission": record.get("mission", ""),
         "project": record.get("project", ""),
         "run_num": record.get("run_num", 0),
         "elapsed": max(0, elapsed),
