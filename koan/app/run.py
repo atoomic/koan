@@ -552,14 +552,38 @@ _SKILL_COMPLETION = {
     "implement": ("🔨", "Implemented"),
 }
 
+# Tracked skills whose canonical completion line carries the PR URL that the
+# runner's own outcome line would otherwise restate. For these the agent loop is
+# the sole reporter (the runner's duplicate line is suppressed). /plan is tracked
+# but deliberately excluded: it never opens a PR — it emits an *issue*/Jira URL or
+# an inline plan body that the PR-only canonical extraction cannot recover — so
+# its runner outcome line is the only place that content reaches the user and must
+# never be suppressed (#2153 follow-up).
+_PR_URL_SKILLS = {"review", "fix", "rebase", "implement"}
+
+
+def _skill_command_name(mission_title: str) -> str:
+    """Return the lowercased slash-command name of a mission, or "" if none."""
+    t = (mission_title or "").strip()
+    if not t.startswith("/"):
+        return ""
+    return t[1:].split(None, 1)[0].lower()
+
 
 def _tracked_skill(mission_title: str):
     """Return (emoji, past_tense) if the mission is a tracked skill, else None."""
-    t = (mission_title or "").strip()
-    if not t.startswith("/"):
-        return None
-    cmd = t[1:].split(None, 1)[0].lower()
-    return _SKILL_COMPLETION.get(cmd)
+    cmd = _skill_command_name(mission_title)
+    return _SKILL_COMPLETION.get(cmd) if cmd else None
+
+
+def _canonical_line_carries_url(mission_title: str) -> bool:
+    """True when the agent loop's canonical completion line carries the same URL
+    the runner's outcome line would, so the runner line can be safely suppressed.
+
+    Only the PR-producing tracked skills qualify. /plan is tracked but its URL
+    (issue/Jira) or inline body cannot be recovered by the PR-only canonical
+    extraction, so it is excluded — its runner line is the sole reporter (#2153)."""
+    return _skill_command_name(mission_title) in _PR_URL_SKILLS
 
 
 def _completion_pr_url(instance, project_name):
@@ -595,6 +619,18 @@ def _notify_mission_normal(
     # deleted); fall back to a best-effort re-read.
     if skill is not None:
         emoji, verb = skill
+        # /plan is tracked but the canonical line cannot carry its issue/Jira URL
+        # or inline body (PR-only extraction). The runner already emitted that
+        # content via notify_outcome (not suppressed), so emitting a bare
+        # "✅ [project] 🧠 Planned" here would just duplicate the row with less
+        # information. Log only and let the runner's line stand (#2153).
+        if not _canonical_line_carries_url(mission_title):
+            from app.run_log import log_safe
+            log_safe(
+                "mission",
+                f"[{project_name}] {verb} (runner emitted outcome line)",
+            )
+            return
         url = pr_url or _completion_pr_url(instance, project_name)
         _notify(instance, f"✅ [{project_name}] {emoji} {verb} {url}".rstrip())
         return
@@ -2753,6 +2789,16 @@ def _run_skill_mission(
     }
     if _mission_model_key:
         skill_env["KOAN_MISSION_MODEL_KEY"] = _mission_model_key
+    # For PR-producing tracked skills (/review, /fix, /rebase, /implement) the
+    # agent loop emits the canonical "✅ [project] 🔍 Reviewed <url>" completion
+    # line after the runner finishes (see _notify_mission_end). In normal mode the
+    # runner's own notify_outcome() line would advertise the same URL, producing a
+    # duplicate row in chat (#2153). Signal the subprocess to log-only its outcome
+    # line; debug mode keeps both for full verbosity. /plan is deliberately
+    # excluded — its canonical line cannot carry the issue/Jira URL or inline
+    # plan body, so suppressing the runner line would drop that content entirely.
+    if _canonical_line_carries_url(mission_title) and not is_debug():
+        skill_env["KOAN_SUPPRESS_RUNNER_OUTCOME"] = "1"
     stderr_fh = None
     out_fh = None
     try:

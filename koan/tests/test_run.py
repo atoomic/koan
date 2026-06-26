@@ -4291,6 +4291,61 @@ class TestRunSkillMissionEnv:
         assert "env" in call_kwargs
         assert call_kwargs["env"]["PYTHONPATH"] == str(tmp_path / "koan")
 
+    def _run_with_title(self, tmp_path, mission_title, is_debug):
+        """Run _run_skill_mission and return the env passed to Popen."""
+        from app.run import _run_skill_mission
+        koan_root = str(tmp_path)
+        instance = str(tmp_path / "instance")
+        (tmp_path / "instance").mkdir()
+        (tmp_path / "instance" / "journal").mkdir(parents=True)
+        (tmp_path / "koan").mkdir()
+
+        mock_proc = self._make_mock_popen(stdout_lines=["ok\n"])
+
+        with patch("app.run.subprocess.Popen", side_effect=mock_proc._side_effect) as mock_popen, \
+             patch("app.run.is_debug", return_value=is_debug), \
+             patch("app.run._get_koan_branch", return_value="main"), \
+             patch("app.run._restore_koan_branch"), \
+             patch("app.run._reset_terminal"), \
+             patch("app.mission_runner.run_post_mission"):
+            _run_skill_mission(
+                skill_cmd=["python3", "--help"],
+                koan_root=koan_root,
+                instance=instance,
+                project_name="test",
+                project_path=str(tmp_path),
+                run_num=1,
+                mission_title=mission_title,
+                autonomous_mode="implement",
+            )
+        return mock_popen.call_args[1]["env"]
+
+    def test_suppress_outcome_set_for_tracked_skill_normal_mode(self, tmp_path):
+        """PR-producing tracked skills get KOAN_SUPPRESS_RUNNER_OUTCOME=1 so the
+        runner's outcome line does not duplicate the agent-loop completion line,
+        which carries the same PR URL (#2153)."""
+        env = self._run_with_title(tmp_path, "/review https://x/pull/1", is_debug=False)
+        assert env.get("KOAN_SUPPRESS_RUNNER_OUTCOME") == "1"
+
+    def test_suppress_outcome_not_set_in_debug_mode(self, tmp_path):
+        """Debug mode keeps both lines for full verbosity."""
+        env = self._run_with_title(tmp_path, "/review https://x/pull/1", is_debug=True)
+        assert "KOAN_SUPPRESS_RUNNER_OUTCOME" not in env
+
+    def test_suppress_outcome_not_set_for_plan(self, tmp_path):
+        """/plan is tracked but never opens a PR — its runner emits the issue/Jira
+        URL (or inline plan body) that the PR-only canonical line cannot carry, so
+        the flag must NOT be set or that content is lost in normal mode (#2153)."""
+        env = self._run_with_title(tmp_path, "/plan add dark mode", is_debug=False)
+        assert "KOAN_SUPPRESS_RUNNER_OUTCOME" not in env
+
+    def test_suppress_outcome_not_set_for_untracked_skill(self, tmp_path):
+        """The canonical-completion dedup is scoped to PR-producing tracked skills.
+        Untracked skills (e.g. /recreate) are left untouched by design, so the
+        flag is not set and the runner's outcome line still reaches chat."""
+        env = self._run_with_title(tmp_path, "/recreate https://x/pull/1", is_debug=False)
+        assert "KOAN_SUPPRESS_RUNNER_OUTCOME" not in env
+
     def test_appends_stream_usage_to_stdout_file_for_post_mission(self, tmp_path):
         """Skill stream usage sidecar is appended to stdout file for token parsing."""
         from app.run import _run_skill_mission
