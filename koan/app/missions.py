@@ -1777,6 +1777,137 @@ def prune_completed_sections(
 
 
 # ---------------------------------------------------------------------------
+# Structural integrity: validation, conservative self-heal, size bounds
+# ---------------------------------------------------------------------------
+
+# Sections that must exist (in this order) for a healthy missions.md.
+# CI is optional (migrated lazily) so it is not required here.
+_REQUIRED_SECTIONS = ("pending", "in_progress", "done", "failed")
+_CANONICAL_HEADERS = {
+    "pending": "## Pending",
+    "in_progress": "## In Progress",
+    "done": "## Done",
+    "failed": "## Failed",
+}
+
+
+def validate_missions_structure(content: str) -> List[str]:
+    """Check structural invariants of missions.md content.
+
+    Returns a list of human-readable issue descriptions. An empty list
+    means the file is structurally healthy. This is a read-only check —
+    it never mutates content.
+
+    Invariants checked:
+    - Each required canonical section is present exactly once.
+    - No ``## `` header is glued to a preceding non-blank line (the
+      production corruption mode from issue #2085).
+    - Every ``- `` item line falls under a recognised section.
+    """
+    issues: List[str] = []
+
+    if not content.strip():
+        # Empty file is not corrupt — startup recreates the skeleton.
+        return issues
+
+    lines = content.splitlines()
+    seen: Dict[str, int] = {}
+    current = None
+    prev_line = None
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if prev_line is not None and prev_line.strip() != "":
+                issues.append(
+                    f"Section header glued to preceding item (missing blank line): {stripped!r}"
+                )
+            key = classify_section(stripped[3:].strip())
+            current = key
+            if key:
+                seen[key] = seen.get(key, 0) + 1
+        elif stripped.startswith("- ") and current is None:
+            issues.append(f"Item line outside any section: {stripped[:60]!r}")
+        prev_line = line
+
+    for key in _REQUIRED_SECTIONS:
+        count = seen.get(key, 0)
+        if count == 0:
+            issues.append(f"Missing required section: {_CANONICAL_HEADERS[key]}")
+        elif count > 1:
+            issues.append(f"Duplicate section header ({count}x): {_CANONICAL_HEADERS[key]}")
+
+    return issues
+
+
+def repair_missions_structure(content: str) -> str:
+    """Conservatively repair structural corruption in missions.md content.
+
+    Repairs applied (all content-preserving):
+    - Insert a blank line before any ``## `` header glued to a preceding
+      item, so section boundaries are unambiguous.
+    - Append any missing required canonical section headers at the end.
+    - Collapse runaway blank lines via :func:`normalize_content`.
+
+    Items, ideas, and any non-canonical content are preserved verbatim;
+    this never drops mission lines. Returns the repaired content.
+    """
+    if not content.strip():
+        return DEFAULT_SKELETON
+
+    lines = content.splitlines()
+    out: List[str] = []
+    for line in lines:
+        if line.strip().startswith("## ") and out and out[-1].strip() != "":
+            out.append("")  # restore the missing blank line before the header
+        out.append(line)
+
+    repaired = "\n".join(out)
+
+    present = {
+        classify_section(ln.strip()[3:].strip())
+        for ln in repaired.splitlines()
+        if ln.strip().startswith("## ")
+    }
+    missing = [k for k in _REQUIRED_SECTIONS if k not in present]
+    for key in missing:
+        repaired += f"\n\n{_CANONICAL_HEADERS[key]}\n"
+
+    return normalize_content(repaired)
+
+
+def enforce_size_bound(
+    content: str,
+    max_lines: int,
+    done_keep: int,
+    failed_keep: int,
+) -> Tuple[str, int]:
+    """Prune completed sections so the file stays within ``max_lines``.
+
+    First prunes Done/Failed to the configured keeps. If the file is still
+    over the line cap, progressively shrinks the keeps (Done first, then
+    Failed) until under the cap or nothing left to prune. Pending and
+    In Progress items are never touched — only completed history is shed.
+
+    Returns (new_content, total_pruned).
+    """
+    content, total_pruned = prune_completed_sections(content, done_keep, failed_keep)
+    if max_lines <= 0:
+        return content, total_pruned
+
+    keep_done, keep_failed = done_keep, failed_keep
+    while len(content.splitlines()) > max_lines and (keep_done > 0 or keep_failed > 0):
+        if keep_done >= keep_failed and keep_done > 0:
+            keep_done = max(0, keep_done - 5)
+        else:
+            keep_failed = max(0, keep_failed - 5)
+        content, pruned = prune_completed_sections(content, keep_done, keep_failed)
+        total_pruned += pruned
+
+    return content, total_pruned
+
+
+# ---------------------------------------------------------------------------
 # Parallel session support
 # ---------------------------------------------------------------------------
 

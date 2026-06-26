@@ -82,3 +82,34 @@ missions continue through the configured provider.
 Crash recovery moves stale In Progress work back to a safe state. Stagnation
 retries are tracked separately so a stuck provider session can be retried a
 limited number of times before regular failure handling and user notification.
+
+## File Integrity And Size Bounds
+
+`missions.md` is on the hot path of every loop iteration, so a malformed write
+can silently degrade the whole agent. `startup_manager.prune_missions_done`
+(run at startup) and `run._prune_missions_history` (run post-mission) keep the
+file healthy:
+
+- **Validation** — `validate_missions_structure()` checks the canonical
+  sections are present exactly once, that no `## ` header is glued to the
+  preceding item (the production corruption mode), and that no item lines fall
+  outside a section.
+- **Self-heal** — `repair_missions_structure()` conservatively restores missing
+  blank lines around headers and appends any missing canonical sections, never
+  dropping mission lines (Pending/In Progress items and non-canonical sections
+  like Ideas are preserved). A merely incomplete file (e.g. a fresh install
+  without `## Failed`) is healed silently; genuine corruption is first backed up
+  to `instance/.missions.md.bak-<ts>` and surfaced to the operator via the
+  outbox.
+- **Size bounds** — `enforce_size_bound()` prunes Done/Failed history to the
+  configured keeps, then progressively sheds more old completed entries until
+  the file is under the line cap. Pending and In Progress are never pruned.
+
+Configurable under a `missions:` section in `config.yaml`:
+
+```yaml
+missions:
+  done_keep: 50      # max Done items retained
+  failed_keep: 30    # max Failed items retained
+  max_lines: 500     # hard line cap (0 disables)
+```
