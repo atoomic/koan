@@ -5241,6 +5241,64 @@ class TestSubmitReviewVerdict:
         result = _submit_review_verdict("owner", "repo", "42", approve=True, head_sha="abc")
         assert result is False
 
+    def test_self_approve_falls_back_to_comment(self):
+        """GitHub forbids approving your own PR (HTTP 422). The verdict body
+        must still land as a COMMENT review instead of being lost."""
+        from app.review_runner import _submit_review_verdict
+
+        self_err = RuntimeError(
+            "gh failed: gh api repos/owner/repo... — gh: Unprocessable Entity "
+            '(HTTP 422)\n{"message":"Unprocessable Entity","errors":'
+            '["Can not approve your own pull request"]}'
+        )
+        calls = []
+
+        def fake_gh(*args, **kwargs):
+            calls.append(args)
+            if any(a == "event=APPROVE" for a in args):
+                raise self_err
+            return ""
+
+        with patch("app.review_runner.run_gh", side_effect=fake_gh):
+            result = _submit_review_verdict(
+                "owner", "repo", "42", approve=True, head_sha="abc",
+            )
+        assert result is True
+        # First attempt APPROVE, second attempt COMMENT with the same body.
+        assert any("event=APPROVE" in a for a in calls[0])
+        assert any("event=COMMENT" in a for a in calls[1])
+
+    def test_self_request_changes_falls_back_to_comment(self):
+        """REQUEST_CHANGES on your own PR is also rejected with 422."""
+        from app.review_runner import _submit_review_verdict
+
+        self_err = RuntimeError(
+            "gh: Unprocessable Entity (HTTP 422) "
+            "Can not request changes on your own pull request"
+        )
+
+        def fake_gh(*args, **kwargs):
+            if any(a == "event=REQUEST_CHANGES" for a in args):
+                raise self_err
+            return ""
+
+        with patch("app.review_runner.run_gh", side_effect=fake_gh):
+            result = _submit_review_verdict(
+                "owner", "repo", "42", approve=False, head_sha="abc",
+            )
+        assert result is True
+
+    @patch("app.review_runner.run_gh",
+           side_effect=RuntimeError("gh: Unprocessable Entity (HTTP 422) "
+                                    "No commits between base and head"))
+    def test_unrelated_422_does_not_fall_back(self, mock_gh):
+        """A 422 that is not a self-review limitation must not be silently
+        retried as a COMMENT — it returns False so the failure stays visible."""
+        from app.review_runner import _submit_review_verdict
+        result = _submit_review_verdict("owner", "repo", "42", approve=True, head_sha="abc")
+        assert result is False
+        assert mock_gh.call_count == 1
+
     @patch("app.review_runner.run_gh")
     def test_custom_body(self, mock_gh):
         from app.review_runner import _submit_review_verdict
