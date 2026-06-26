@@ -100,7 +100,8 @@ Response:
       "project": "my-project",
       "run_num": 12,
       "elapsed": 42,
-      "last_output_age": 3.1
+      "last_output_age": 3.1,
+      "sessions": 0
     }
   },
   "missions": {
@@ -127,14 +128,21 @@ The `execution` block reports **observed** runtime state — backed by the live
 provider PID in `.koan-active` and provider-output recency — not the
 declarative `missions.md` ▶ timestamp, which can silently diverge (#2086):
 
-- `working` — a live provider PID with recent (or not-yet-produced) output.
-- `stalled` — a live PID but no output for over 120s (hung session).
+- `working` — a live provider PID with recent (or not-yet-produced) output, or
+  a live parallel worktree session (tracked in `sessions.json`).
+- `stalled` — a live PID but no output for over 120s (hung session). A recorded
+  stdout file that has vanished is treated as stalled, never as `working`.
 - `zombie` — a recorded PID that is no longer alive.
 - `idle` — no provider running.
 
 The top-level `execution.zombie` is `true` when an *In Progress* mission line
-exists but no live provider process backs it — surfacing the gap loudly instead
-of reporting a stuck/never-launched mission as "running".
+exists but no live provider process backs it. To avoid flapping during the
+brief start/stop windows where the `missions.md` line and the `.koan-active`
+signal momentarily disagree, the orphan check requires that the run-loop
+heartbeat (`.koan-run-heartbeat`) has gone stale before flagging the `idle`
+case — a recorded-but-dead PID is always flagged immediately. Live parallel
+sessions also suppress the flag. The same cross-check backs the `make status`
+`execution:` line.
 
 ### Missions
 

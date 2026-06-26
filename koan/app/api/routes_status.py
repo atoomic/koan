@@ -96,16 +96,21 @@ def _attention_count() -> int:
         return 0
 
 
-def _execution_truth(agent: dict, missions: dict) -> dict:
+def _execution_truth(agent: dict, missions: dict, koan_root: Path) -> dict:
     """Reconcile declarative In Progress state against observed liveness (#2086).
 
     A mission line in *In Progress* with no live provider process is a zombie:
-    surfaced loudly here rather than silently reported as "running".
+    surfaced loudly here rather than silently reported as "running". The
+    zombie determination is shared with ``make status`` via
+    ``active_mission.is_zombie`` (debounced against the normal start/stop
+    windows and aware of parallel sessions).
     """
+    from app.active_mission import is_zombie
+
     execution = agent.get("execution") or {}
     exec_state = execution.get("state", "idle")
     in_progress = missions.get("in_progress", 0) > 0
-    zombie = in_progress and exec_state in ("idle", "zombie")
+    zombie = is_zombie(koan_root, in_progress=in_progress, execution=execution)
     return {
         "provider_state": exec_state,
         "in_progress_lines": missions.get("in_progress", 0),
@@ -124,6 +129,6 @@ def status():
             "missions": missions,
             "signals": _signal_flags(),
             "attention_count": _attention_count(),
-            "execution": _execution_truth(agent, missions),
+            "execution": _execution_truth(agent, missions, _koan_root()),
         }
     )

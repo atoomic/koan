@@ -14,6 +14,7 @@ inferred timestamp. See issue #2086.
 """
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -21,6 +22,8 @@ from typing import Optional
 
 from app.signals import ACTIVE_FILE
 from app.utils import atomic_write_json
+
+log = logging.getLogger("koan.active_mission")
 
 # Live PID but no provider output for this long → "stalled" rather than "working".
 STALL_THRESHOLD_SECONDS = 120
@@ -57,10 +60,19 @@ def clear_active(koan_root) -> None:
 
 
 def read_active(koan_root) -> Optional[dict]:
-    """Return the active-mission record, or None if absent/unreadable."""
+    """Return the active-mission record, or None if absent/unreadable.
+
+    An absent signal is the normal idle case (no log). A *present but
+    unparseable* signal is an anomaly during an active mission, so the
+    corruption case is logged before degrading to None.
+    """
+    path = _active_path(koan_root)
     try:
-        return json.loads(_active_path(koan_root).read_text())
-    except (OSError, ValueError):
+        return json.loads(path.read_text())
+    except OSError:
+        return None
+    except ValueError as e:
+        log.warning("active-mission signal %s is corrupt: %s", path, e)
         return None
 
 
@@ -83,37 +95,68 @@ def _pid_alive(pid) -> bool:
 
 
 def _last_output_age(record: dict) -> Optional[float]:
-    """Seconds since the provider last wrote stdout, or None if unknown."""
+    """Seconds since the provider last wrote stdout.
+
+    Returns ``None`` only when no stdout file was recorded (legitimately
+    unknown → callers treat as "working"). When a file *was* recorded but
+    cannot be stat'd (deleted/unreadable while the provider hangs), the age is
+    unknowable yet suspicious — return ``inf`` so the session is classified
+    "stalled" rather than masking a stall behind the optimistic "working".
+    """
     f = record.get("stdout_file")
     if not f:
         return None
     try:
         return max(0.0, time.time() - Path(f).stat().st_mtime)
-    except OSError:
-        return None
+    except OSError as e:
+        log.warning("active-mission stdout %s unreadable: %s", f, e)
+        return float("inf")
+
+
+def _live_session_count(koan_root) -> int:
+    """Number of parallel worktree sessions still running with a live PID.
+
+    The single ``.koan-active`` record only covers the main run-loop provider;
+    the parallel-session executor (``session_manager``) spawns its own provider
+    subprocesses tracked in ``sessions.json``. Best-effort: any failure to read
+    the registry counts as zero live sessions.
+    """
+    try:
+        from app.session_manager import SessionRegistry
+
+        instance_dir = Path(koan_root) / "instance"
+        sessions = SessionRegistry(str(instance_dir)).get_active()
+    except Exception:
+        return 0
+    return sum(1 for s in sessions if _pid_alive(getattr(s, "pid", None)))
 
 
 def get_execution_state(koan_root) -> dict:
     """Classify real provider execution from the ``.koan-active`` signal.
 
     Returns a dict with keys ``state``, ``pid``, ``mission``, ``project``,
-    ``run_num``, ``elapsed`` and ``last_output_age``. ``state`` is one of:
+    ``run_num``, ``elapsed``, ``last_output_age`` and ``sessions``. ``state``
+    is one of:
 
-    - ``idle``    — no active-mission signal (no provider running)
-    - ``working`` — live PID and recent (or unknown) output
+    - ``idle``    — no provider running (no active signal, no parallel session)
+    - ``working`` — live PID and recent (or unknown) output, or a live parallel
+      session
     - ``stalled`` — live PID but no output for ``STALL_THRESHOLD_SECONDS``
     - ``zombie``  — signal present but the recorded PID is not alive
     """
     record = read_active(koan_root)
+    sessions = _live_session_count(koan_root)
     if not record:
+        # No main-loop provider signal — but parallel sessions may be running.
         return {
-            "state": "idle",
+            "state": "working" if sessions > 0 else "idle",
             "pid": None,
             "mission": "",
             "project": "",
             "run_num": 0,
             "elapsed": 0,
             "last_output_age": None,
+            "sessions": sessions,
         }
 
     pid = record.get("pid")
@@ -128,6 +171,10 @@ def get_execution_state(koan_root) -> dict:
     started = record.get("started_at") or 0
     elapsed = int(time.time() - started) if started else 0
 
+    # ``inf`` (unreadable stdout) drives the "stalled" classification above but
+    # must not leak into JSON output, where it serializes as invalid ``Infinity``.
+    reported_age = out_age if (out_age is not None and out_age != float("inf")) else None
+
     return {
         "state": state,
         "pid": pid,
@@ -135,5 +182,34 @@ def get_execution_state(koan_root) -> dict:
         "project": record.get("project", ""),
         "run_num": record.get("run_num", 0),
         "elapsed": max(0, elapsed),
-        "last_output_age": out_age,
+        "last_output_age": reported_age,
+        "sessions": sessions,
     }
+
+
+def is_zombie(koan_root, *, in_progress: bool, execution: Optional[dict] = None) -> bool:
+    """Reconcile a declarative *In Progress* mission against observed liveness.
+
+    A genuine zombie (#2086) is an In Progress mission with no live provider
+    backing it. The naive check — In Progress but no active signal — flaps
+    ``true`` during the brief start/stop windows where the ``missions.md`` line
+    and the ``.koan-active`` signal momentarily disagree (mission marked In
+    Progress just before the provider spawns, or signal cleared just before the
+    mission is finalized). Those windows happen while ``run.py`` is alive and
+    its heartbeat fresh, so the ``idle`` case is only treated as an orphan once
+    the run-loop heartbeat has gone stale.
+    """
+    if not in_progress:
+        return False
+    ex = execution if execution is not None else get_execution_state(koan_root)
+    state = ex.get("state")
+    if state == "zombie":
+        return True  # recorded provider PID is dead — unambiguous orphan
+    if state in ("working", "stalled"):
+        return False  # a provider (or parallel session) is alive
+    # state == "idle": no provider signal at all. Only an orphan if the run
+    # loop itself is no longer healthy — otherwise this is a normal
+    # between-missions window that will resolve within seconds.
+    from app.health_check import check_run_heartbeat
+
+    return not check_run_heartbeat(str(koan_root))
