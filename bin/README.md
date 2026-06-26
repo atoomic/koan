@@ -38,10 +38,10 @@ CLI, e.g. `-p "<prompt>" --model <name> --output-format json --verbose …`.
 | Wrapper | Backend | Setup guide |
 |---------|---------|-------------|
 | `oc-claude` | OpenCode Go (via `ocgo` proxy) | [docs/providers/opencode.md](../docs/providers/opencode.md) |
+| `ollama-claude` | Local Ollama (via `ollama launch claude`) | [docs/providers/ollama-wrapper.md](../docs/providers/ollama-wrapper.md) |
 
 ## Adding a new flavor
 
 Copy `oc-claude`, adjust the dependency check and the backend exec line, and
 add a matching `docs/providers/<backend>.md` setup guide plus a row in the
-table above. Planned future flavors include `ollama-claude` (local Ollama) and
-an OpenAI variant.
+table above. A planned future flavor is an OpenAI variant.

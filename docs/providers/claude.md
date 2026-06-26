@@ -145,6 +145,11 @@ When unset or empty, Koan uses the standard `claude` command from PATH.
 > ships a ready-made wrapper, `bin/oc-claude`, that routes the Claude CLI
 > through the `ocgo` proxy. Set `KOAN_CLAUDE_CLI_PATH` to that script.
 
+> **Running a local Ollama model through the Claude CLI?** See
+> [ollama-wrapper.md](ollama-wrapper.md) — it ships a ready-made wrapper,
+> `bin/ollama-claude`, that routes the Claude CLI through
+> `ollama launch claude`. Set `KOAN_CLAUDE_CLI_PATH` to that script.
+
 ### MCP (Model Context Protocol) Servers
 
 Claude Code supports MCP servers for extended capabilities (browser,
