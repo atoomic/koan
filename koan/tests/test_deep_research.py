@@ -1626,3 +1626,83 @@ class TestPrCoverage:
 
         assert "pending_prs" in data
         assert data["pending_prs"][0]["number"] == 42
+
+
+class TestFileHotspots:
+    """Tests for git-churn hotspot detection (_gather_file_hotspots)."""
+
+    def _research(self, env):
+        return DeepResearch(env["instance"], env["project_name"], env["project_path"])
+
+    def _git_log(self, lines):
+        """Build a fake `git log --numstat --format=%H` stdout."""
+        return "\n".join(lines) + "\n"
+
+    def test_ranks_files_by_change_count(self, research_env):
+        """Higher commit-frequency files rank first with normalized churn."""
+        # 25 commits to clear the min-commit gate; hot.py touched 3x, cold.py 1x.
+        lines = []
+        for i in range(25):
+            lines.append(f"{'a' * 40}")
+            lines.append("1\t0\tcold.py" if i == 0 else "1\t0\thot.py")
+        # ensure cold.py appears at least once and hot.py dominates
+        lines[1] = "1\t0\tcold.py"
+        completed = subprocess.CompletedProcess([], 0, self._git_log(lines), "")
+        with patch("app.deep_research.subprocess.run", return_value=completed):
+            spots = self._research(research_env)._gather_file_hotspots()
+
+        files = [s["file"] for s in spots]
+        assert files[0] == "hot.py"
+        assert spots[0]["churn"] == 1.0
+        assert all(0 < s["churn"] <= 1.0 for s in spots)
+
+    def test_skips_when_too_few_commits(self, research_env):
+        """A young project (< 20 commits) yields no hotspots."""
+        lines = []
+        for _ in range(5):
+            lines.append("a" * 40)
+            lines.append("1\t0\tapp.py")
+        completed = subprocess.CompletedProcess([], 0, self._git_log(lines), "")
+        with patch("app.deep_research.subprocess.run", return_value=completed):
+            assert self._research(research_env)._gather_file_hotspots() == []
+
+    def test_excludes_tests_and_generated(self, research_env):
+        """Test, lockfile, and generated paths are not ranked as hotspots."""
+        lines = []
+        for _ in range(25):
+            lines.append("a" * 40)
+            lines.append("1\t0\ttests/test_foo.py")
+            lines.append("1\t0\tpoetry.lock")
+            lines.append("1\t0\tdist/bundle.js")
+            lines.append("1\t0\tsrc/core.py")
+        completed = subprocess.CompletedProcess([], 0, self._git_log(lines), "")
+        with patch("app.deep_research.subprocess.run", return_value=completed):
+            spots = self._research(research_env)._gather_file_hotspots()
+
+        assert [s["file"] for s in spots] == ["src/core.py"]
+
+    def test_git_unavailable_returns_empty(self, research_env):
+        """A git failure degrades gracefully to no hotspots."""
+        with patch("app.deep_research.subprocess.run",
+                   side_effect=OSError("git not found")):
+            assert self._research(research_env)._gather_file_hotspots() == []
+
+        failed = subprocess.CompletedProcess([], 128, "", "fatal: not a repo")
+        with patch("app.deep_research.subprocess.run", return_value=failed):
+            assert self._research(research_env)._gather_file_hotspots() == []
+
+    def test_suggestions_include_hotspot_source(self, research_env):
+        """Hotspots surface in suggest_topics() as a 'hotspot' source tier."""
+        research = self._research(research_env)
+        research._pending_prs = []
+        with patch.object(research, "_gather_file_hotspots", return_value=[
+            {"file": "koan/app/mission_runner.py", "churn": 0.87,
+             "hint": "High-churn file"},
+        ]), patch.object(research, "get_open_issues", return_value=[]), \
+             patch.object(research, "get_recent_journal_topics", return_value=[]):
+            topics = research.suggest_topics()
+
+        hotspots = [t for t in topics if t["source"] == "hotspot"]
+        assert len(hotspots) == 1
+        assert "mission_runner.py" in hotspots[0]["topic"]
+        assert hotspots[0]["priority"] == 2

@@ -23,9 +23,17 @@ Returns JSON with suggested topics and reasoning.
 
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from app.diff_triage import _GENERATED_PATTERNS, _LOCKFILE_NAMES
+
+# Below this many commits a churn ranking is statistical noise — skip entirely.
+_MIN_COMMITS_FOR_HOTSPOTS = 20
+# Test files are intentionally high-churn; they are not debt hotspots.
+_TEST_PATH_RE = re.compile(r"(?:^|/)(?:tests?|__tests__)/|(?:^|/)test_[^/]+\.[a-z]+$|_test\.[a-z]+$")
 
 
 _STOP_WORDS = frozenset({
@@ -314,6 +322,78 @@ class DeepResearch:
             print(f"[deep_research] Topic categorization failed: {e}", file=sys.stderr)
             return "other"
 
+    def _gather_file_hotspots(self, top_n: int = 10) -> list[dict]:
+        """Rank source files by git churn over the last 200 commits.
+
+        High-churn files are simultaneously the most likely to harbor tech
+        debt and the most likely to break under autonomous modification, so
+        they make good DEEP-mode investment targets.
+
+        Excludes test, lockfile, and generated files (same sets as
+        ``diff_triage``). Returns ``[]`` when git is unavailable, the project
+        is too young (< 20 commits), or no qualifying files are found.
+
+        Each entry: ``{"file": str, "churn": float (0-1), "hint": str}``.
+        """
+        try:
+            output = subprocess.run(
+                ["git", "log", "--numstat", "--format=%H", "-200"],
+                cwd=str(self.project_path),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"[deep_research] git churn unavailable: {e}", file=sys.stderr)
+            return []
+
+        if output.returncode != 0:
+            return []
+
+        commits = 0
+        counts: dict[str, int] = {}
+        for line in output.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Commit hash lines (40 hex chars, no tab) delimit each commit.
+            if "\t" not in line:
+                commits += 1
+                continue
+            # numstat line: "<added>\t<removed>\t<path>"
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            path = parts[2]
+            # Binary files report "-\t-"; rename arrows make the path ambiguous.
+            if "=>" in path or not self._is_hotspot_candidate(path):
+                continue
+            counts[path] = counts.get(path, 0) + 1
+
+        if commits < _MIN_COMMITS_FOR_HOTSPOTS or not counts:
+            return []
+
+        max_count = max(counts.values())
+        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+        return [
+            {
+                "file": path,
+                "churn": round(count / max_count, 2),
+                "hint": "High-churn file — consider test coverage or modularization",
+            }
+            for path, count in ranked
+        ]
+
+    @staticmethod
+    def _is_hotspot_candidate(path: str) -> bool:
+        """Reject test, lockfile, and generated paths from churn analysis."""
+        if _TEST_PATH_RE.search(path):
+            return False
+        if path.rsplit("/", 1)[-1] in _LOCKFILE_NAMES:
+            return False
+        return all(not pat.search(path) for pat in _GENERATED_PATTERNS)
+
     def suggest_topics(self) -> list[dict]:
         """
         Analyze all sources and suggest prioritized topics.
@@ -370,6 +450,19 @@ class DeepResearch:
                 "topic": item,
                 "source": "priorities.md (Technical Debt)",
                 "reasoning": "Known tech debt item, good for DEEP mode",
+                "priority": 2,
+            })
+
+        # Priority 2: Git-churn hotspots — structurally unstable files.
+        # Weighted below human priorities (1) but above journal recaps.
+        for spot in self._gather_file_hotspots():
+            topic = f"Investigate high-churn file: {spot['file']}"
+            if any(spot["file"].lower() in t.lower() for t in recent_topics):
+                continue
+            suggestions.append({
+                "topic": topic,
+                "source": "hotspot",
+                "reasoning": f"{spot['hint']} (churn score {spot['churn']})",
                 "priority": 2,
             })
 
