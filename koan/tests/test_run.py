@@ -4321,8 +4321,9 @@ class TestRunSkillMissionEnv:
         return mock_popen.call_args[1]["env"]
 
     def test_suppress_outcome_set_for_tracked_skill_normal_mode(self, tmp_path):
-        """Tracked skills get KOAN_SUPPRESS_RUNNER_OUTCOME=1 so the runner's
-        outcome line does not duplicate the agent-loop completion line (#2153)."""
+        """PR-producing tracked skills get KOAN_SUPPRESS_RUNNER_OUTCOME=1 so the
+        runner's outcome line does not duplicate the agent-loop completion line,
+        which carries the same PR URL (#2153)."""
         env = self._run_with_title(tmp_path, "/review https://x/pull/1", is_debug=False)
         assert env.get("KOAN_SUPPRESS_RUNNER_OUTCOME") == "1"
 
@@ -4331,9 +4332,17 @@ class TestRunSkillMissionEnv:
         env = self._run_with_title(tmp_path, "/review https://x/pull/1", is_debug=True)
         assert "KOAN_SUPPRESS_RUNNER_OUTCOME" not in env
 
+    def test_suppress_outcome_not_set_for_plan(self, tmp_path):
+        """/plan is tracked but never opens a PR — its runner emits the issue/Jira
+        URL (or inline plan body) that the PR-only canonical line cannot carry, so
+        the flag must NOT be set or that content is lost in normal mode (#2153)."""
+        env = self._run_with_title(tmp_path, "/plan add dark mode", is_debug=False)
+        assert "KOAN_SUPPRESS_RUNNER_OUTCOME" not in env
+
     def test_suppress_outcome_not_set_for_untracked_skill(self, tmp_path):
-        """Untracked skills (e.g. /recreate) are the only reporter, so their
-        outcome line must still be sent."""
+        """The canonical-completion dedup is scoped to PR-producing tracked skills.
+        Untracked skills (e.g. /recreate) are left untouched by design, so the
+        flag is not set and the runner's outcome line still reaches chat."""
         env = self._run_with_title(tmp_path, "/recreate https://x/pull/1", is_debug=False)
         assert "KOAN_SUPPRESS_RUNNER_OUTCOME" not in env
 
