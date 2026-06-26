@@ -141,6 +141,10 @@ When unset or empty, Koan uses the standard `claude` command from PATH.
 > [openrouter.md](openrouter.md) — it uses this wrapper mechanism plus a local
 > CCR router to make non-Anthropic OpenRouter models work in `-p` mode.
 
+> **Using an OpenCode Go subscription?** See [opencode.md](opencode.md) — it
+> ships a ready-made wrapper, `bin/oc-claude`, that routes the Claude CLI
+> through the `ocgo` proxy. Set `KOAN_CLAUDE_CLI_PATH` to that script.
+
 ### MCP (Model Context Protocol) Servers
 
 Claude Code supports MCP servers for extended capabilities (browser,
