@@ -63,6 +63,10 @@ The wrapper picks the OpenCode model in this order:
 2. `$OC_CLAUDE_MODEL` (set in `.env`)
 3. `kimi-k2.7-code` (hard default)
 
+Koan also emits `--fallback-model` (default `sonnet`), but OpenCode has no
+fallback concept. The wrapper **drops** that flag so the Anthropic tier name
+never reaches `ocgo` — there is nothing to configure.
+
 Use **OpenCode model slugs** (from `ocgo list`) — not Anthropic tier names —
 in `projects.yaml`:
 

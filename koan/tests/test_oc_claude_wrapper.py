@@ -103,6 +103,44 @@ def test_remaining_args_forwarded_verbatim(tmp_path):
 
 
 @pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
+def test_fallback_model_is_stripped(tmp_path):
+    # OpenCode has no fallback concept; Koan's default --fallback-model sonnet
+    # must not reach ocgo (both flag forms).
+    _, argv = _run(
+        ["-p", "hi", "--model", "kimi-k2.7-code", "--fallback-model", "sonnet"],
+        {},
+        tmp_path,
+    )
+    assert argv[2:4] == ["--model", "kimi-k2.7-code"]
+    rest = argv[5:]
+    assert "--fallback-model" not in rest
+    assert "sonnet" not in rest
+    assert rest == ["-p", "hi"]
+
+    _, argv = _run(["-p", "hi", "--fallback-model=sonnet"], {}, tmp_path)
+    assert "--fallback-model=sonnet" not in argv[5:]
+    assert argv[5:] == ["-p", "hi"]
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
+def test_empty_args_after_model_stripping(tmp_path):
+    # Every arg consumed as a flag → args array empty. Must not crash under
+    # set -u on bash 3.2.
+    proc, argv = _run(["--model", "kimi-k2.7-code"], {}, tmp_path)
+    assert proc.returncode == 0
+    assert argv == ["launch", "claude", "--model", "kimi-k2.7-code", "--"]
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
+def test_trailing_model_flag_does_not_abort(tmp_path):
+    # --model as the last token (no value) must not trip set -e on shift.
+    proc, argv = _run(["-p", "hi", "--model"], {}, tmp_path)
+    assert proc.returncode == 0
+    assert argv[2:4] == ["--model", "kimi-k2.7-code"]
+    assert argv[5:] == ["-p", "hi"]
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
 def test_missing_ocgo_fails_clearly(tmp_path):
     # Use an empty custom bin dir — but keep /bin and /usr/bin so bash is
     # reachable. Only ocgo is absent.

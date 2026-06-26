@@ -22,7 +22,9 @@ CLI, e.g. `-p "<prompt>" --model <name> --output-format json --verbose …`.
 2. If the backend selects models differently, pull `--model` (both
    `--model X` and `--model=X`) out of the vector and re-emit it in the
    backend's form; forward all other args verbatim (the prompt may contain
-   spaces/newlines — use a bash array, never re-split).
+   spaces/newlines — use a bash array, never re-split). Drop Claude-only
+   flags the backend can't honor (e.g. `--fallback-model`, an Anthropic
+   tier name) so they never reach it.
 3. `exec` the backend so exit codes, stdio, and signals pass through
    (Koan relies on these for JSON parsing, quota detection, and its
    stagnation/timeout killer).
