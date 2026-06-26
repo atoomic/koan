@@ -1259,3 +1259,32 @@ class TestLocalProviderRemovedFromOnboarding:
         assert result.data["cli_provider"] == "ollama-launch"
         config = yaml.safe_load((root / "instance" / "config.yaml").read_text())
         assert config["cli_provider"] == "ollama-launch"
+
+
+def test_step_instance_init_without_env_example(tmp_path, monkeypatch, capsys):
+    import app.onboarding as ob
+
+    (tmp_path / "instance.example").mkdir()
+    (tmp_path / "instance.example" / "config.yaml").write_text("x: 1\n")
+    # Intentionally NO env.example present: env-var-only deploy. The required
+    # config is supplied via the process environment, so create_env_file
+    # synthesizes the .env instead of failing.
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    monkeypatch.setenv("GH_TOKEN", "gh")
+    monkeypatch.setenv("KOAN_TELEGRAM_TOKEN", "tg")
+    monkeypatch.setenv("KOAN_TELEGRAM_CHAT_ID", "42")
+
+    monkeypatch.setattr(ob, "KOAN_ROOT", tmp_path)
+    monkeypatch.setattr(ob, "_instance_dir", lambda: tmp_path / "instance")
+    monkeypatch.setattr(ob, "_env_file", lambda: tmp_path / ".env")
+
+    state = ob.OnboardingState()
+    ob.step_instance_init(state)
+
+    env_text = (tmp_path / ".env").read_text()
+    assert f"KOAN_ROOT={tmp_path}" in env_text
+    out = capsys.readouterr().out
+    assert "Failed to create .env" not in out
+    # The env-var branch — decided from the runtime KOAN_ROOT, not the
+    # import-time ENV_EXAMPLE constant — must actually be taken and reported.
+    assert "No env.example" in out
