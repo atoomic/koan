@@ -1,7 +1,7 @@
 # Component Spec — CLI Provider Abstraction
 
-**Package:** `koan/app/provider/` (`base.py`, `claude.py`, `cline.py`, `copilot.py`,
-`__init__.py`) + `cli_provider.py` (legacy re-export facade)
+**Package:** `koan/app/provider/` (`base.py`, `claude.py`, `cline.py`, `codex.py`,
+`copilot.py`, `__init__.py`) + `cli_provider.py` (legacy re-export facade)
 
 ## Purpose
 
@@ -17,6 +17,7 @@ provider/__init__.py  → registry + resolution (env → config → default) + c
        ├─ base.py      → CLIProvider ABC + tool-name constants + usage hooks
        ├─ claude.py    → ClaudeProvider (Claude Code CLI)
        ├─ cline.py     → ClineProvider
+       ├─ codex.py     → CodexProvider (quota via stream-json summary only)
        └─ copilot.py   → CopilotProvider (with tool-name mapping)
 ```
 

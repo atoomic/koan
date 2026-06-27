@@ -44,7 +44,8 @@ awake.py (loop, ~3s poll)
 
 ## Integration points
 
-- Writes missions via `missions.py` (`insert_pending_mission(s)`).
+- Writes missions via `utils.py` (`insert_pending_mission(s)`); lifecycle transitions
+  (`start_mission`/`complete_mission`/`fail_mission`) live in `missions.py`.
 - Reads/clears `outbox.md`; honors pause (`pause_manager`) and restart
   (`restart_manager`) signal files.
 - Dispatches skills through the shared `skills.py` registry (same path the agent loop
