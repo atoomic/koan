@@ -1831,7 +1831,11 @@ def validate_missions_structure(content: str) -> List[str]:
             prev_line = line
             continue
         if stripped.startswith("## "):
-            if prev_line is not None and prev_line.strip() != "":
+            prev_stripped = prev_line.strip() if prev_line is not None else ""
+            # The ``# Missions`` H1 title sitting directly above the first
+            # section is not corruption — only an item glued to a header is.
+            is_h1_title = prev_stripped.startswith("# ") and not prev_stripped.startswith("## ")
+            if prev_stripped != "" and not is_h1_title:
                 issues.append(
                     f"Section header glued to preceding item (missing blank line): {stripped!r}"
                 )
@@ -1857,11 +1861,17 @@ def repair_missions_structure(content: str) -> str:
     """Conservatively repair structural corruption in missions.md content.
 
     Repairs applied (all content-preserving):
-    - Insert a blank line before any ``## `` header glued to a preceding
-      item, so section boundaries are unambiguous.
+    - Restore the blank line before any ``## `` header glued to a
+      preceding item, so section boundaries are unambiguous.
+    - Merge duplicate canonical sections into their first occurrence
+      (later bodies appended), so a section appears exactly once.
+    - Re-home orphan ``- `` items that appear before any section header
+      under ``## Pending``.
     - Append any missing required canonical section headers at the end.
     - Collapse runaway blank lines via :func:`normalize_content`.
 
+    This converges: every issue ``validate_missions_structure`` classifies
+    as serious is resolved, so re-validating the output yields no issues.
     Items, ideas, and any non-canonical content are preserved verbatim;
     this never drops mission lines. ``## `` lines inside ```` ``` ````
     code fences are mission body text and are left untouched. Returns the
@@ -1870,40 +1880,75 @@ def repair_missions_structure(content: str) -> str:
     if not content.strip():
         return DEFAULT_SKELETON
 
-    lines = content.splitlines()
-    out: List[str] = []
+    # Parse into a preamble (lines before the first header) plus an ordered
+    # list of section blocks, fence-aware so fenced bodies are never read as
+    # structure.
+    preamble: List[str] = []
+    blocks: List[dict] = []
+    current = None
     in_code_fence = False
-    for line in lines:
+    for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith("```"):
             in_code_fence = not in_code_fence
-            out.append(line)
-            continue
-        if (
-            not in_code_fence
-            and stripped.startswith("## ")
-            and out
-            and out[-1].strip() != ""
-        ):
-            out.append("")  # restore the missing blank line before the header
-        out.append(line)
-
-    repaired = "\n".join(out)
-
-    present = set()
-    in_code_fence = False
-    for ln in repaired.splitlines():
-        stripped = ln.strip()
-        if stripped.startswith("```"):
-            in_code_fence = not in_code_fence
+            (blocks[current]["body"] if current is not None else preamble).append(line)
             continue
         if not in_code_fence and stripped.startswith("## "):
-            present.add(classify_section(stripped[3:].strip()))
-    missing = [k for k in _REQUIRED_SECTIONS if k not in present]
-    for key in missing:
-        repaired += f"\n\n{_CANONICAL_HEADERS[key]}\n"
+            blocks.append(
+                {"key": classify_section(stripped[3:].strip()), "header": line, "body": []}
+            )
+            current = len(blocks) - 1
+            continue
+        (blocks[current]["body"] if current is not None else preamble).append(line)
 
-    return normalize_content(repaired)
+    # Split the preamble: keep the title/blank/comment lines, lift any orphan
+    # item lines (and their continuations) out to re-home under Pending.
+    kept_preamble: List[str] = []
+    orphans: List[str] = []
+    for line in preamble:
+        stripped = line.strip()
+        if stripped.startswith("- ") or stripped.startswith("### "):
+            orphans.append(line)
+        elif stripped == "" or stripped.startswith("#"):
+            kept_preamble.append(line)
+        elif orphans:
+            orphans.append(line)  # continuation of an orphan item
+        else:
+            kept_preamble.append(line)
+
+    # Merge duplicate canonical sections into their first occurrence.
+    merged: List[dict] = []
+    index_by_key: Dict[str, int] = {}
+    for block in blocks:
+        key = block["key"]
+        if key is not None and key in index_by_key:
+            merged[index_by_key[key]]["body"].extend(block["body"])
+        else:
+            merged.append(block)
+            if key is not None:
+                index_by_key[key] = len(merged) - 1
+
+    # Re-home orphan items under Pending (creating the section if absent).
+    if orphans:
+        if "pending" not in index_by_key:
+            merged.insert(0, {"key": "pending", "header": _CANONICAL_HEADERS["pending"], "body": []})
+            index_by_key = {b["key"]: i for i, b in enumerate(merged) if b["key"] is not None}
+        merged[index_by_key["pending"]]["body"].extend(orphans)
+
+    # Append any missing required canonical sections.
+    for key in _REQUIRED_SECTIONS:
+        if key not in index_by_key:
+            merged.append({"key": key, "header": _CANONICAL_HEADERS[key], "body": []})
+            index_by_key[key] = len(merged) - 1
+
+    out: List[str] = list(kept_preamble)
+    for block in merged:
+        out.append("")  # guarantee a blank line before every header
+        out.append(block["header"])
+        out.append("")
+        out.extend(block["body"])
+
+    return normalize_content("\n".join(out))
 
 
 def enforce_size_bound(

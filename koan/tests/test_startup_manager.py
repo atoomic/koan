@@ -440,6 +440,26 @@ class TestPruneMissionsDone:
         assert missions.read_text() == corrupt
         assert not list(tmp_path.glob(".missions.md.bak-*"))
 
+    def test_corrupt_file_not_renotified_on_second_pass(self, tmp_path):
+        from app.startup_manager import prune_missions_done
+        from app.missions import validate_missions_structure
+
+        missions = tmp_path / "missions.md"
+        # Orphan item + duplicate Done — corruption repair must fully resolve.
+        missions.write_text(
+            "# Missions\n- orphan task\n## Pending\n\n## In Progress\n\n"
+            "## Done\n\n## Done\n\n## Failed\n"
+        )
+
+        prune_missions_done(str(tmp_path))
+        first_backups = list(tmp_path.glob(".missions.md.bak-*"))
+        assert first_backups  # genuine corruption → backed up once
+        assert validate_missions_structure(missions.read_text()) == []
+
+        # Second pass over the now-healed file: no new corruption, no new backup.
+        prune_missions_done(str(tmp_path))
+        assert list(tmp_path.glob(".missions.md.bak-*")) == first_backups
+
     def test_old_backups_are_pruned(self, tmp_path):
         from app.startup_manager import _prune_old_missions_backups
 

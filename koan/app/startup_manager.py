@@ -7,7 +7,6 @@ blocking the entire startup.
 Called from run.py's main_loop() during process initialization.
 """
 
-import contextlib
 import os
 import time
 from pathlib import Path
@@ -348,8 +347,13 @@ def _prune_old_missions_backups(missions_path: Path, keep: int = 5) -> None:
     """
     backups = sorted(missions_path.parent.glob(".missions.md.bak-*"))
     for old in backups[:-keep]:
-        with contextlib.suppress(OSError):
+        try:
             old.unlink()
+        except OSError as exc:
+            # Surface a recurring inability to prune backups instead of
+            # letting them silently accumulate (the exact failure this
+            # helper guards against).
+            log("warn", f"Could not prune old missions backup {old.name}: {exc}")
 
 
 def prune_missions_done(instance: str):

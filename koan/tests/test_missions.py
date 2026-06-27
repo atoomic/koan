@@ -3483,6 +3483,49 @@ class TestRepairMissionsStructure:
         assert body_block in repaired
         assert validate_missions_structure(repaired) == []
 
+    def test_h1_title_glued_to_first_section_not_corruption(self):
+        # '# Missions' directly above '## Pending' (no blank line) is the
+        # title, not a glued item — must not be flagged as corruption.
+        content = "# Missions\n## Pending\n\n## In Progress\n\n## Done\n\n## Failed\n"
+        assert validate_missions_structure(content) == []
+
+    def test_merges_duplicate_sections(self):
+        content = (
+            "# Missions\n\n## Pending\n\n- p1\n\n## In Progress\n\n"
+            "## Done\n\n- d1 ✅\n\n## Done\n\n- d2 ✅\n\n## Failed\n"
+        )
+        assert validate_missions_structure(content)  # duplicate flagged
+        repaired = repair_missions_structure(content)
+        assert validate_missions_structure(repaired) == []
+        done = parse_sections(repaired)["done"]
+        assert "- d1 ✅" in done
+        assert "- d2 ✅" in done
+
+    def test_rehomes_orphan_items_under_pending(self):
+        # Item line before any section header — orphan corruption.
+        content = (
+            "# Missions\n\n- orphan task\n\n## Pending\n\n- p1\n\n"
+            "## In Progress\n\n## Done\n\n## Failed\n"
+        )
+        assert validate_missions_structure(content)  # orphan flagged
+        repaired = repair_missions_structure(content)
+        assert validate_missions_structure(repaired) == []
+        pending = parse_sections(repaired)["pending"]
+        assert "- orphan task" in pending
+        assert "- p1" in pending
+
+    def test_repair_converges_on_second_pass(self):
+        # Repair must resolve everything validate flags as serious, so a
+        # second repair/validate round produces no further issues.
+        content = (
+            "# Missions\n- orphan\n## Pending\n\n- p1\n## In Progress\n\n"
+            "## Done\n\n## Done\n\n## Failed\n"
+        )
+        once = repair_missions_structure(content)
+        assert validate_missions_structure(once) == []
+        twice = repair_missions_structure(once)
+        assert once == twice
+
 
 class TestEnforceSizeBound:
     """enforce_size_bound() — caps file line count by shedding old history."""
