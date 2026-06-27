@@ -1974,3 +1974,38 @@ class TestMemoryMonitorConfig:
             conf = get_memory_monitor_config()
         assert conf["enabled"] is False
         assert conf["threshold_mb"] == 1200
+
+
+# --- get_verify_requeue_max ---
+
+
+class TestGetVerifyRequeueMax:
+    def test_default(self):
+        from app.config import get_verify_requeue_max
+
+        with _mock_config({}):
+            assert get_verify_requeue_max() == 2
+
+    def test_override(self):
+        from app.config import get_verify_requeue_max
+
+        with _mock_config({"verification": {"max_requeue": 1}}):
+            assert get_verify_requeue_max() == 1
+
+    def test_zero_disables(self):
+        from app.config import get_verify_requeue_max
+
+        with _mock_config({"verification": {"max_requeue": 0}}):
+            assert get_verify_requeue_max() == 0
+
+    def test_negative_clamps_to_zero(self):
+        from app.config import get_verify_requeue_max
+
+        with _mock_config({"verification": {"max_requeue": -5}}):
+            assert get_verify_requeue_max() == 0
+
+    def test_non_numeric_falls_back_to_default(self):
+        from app.config import get_verify_requeue_max
+
+        with _mock_config({"verification": {"max_requeue": "lots"}}):
+            assert get_verify_requeue_max() == 2
