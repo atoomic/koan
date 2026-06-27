@@ -276,6 +276,8 @@ Secret fields (keys containing `token`, `password`, `secret`, `api_key`) are rep
 | `days` | `30` | Lookback window, clamped to `[0, 365]` |
 | `project` | _(all)_ | Per-project metrics + trend; omit for global metrics with per-project trends |
 
+The global (no `project`) response includes `security_blocks_7d` — the count of auto-merge blocks recorded in `.security-audit.jsonl` over the last 7 days (see [Security Review](../security/security-review.md#audit-trail)).
+
 **GET /v1/logs** query params:
 
 | Param | Default | Description |

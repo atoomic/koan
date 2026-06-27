@@ -1122,6 +1122,28 @@ def _notify_pipeline_failures(
         _log_runner("error", f"Pipeline failure notification failed: {e}")
 
 
+def _notify_security_review_inconclusive(instance_dir: str, project_name: str) -> None:
+    """Alert the operator that a security review crashed/timed out and blocked merge.
+
+    Fail-closed means the operator must know *why* a mission did not auto-merge
+    so they can diagnose the underlying review failure (often a misconfigured
+    project_path or unavailable git diff). Best-effort; never raises.
+    """
+    try:
+        from app.utils import append_to_outbox
+        from app.notify import NotificationPriority
+
+        msg = (
+            f"🔒 [{project_name}] Security review was inconclusive "
+            f"(crashed or timed out) — auto-merge blocked. "
+            f"Check .security-audit.jsonl and logs for the cause."
+        )
+        outbox_path = Path(instance_dir) / "outbox.md"
+        append_to_outbox(outbox_path, msg + "\n", priority=NotificationPriority.WARNING)
+    except Exception as e:
+        _log_runner("error", f"Security review notification failed: {e}")
+
+
 # --- Pipeline timeout rate alert ---
 _TIMEOUT_ALERT_STATE_FILE = ".pipeline-timeout-alert.json"
 
@@ -1407,8 +1429,12 @@ def check_security_review(
 
         return _check(instance_dir, project_name, project_path)
     except Exception as e:
+        # Fail CLOSED: a crashed review must not silently promote a mission to
+        # auto-merge. The crash is audited in .security-audit.jsonl by
+        # security_review.check_security_review before the exception propagates.
+        _log_runner("error", f"Security review crashed → blocking auto-merge: {e}")
         print(f"[mission_runner] Security review failed: {e}", file=sys.stderr)
-        return True  # Don't block on failures
+        return False
 
 
 _PR_URL_RE = re.compile(r'https?://[^/]*github[^\s)]+/pull/\d+')
@@ -1887,7 +1913,16 @@ def run_post_mission(
                 pipeline_expired=_pipeline_expired,
             )
             if security_passed is None:
-                security_passed = True
+                # Fail CLOSED: run_step returns None on exception OR pipeline
+                # timeout. Either way the safety gate did not produce a verdict,
+                # so block auto-merge rather than promote an unreviewed mission.
+                security_passed = False
+                _log_runner(
+                    "error",
+                    "Security review produced no verdict (crash/timeout) "
+                    "→ blocking auto-merge",
+                )
+                _notify_security_review_inconclusive(instance_dir, project_name)
             result["security_review_passed"] = security_passed
 
             # Auto-merge check (respects quality gate + lint gate + verification + security review)
