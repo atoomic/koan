@@ -98,18 +98,49 @@ class TestComboQueuing:
             assert "/rebase https://github.com/sukria/koan/pull/42" in entries[1]
             assert "[project:koan]" in entries[1]
 
-    def test_queued_at_top_of_pending(self, handler, ctx):
-        """The /rr combo jumps the queue: missions land at the top, not the end."""
+    def test_default_queued_at_end_of_pending(self, handler, ctx):
+        """By default the combo appends at the end of the queue, not the top."""
         ctx.args = "https://github.com/sukria/koan/pull/42"
         with patch("app.utils.resolve_project_path", return_value="/home/koan"), \
              patch("app.utils.get_known_projects", return_value=[("koan", "/home/koan")]), \
              patch("app.utils.insert_pending_missions", return_value=[True, True]) as mock_insert:
             handler.handle(ctx)
-            assert mock_insert.call_args.kwargs.get("urgent") is True
+            assert mock_insert.call_args.kwargs.get("urgent") is False
 
-    def test_review_above_rebase_in_file(self, handler, ctx):
-        """Observable behavior: review entry sits above rebase, both at the top."""
+    def test_now_flag_queues_at_top_of_pending(self, handler, ctx):
+        """--now jumps the queue: missions land at the top."""
+        ctx.args = "--now https://github.com/sukria/koan/pull/42"
+        with patch("app.utils.resolve_project_path", return_value="/home/koan"), \
+             patch("app.utils.get_known_projects", return_value=[("koan", "/home/koan")]), \
+             patch("app.utils.insert_pending_missions", return_value=[True, True]) as mock_insert:
+            handler.handle(ctx)
+            assert mock_insert.call_args.kwargs.get("urgent") is True
+            # The --now flag must not leak into the queued mission entries.
+            entries = mock_insert.call_args[0][1]
+            assert all("--now" not in e for e in entries)
+
+    def test_default_review_above_rebase_at_end_of_file(self, handler, ctx):
+        """Observable: review above rebase, both after the pre-existing task."""
         ctx.args = "https://github.com/sukria/koan/pull/42"
+        missions_path = ctx.instance_dir / "missions.md"
+        missions_path.write_text(
+            "## Pending\n\n- [project:koan] /existing earlier task\n\n"
+            "## In Progress\n\n## Done\n"
+        )
+        with patch("app.utils.resolve_project_path", return_value="/home/koan"), \
+             patch("app.utils.get_known_projects", return_value=[("koan", "/home/koan")]):
+            handler.handle(ctx)
+
+        content = missions_path.read_text()
+        review_idx = content.index("/review https://github.com/sukria/koan/pull/42")
+        rebase_idx = content.index("/rebase https://github.com/sukria/koan/pull/42")
+        existing_idx = content.index("/existing earlier task")
+        # pre-existing task first, then review, then rebase
+        assert existing_idx < review_idx < rebase_idx
+
+    def test_now_review_above_rebase_at_top_of_file(self, handler, ctx):
+        """--now: review above rebase, both ahead of the pre-existing task."""
+        ctx.args = "--now https://github.com/sukria/koan/pull/42"
         missions_path = ctx.instance_dir / "missions.md"
         missions_path.write_text(
             "## Pending\n\n- [project:koan] /existing earlier task\n\n"
