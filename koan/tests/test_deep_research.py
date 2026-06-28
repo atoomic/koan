@@ -1706,3 +1706,61 @@ class TestFileHotspots:
         assert len(hotspots) == 1
         assert "mission_runner.py" in hotspots[0]["topic"]
         assert hotspots[0]["priority"] == 2
+
+
+# ---------------------------------------------------------------------------
+# suggest_topics — PR-feedback priority adjustment
+# ---------------------------------------------------------------------------
+
+class TestFeedbackBoostTagging:
+    """A clamp-absorbed boost/demotion must not emit a misleading reasoning tag."""
+
+    def _research(self, env, priorities: str):
+        priorities_file = (
+            env["instance"] / "memory" / "projects" / env["project_name"] / "priorities.md"
+        )
+        priorities_file.write_text(priorities)
+        research = DeepResearch(env["instance"], env["project_name"], env["project_path"])
+        research._pending_prs = []
+        return research
+
+    def test_real_boost_tagged_clamped_boost_not(self, research_env):
+        """A priority-2 topic boosted to 1 gets the tag; an already-top
+        priority-1 topic whose -1 is absorbed by the clamp does not."""
+        research = self._research(
+            research_env,
+            "## Current Focus\n\n- Top focus item\n\n## Technical Debt\n\n- Debt item\n",
+        )
+        with patch.object(research, "get_open_issues", return_value=[]), \
+             patch.object(research, "get_recent_journal_topics", return_value=[]), \
+             patch.object(research, "_match_topic_to_category", return_value="other"), \
+             patch.object(research, "get_pr_feedback",
+                          return_value={"alignment_summary": "",
+                                        "category_boosts": {"other": -1}}):
+            topics = research.suggest_topics()
+
+        focus = next(t for t in topics if "Top focus item" in t["topic"])
+        debt = next(t for t in topics if "Debt item" in t["topic"])
+
+        # Clamp absorbed the boost on the already-top item: no misleading tag.
+        assert focus["priority"] == 1
+        assert "boosted" not in focus["reasoning"]
+        # Real boost on the debt item (2 -> 1): tag present.
+        assert debt["priority"] == 1
+        assert "boosted" in debt["reasoning"]
+
+    def test_clamped_demotion_not_tagged(self, research_env):
+        """A priority-3 strategic goal whose +1 is absorbed by the clamp
+        stays at 3 without a misleading '(deprioritized)' tag."""
+        research = self._research(research_env, "## Strategic Goals\n\n- Long-term goal\n")
+        with patch.object(research, "get_open_issues", return_value=[]), \
+             patch.object(research, "get_recent_journal_topics", return_value=[]), \
+             patch.object(research, "_match_topic_to_category", return_value="other"), \
+             patch.object(research, "get_pr_feedback",
+                          return_value={"alignment_summary": "",
+                                        "category_boosts": {"other": 1}}):
+            topics = research.suggest_topics()
+
+        goal = next(t for t in topics if "Long-term goal" in t["topic"])
+        assert goal["priority"] == 3
+        assert "deprioritized" not in goal["reasoning"]
