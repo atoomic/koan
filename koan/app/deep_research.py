@@ -502,10 +502,14 @@ class DeepResearch:
                 adjustment = boosts.get(category, 0)
                 if adjustment != 0:
                     old_prio = suggestion["priority"]
-                    suggestion["priority"] = max(1, min(3, old_prio + adjustment))
-                    if adjustment < 0:
+                    new_prio = max(1, min(3, old_prio + adjustment))
+                    suggestion["priority"] = new_prio
+                    # Only tag the reasoning when the clamp didn't absorb the
+                    # adjustment — a no-op boost on an already-top topic would
+                    # otherwise inject a misleading "(boosted)" into the agent prompt.
+                    if new_prio < old_prio:
                         suggestion["reasoning"] += " (boosted: this type of work gets merged quickly)"
-                    else:
+                    elif new_prio > old_prio:
                         suggestion["reasoning"] += " (deprioritized: this type of work tends to stay open)"
 
         # Sort by priority
