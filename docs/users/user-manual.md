@@ -1898,7 +1898,7 @@ Kōan can automatically create fix missions when CI fails on its own PRs. When e
 ci_dispatch:
   enabled: true              # Master switch (default: false)
   cooldown_minutes: 30       # Min time between checks per project (default: 30)
-  log_snippet_bytes: 4096    # Max CI log snippet in mission text (default: 4096)
+  log_snippet_bytes: 4096    # Max CI log snippet in mission text (default: 4096, floored at 64)
   tracker_max_age_days: 30   # Prune dedup entries older than this (default: 30)
 ```
 
