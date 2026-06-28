@@ -153,6 +153,11 @@ When a custom path is set, `/status` shows the binary name next to the provider
 > `bin/ollama-claude`, that routes the Claude CLI through
 > `ollama launch claude`. Set `KOAN_CLAUDE_CLI_PATH` to that script.
 
+> **Using a Z.ai (GLM) subscription?** See [zai.md](zai.md) — it ships a
+> ready-made wrapper, `bin/zai-claude`, that points the Claude CLI at Z.ai's
+> Anthropic-compatible endpoint and maps Koan's model tiers (`haiku`/`sonnet`/
+> `opus`) to GLM models. Set `KOAN_CLAUDE_CLI_PATH` to that script.
+
 ### MCP (Model Context Protocol) Servers
 
 Claude Code supports MCP servers for extended capabilities (browser,
