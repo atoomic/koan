@@ -39,6 +39,7 @@ CLI, e.g. `-p "<prompt>" --model <name> --output-format json --verbose …`.
 |---------|---------|-------------|
 | `oc-claude` | OpenCode Go (via `ocgo` proxy) | [docs/providers/opencode.md](../docs/providers/opencode.md) |
 | `ollama-claude` | Local Ollama (via `ollama launch claude`) | [docs/providers/ollama-wrapper.md](../docs/providers/ollama-wrapper.md) |
+| `zai-claude` | Z.ai / GLM (real `claude` + Z.ai endpoint) | [docs/providers/zai.md](../docs/providers/zai.md) |
 
 ## Adding a new flavor
 

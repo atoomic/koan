@@ -18,7 +18,7 @@ to operate Koan. Most non-trivial changes update both.
 - [User Manual](users/user-manual.md) - daily use, workflows, and command guide.
 - [Onboarding](users/onboarding.md) - first-run setup and configuration flow.
 - [Skills Reference](users/skills.md) - built-in command reference.
-- [Provider Setup](providers/) - Claude, Cline, Codex, Copilot, and Ollama Launch (local models) providers; plus [OpenRouter via the Claude CLI](providers/openrouter.md), [OpenCode Go via the Claude CLI](providers/opencode.md), and [Local Ollama via the Claude CLI](providers/ollama-wrapper.md).
+- [Provider Setup](providers/) - Claude, Cline, Codex, Copilot, and Ollama Launch (local models) providers; plus [OpenRouter via the Claude CLI](providers/openrouter.md), [OpenCode Go via the Claude CLI](providers/opencode.md), [Local Ollama via the Claude CLI](providers/ollama-wrapper.md), and [Z.ai (GLM) via the Claude CLI](providers/zai.md).
 - [Messaging Setup](messaging/) - Telegram, Slack, Matrix, Discord, GitHub, and Jira.
 - [Troubleshooting](operations/troubleshooting.md) - common issues and how to fix them.
 

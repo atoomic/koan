@@ -491,6 +491,9 @@ models:
   #   fallback: "sonnet"       # Fallback when primary is overloaded
   #   review_mode: "sonnet"    # Override model for REVIEW mode
   #   reflect: "sonnet"        # Model for review reflection pass
+  #
+  # Z.ai (GLM): no change needed here — bin/zai-claude maps these tier names
+  # (haiku/sonnet/opus) to GLM models. See docs/providers/zai.md.
 
   # Codex (OpenAI) provider overrides (uncomment to customize):
   # codex:
