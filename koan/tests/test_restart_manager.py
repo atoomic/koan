@@ -319,9 +319,8 @@ class TestSignalLockUsage:
 
         with patch("app.utils.signal_lock") as mock_lock:
             request_restart(str(tmp_path))
-            assert mock_lock.call_count == 3  # one per marker file
+            assert mock_lock.call_count == 2  # one per per-consumer marker file
             lock_paths = {str(call.args[0]) for call in mock_lock.call_args_list}
-            assert any(p.endswith(".koan-restart") for p in lock_paths)
             assert any(p.endswith(".koan-restart-bridge") for p in lock_paths)
             assert any(p.endswith(".koan-restart-run") for p in lock_paths)
 
@@ -340,6 +339,5 @@ class TestSignalLockUsage:
         from app.restart_manager import request_restart
 
         request_restart(str(tmp_path))
-        assert (tmp_path / ".koan-restart").exists()
         assert (tmp_path / ".koan-restart-bridge").exists()
         assert (tmp_path / ".koan-restart-run").exists()
