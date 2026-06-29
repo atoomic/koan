@@ -5,6 +5,8 @@
 This manual is organized in three progressive tiers. Start with the basics, then unlock more advanced workflows as you grow comfortable.
 
 > **New here?** Make sure you've completed the [Quick Start](../../README.md#quick-start) or [Full Install Guide](../../INSTALL.md) first. This manual assumes Kōan is already running.
+>
+> **Just want the commands?** The [Quickstart](quickstart.md) is a 5-minute, copy-paste guide to driving Kōan from GitHub, Jira, and your messaging app.
 
 ---
 
