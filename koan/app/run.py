@@ -1108,22 +1108,28 @@ def main_loop():
         while True:
             # --- Stop check ---
             stop_file = Path(koan_root, STOP_FILE)
+            should_stop = False
             with signal_lock(stop_file):
                 if stop_file.exists():
-                    log("koan", "Stop requested.")
                     stop_file.unlink(missing_ok=True)
-                    current = _read_current_project(koan_root)
-                    _notify(instance, f"Kōan stopped on request after {count} runs. Last project: {current}.")
-                    break
+                    should_stop = True
+            if should_stop:
+                log("koan", "Stop requested.")
+                current = _read_current_project(koan_root)
+                _notify(instance, f"Kōan stopped on request after {count} runs. Last project: {current}.")
+                break
 
             # --- Update check (finish mission → update → restart) ---
             cycle_file = Path(koan_root, CYCLE_FILE)
+            should_update = False
             with signal_lock(cycle_file):
                 if cycle_file.exists():
-                    log("koan", "Update requested. Updating and restarting...")
                     cycle_file.unlink(missing_ok=True)
-                    if _handle_update(koan_root, instance, count):
-                        sys.exit(RESTART_EXIT_CODE)
+                    should_update = True
+            if should_update:
+                log("koan", "Update requested. Updating and restarting...")
+                if _handle_update(koan_root, instance, count):
+                    sys.exit(RESTART_EXIT_CODE)
 
             # --- Release update check (checkout latest tag → restart) ---
             cycle_release_file = Path(koan_root, CYCLE_RELEASE_FILE)
