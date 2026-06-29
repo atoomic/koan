@@ -123,7 +123,8 @@ class TestBuildCommand:
         p = ClaudeProvider()
         return p
 
-    def test_basic_command(self):
+    def test_basic_command(self, monkeypatch):
+        monkeypatch.delenv("KOAN_CLAUDE_CLI_PATH", raising=False)
         p = self._make_provider()
         cmd = p.build_command(prompt="hello world")
         assert cmd[0] == "claude"
@@ -203,7 +204,8 @@ class TestClaudeProvider:
     def test_name(self):
         assert ClaudeProvider.name == "claude"
 
-    def test_binary(self):
+    def test_binary(self, monkeypatch):
+        monkeypatch.delenv("KOAN_CLAUDE_CLI_PATH", raising=False)
         assert ClaudeProvider().binary() == "claude"
 
     def test_permission_args(self):
@@ -685,7 +687,8 @@ class TestConvenienceFunctions:
         reset_provider()
 
     @patch("app.provider.get_provider_name", return_value="claude")
-    def test_get_cli_binary(self, _):
+    def test_get_cli_binary(self, _, monkeypatch):
+        monkeypatch.delenv("KOAN_CLAUDE_CLI_PATH", raising=False)
         from app.provider import get_cli_binary
         assert get_cli_binary() == "claude"
 
@@ -739,6 +742,53 @@ class TestGetProviderNameFallback:
         monkeypatch.delenv("CLI_PROVIDER", raising=False)
         with patch("app.utils.load_config", side_effect=RuntimeError("bad")):
             assert get_provider_name() == "claude"
+
+
+class TestGetCliBinaryName:
+    """get_cli_binary_name: KOAN_CLAUDE_CLI_PATH basename, or ''."""
+
+    def test_returns_basename_when_set(self, monkeypatch):
+        from app.provider import get_cli_binary_name
+        monkeypatch.setenv("KOAN_CLAUDE_CLI_PATH", "/opt/koan/ollama-claude")
+        assert get_cli_binary_name() == "ollama-claude"
+
+    def test_strips_trailing_slash(self, monkeypatch):
+        from app.provider import get_cli_binary_name
+        monkeypatch.setenv("KOAN_CLAUDE_CLI_PATH", "/usr/local/bin/my-claude/")
+        assert get_cli_binary_name() == "my-claude"
+
+    def test_empty_when_unset(self, monkeypatch):
+        from app.provider import get_cli_binary_name
+        monkeypatch.delenv("KOAN_CLAUDE_CLI_PATH", raising=False)
+        assert get_cli_binary_name() == ""
+
+
+class TestGetProviderDisplay:
+    """get_provider_display: '<name>' or '<name> (<binary>)' like /status."""
+
+    def test_appends_binary_flavor(self, monkeypatch):
+        from app.provider import get_provider_display
+        monkeypatch.setenv("KOAN_CLAUDE_CLI_PATH", "/opt/koan/ollama-claude")
+        with patch("app.provider.get_provider_name", return_value="claude"):
+            assert get_provider_display() == "claude (ollama-claude)"
+
+    def test_no_flavor_when_unset(self, monkeypatch):
+        from app.provider import get_provider_display
+        monkeypatch.delenv("KOAN_CLAUDE_CLI_PATH", raising=False)
+        with patch("app.provider.get_provider_name", return_value="claude"):
+            assert get_provider_display() == "claude"
+
+    def test_no_flavor_when_identical(self, monkeypatch):
+        from app.provider import get_provider_display
+        monkeypatch.setenv("KOAN_CLAUDE_CLI_PATH", "/usr/bin/claude")
+        with patch("app.provider.get_provider_name", return_value="claude"):
+            assert get_provider_display() == "claude"
+
+    def test_honors_explicit_name(self, monkeypatch):
+        from app.provider import get_provider_display
+        monkeypatch.setenv("KOAN_CLAUDE_CLI_PATH", "/x/my-claude")
+        # An explicit name (e.g. the "ollama" sentinel) is not overridden.
+        assert get_provider_display("ollama") == "ollama (my-claude)"
 
 
 class TestRunCommand:

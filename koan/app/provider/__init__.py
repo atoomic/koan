@@ -174,6 +174,36 @@ def get_cli_binary() -> str:
     return get_provider().shell_command()
 
 
+def get_cli_binary_name() -> str:
+    """Return the binary basename from ``KOAN_CLAUDE_CLI_PATH``, or '' if unset.
+
+    The Claude provider honors ``KOAN_CLAUDE_CLI_PATH`` to point at an
+    alternate CLI binary (e.g. an ollama-wrapping shim). Surfacing its
+    basename lets banners and ``/status`` advertise which flavor is in use.
+    """
+    path = os.environ.get("KOAN_CLAUDE_CLI_PATH", "").strip()
+    return path.rstrip("/").rsplit("/", 1)[-1] if path else ""
+
+
+def get_provider_display(name: str = "") -> str:
+    """Provider name for display, with the custom CLI binary flavor appended.
+
+    Returns ``"<name>"`` or ``"<name> (<binary>)"`` when
+    ``KOAN_CLAUDE_CLI_PATH`` points at a binary whose basename differs from
+    the provider name (e.g. ``claude (ollama-claude)``). The flavor is
+    suppressed when unset or identical, so this is a no-op for non-Claude
+    providers. When *name* is empty the configured provider is resolved via
+    :func:`get_provider_name`. Single source of truth for the provider line
+    shown by the startup banner and ``/status``.
+    """
+    if not name:
+        name = get_provider_name()
+    binary = get_cli_binary_name()
+    if binary and binary != name:
+        return f"{name} ({binary})"
+    return name
+
+
 # ---------------------------------------------------------------------------
 # Module-level convenience functions
 # ---------------------------------------------------------------------------

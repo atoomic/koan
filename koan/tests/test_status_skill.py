@@ -627,11 +627,11 @@ class TestGetServerIp:
         assert "⚙️" not in result
 
     def test_get_cli_binary_name_strips_path(self, monkeypatch):
-        from skills.core.status.handler import _get_cli_binary_name
+        from app.provider import get_cli_binary_name
         monkeypatch.setenv("KOAN_CLAUDE_CLI_PATH", "/usr/local/bin/claude-wrapper/")
-        assert _get_cli_binary_name() == "claude-wrapper"
+        assert get_cli_binary_name() == "claude-wrapper"
         monkeypatch.delenv("KOAN_CLAUDE_CLI_PATH", raising=False)
-        assert _get_cli_binary_name() == ""
+        assert get_cli_binary_name() == ""
 
 
 # ---------------------------------------------------------------------------
