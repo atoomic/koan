@@ -1,5 +1,7 @@
 # Skills Reference
 
+> **New here?** Start with the [Quickstart](quickstart.md) — a 5-minute, copy-paste guide to the most-used commands across GitHub, Jira, and your messaging app.
+>
 > **For a guided introduction**, see the [User Manual](user-manual.md) — organized by skill level with use cases and workflow examples.
 
 Complete reference for all Koan slash commands. Use these via Telegram, Slack, or GitHub @mentions.

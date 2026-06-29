@@ -15,6 +15,7 @@ to operate Koan. Most non-trivial changes update both.
 
 ## Start Here
 
+- [Quickstart](users/quickstart.md) - the 5-minute zero-to-hero guide: what to type from GitHub, Jira, and your messaging app.
 - [User Manual](users/user-manual.md) - daily use, workflows, and command guide.
 - [Onboarding](users/onboarding.md) - first-run setup and configuration flow.
 - [Skills Reference](users/skills.md) - built-in command reference.
