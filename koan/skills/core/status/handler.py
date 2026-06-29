@@ -25,13 +25,6 @@ def _get_hostname() -> str:
         return "unknown"
 
 
-def _get_cli_binary_name() -> str:
-    """Return the binary name from KOAN_CLAUDE_CLI_PATH, or '' if unset."""
-    import os
-    path = os.environ.get("KOAN_CLAUDE_CLI_PATH", "").strip()
-    return path.rstrip("/").rsplit("/", 1)[-1] if path else ""
-
-
 def _get_service_manager() -> str:
     """Return the configured service manager from KOAN_SERVICE_MANAGER, or ''."""
     import os
@@ -248,12 +241,8 @@ def _handle_status(ctx) -> str:
     if hostname != "unknown":
         info_items.append(f"🖥️ {hostname}")
     try:
-        from app.provider import get_provider_name
-        provider_label = get_provider_name()
-        binary_name = _get_cli_binary_name()
-        if binary_name and binary_name != provider_label:
-            provider_label = f"{provider_label} ({binary_name})"
-        info_items.append(provider_label)
+        from app.provider import get_provider_display
+        info_items.append(get_provider_display())
     except Exception:
         pass
     service_manager = _get_service_manager()
