@@ -427,20 +427,6 @@ def get_cli_fallback(project_name: str = "") -> Tuple[str, str]:
     return ("", "")
 
 
-def get_model_for_role(role: str, project_name: str = "") -> str:
-    """Return the model for a single role, resolved against the role's CLI provider.
-
-    Resolves the role's provider via the ``cli:`` section, then reads that
-    provider's model block (``models.<provider>.<role>`` → ``models.default.<role>``).
-    Convenience for single-role callers (the ``run_command*`` helpers).
-    """
-    from app.provider import get_provider_for_role
-
-    provider = get_provider_for_role(role, project_name)
-    models = get_model_config(project_name, role_providers={role: provider.name})
-    return models.get(role, "")
-
-
 def get_mcp_configs(project_name: str = "") -> List[str]:
     """Get MCP server config file paths from config.yaml with per-project overrides.
 

@@ -1,7 +1,7 @@
 """Tests for the `cli:` config section: parsing, resolution, model coupling.
 
-Covers app.config._parse_cli_value / get_cli_config / get_cli_fallback /
-get_model_for_role and the role-aware get_model_config(role_providers=...).
+Covers app.config._parse_cli_value / get_cli_config / get_cli_fallback and
+the role-aware get_model_config(role_providers=...).
 """
 
 from contextlib import contextmanager
@@ -126,7 +126,7 @@ class TestGetCliFallback:
 
 
 # ---------------------------------------------------------------------------
-# Model coupling: get_model_config(role_providers=...) + get_model_for_role
+# Model coupling: get_model_config(role_providers=...)
 # ---------------------------------------------------------------------------
 
 class TestModelCoupling:
@@ -154,14 +154,3 @@ class TestModelCoupling:
                 resolved = cfg.get_model_config(role_providers={"mission": "codex", "review_mode": "claude"})
         assert resolved["mission"] == "gpt-5-codex"   # models.codex.mission
         assert resolved["review_mode"] == "opus"        # models.claude.review_mode
-
-    def test_get_model_for_role_uses_role_provider(self):
-        full = {
-            "cli_provider": "codex",
-            "models": self._MODELS,
-            "cli": {"default": {"review_mode": "claude"}},
-        }
-        with _config(full):
-            with patch("app.provider.get_provider_name", return_value="codex"):
-                assert cfg.get_model_for_role("review_mode") == "opus"
-                assert cfg.get_model_for_role("mission") == "gpt-5-codex"
