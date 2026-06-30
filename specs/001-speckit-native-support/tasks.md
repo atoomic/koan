@@ -27,8 +27,8 @@ description: "Task list for the native /speckit mission orchestration feature"
 
 **Purpose**: Create the skill directories, SKILL.md frontmatter, and the shared orchestration module skeleton.
 
-- [ ] T001 Create core-skill directories and SKILL.md frontmatter for `speckit` and `speckit_from_branch` (`group: code`, `model_key: mission`, `github_enabled: true`, `github_context_aware: true`) in koan/skills/core/speckit/SKILL.md and koan/skills/core/speckit_from_branch/SKILL.md
-- [ ] T002 [P] Create shared orchestration module skeleton with module docstring and `dispatch(entry_mode=...)` entry-point signature in koan/app/speckit_orchestration.py
+- [X] T001 Create core-skill directories and SKILL.md frontmatter for `speckit` and `speckit_from_branch` (`group: code`, `model_key: mission`, `github_enabled: true`, `github_context_aware: true`) in koan/skills/core/speckit/SKILL.md and koan/skills/core/speckit_from_branch/SKILL.md
+- [X] T002 [P] Create shared orchestration module skeleton with module docstring and `dispatch(entry_mode=...)` entry-point signature in koan/app/speckit_orchestration.py
 
 ---
 
@@ -38,12 +38,12 @@ description: "Task list for the native /speckit mission orchestration feature"
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T003 [P] Add `get_speckit_config()` accessor (`quota_threshold` default 15, `review_max_iterations` default 3, `review_severity` default "important"; safe coercion) modeled on `get_review_reflect_config()` in koan/app/config.py
-- [ ] T004 Implement the code-enforced constitution gate (verify `<project>/.specify/memory/constitution.md`; return an actionable error naming file + project) in koan/app/speckit_orchestration.py
-- [ ] T005 Implement target-project resolution and `repo:`/`branch:` token parsing/stripping (reuse `resolve_project_path`) in koan/app/speckit_orchestration.py
-- [ ] T006 Implement single-mission queuing (`[project:name]` tag, `model_key: mission`, via `insert_pending_mission`) and per-step outbox progress notes (via `append_to_outbox`) in koan/app/speckit_orchestration.py
+- [X] T003 [P] Add `get_speckit_config()` accessor (`quota_threshold` default 15, `review_max_iterations` default 3, `review_severity` default "important"; safe coercion) modeled on `get_review_reflect_config()` in koan/app/config.py
+- [X] T004 Implement the code-enforced constitution gate (verify `<project>/.specify/memory/constitution.md`; return an actionable error naming file + project) in koan/app/speckit_orchestration.py
+- [X] T005 Implement target-project resolution and `repo:`/`branch:` token parsing/stripping (reuse `resolve_project_path`) in koan/app/speckit_orchestration.py
+- [X] T006 Implement single-mission queuing (`[project:name]` tag, `model_key: mission`, via `insert_pending_mission`) and per-step outbox progress notes (via `append_to_outbox`) in koan/app/speckit_orchestration.py
 - [ ] T007 [P] Implement the quota start-gate: when the agent loop picks a `/speckit` mission and `remaining_budget() < get_speckit_config()['quota_threshold']`, leave it Pending and skip; proceed automatically on recovery in koan/app/mission_executor.py
-- [ ] T008 Write foundational tests (config defaults/coercion, constitution-gate abort, token parsing, project resolution) in koan/tests/test_speckit_skill.py
+- [X] T008 Write foundational tests (config defaults/coercion, constitution-gate abort, token parsing, project resolution) in koan/tests/test_speckit_skill.py
 - [ ] T008a [P] Create the speckit runner module (modeled on `implement_runner`): build the Claude command carrying the orchestration prompt loaded via `load_skill_prompt`, project/branch args, and `model_key: mission` in koan/skills/core/speckit/speckit_runner.py *(plan-correction addition — do NOT create until functional; `_discover_runner_module` would auto-discover a stub)*
 - [ ] T008b Register `speckit` and `speckit_from_branch` in `_SKILL_RUNNERS` and add `_build_speckit_cmd` (+ from-branch variant) to `_COMMAND_BUILDERS` in koan/app/skill_dispatch.py *(plan-correction addition)*
 - [ ] T008c Add speckit arg validation (project-or-URL required; from-branch needs repo-id + branch) to `validate_skill_args()` in koan/app/skill_dispatch.py *(plan-correction addition)*
