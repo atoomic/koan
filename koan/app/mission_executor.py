@@ -481,6 +481,11 @@ def _maybe_fallback_provider_rerun(
     # Nothing to gain if the fallback resolves to the same binary that just failed.
     if fb.binary() == role_provider.binary():
         return claude_exit, stdout_file, stderr_file
+    # A fallback whose own binary is unavailable would just fail the same way —
+    # skip the wasted re-run (mirrors provider.resolve_role_provider's guard).
+    if not fb.is_available():
+        log("koan", f"Skipping fallback to '{fb.name}' — its binary is unavailable")
+        return claude_exit, stdout_file, stderr_file
 
     # Only a launch/auth failure warrants a provider swap.
     from app.cli_errors import ErrorCategory, classify_cli_error
