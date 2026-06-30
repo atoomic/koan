@@ -1,0 +1,137 @@
+"""Behavioral tests for the native /speckit skill orchestration helpers.
+
+Covers the code-enforced primitives in app.speckit_orchestration and the
+config accessor in app.config. These assert observable behavior (gates fire,
+tokens parsed, mission queued/deduped, progress written) — never source text.
+
+Run with:  KOAN_ROOT=/tmp/test-koan .venv/bin/pytest koan/tests/test_speckit_skill.py -v
+"""
+
+from app import config
+from app.speckit_orchestration import (
+    build_mission_entry,
+    constitution_path_for,
+    emit_progress,
+    extract_overrides,
+    has_constitution,
+    queue_mission,
+)
+
+
+# --- config accessor (T003) ---------------------------------------------------
+
+def test_get_speckit_config_defaults(monkeypatch):
+    monkeypatch.setattr(config, "_load_config", lambda: {})
+    cfg = config.get_speckit_config()
+    assert cfg == {
+        "quota_threshold": 15,
+        "review_max_iterations": 3,
+        "review_severity": "important",
+    }
+
+
+def test_get_speckit_config_honors_values(monkeypatch):
+    monkeypatch.setattr(
+        config,
+        "_load_config",
+        lambda: {"speckit": {"quota_threshold": 25, "review_max_iterations": 5, "review_severity": "high"}},
+    )
+    cfg = config.get_speckit_config()
+    assert cfg == {"quota_threshold": 25, "review_max_iterations": 5, "review_severity": "high"}
+
+
+def test_get_speckit_config_coerces_and_clamps(monkeypatch):
+    monkeypatch.setattr(
+        config,
+        "_load_config",
+        lambda: {"speckit": {"quota_threshold": "200", "review_max_iterations": "bad", "review_severity": "  "}},
+    )
+    cfg = config.get_speckit_config()
+    assert cfg["quota_threshold"] == 100          # clamped to 0-100
+    assert cfg["review_max_iterations"] == 3      # non-int -> default
+    assert cfg["review_severity"] == "important"  # blank -> default
+
+
+def test_get_speckit_config_non_dict_section(monkeypatch):
+    monkeypatch.setattr(config, "_load_config", lambda: {"speckit": "not a dict"})
+    assert config.get_speckit_config()["quota_threshold"] == 15
+
+
+# --- constitution gate (T004) -------------------------------------------------
+
+def test_has_constitution_false_then_true(tmp_path):
+    assert has_constitution(tmp_path) is False
+    cpath = constitution_path_for(tmp_path)
+    cpath.parent.mkdir(parents=True)
+    cpath.write_text("# constitution\n", encoding="utf-8")
+    assert has_constitution(tmp_path) is True
+
+
+def test_constitution_path_is_under_specify_memory(tmp_path):
+    assert constitution_path_for(tmp_path) == tmp_path / ".specify" / "memory" / "constitution.md"
+
+
+# --- override token parsing (T005) -------------------------------------------
+
+def test_extract_overrides_parses_and_strips():
+    repo, branch, cleaned = extract_overrides("add CSV export repo:myrepo branch:mybranch")
+    assert repo == "myrepo"
+    assert branch == "mybranch"
+    assert cleaned == "add CSV export"
+
+
+def test_extract_overrides_absent_tokens():
+    repo, branch, cleaned = extract_overrides("just a plain goal")
+    assert repo is None
+    assert branch is None
+    assert cleaned == "just a plain goal"
+
+
+def test_extract_overrides_collapses_whitespace():
+    _, _, cleaned = extract_overrides("a    b     c")
+    assert cleaned == "a b c"
+
+
+# --- mission entry + queuing (T006) ------------------------------------------
+
+def test_build_mission_entry_with_project_tag():
+    assert (
+        build_mission_entry("speckit", "myproject", "add CSV export")
+        == "- [project:myproject] /speckit add CSV export"
+    )
+
+
+def test_build_mission_entry_without_project_tag():
+    assert build_mission_entry("speckit", "", "add CSV export") == "- /speckit add CSV export"
+
+
+def test_build_mission_entry_empty_goal():
+    assert build_mission_entry("speckit", "p", "   ") == "- [project:p] /speckit"
+
+
+def test_build_mission_entry_collapses_multiline_goal():
+    # A multiline goal must not break the single-line missions.md entry format.
+    entry = build_mission_entry("speckit", "p", "add CSV export\nwith headers\tand quoting")
+    assert "\n" not in entry
+    assert entry == "- [project:p] /speckit add CSV export with headers and quoting"
+
+
+def test_queue_mission_inserts_entry(tmp_path):
+    inserted = queue_mission(tmp_path, "speckit", "myproject", "add CSV export")
+    assert inserted is True
+    content = (tmp_path / "missions.md").read_text(encoding="utf-8")
+    assert "/speckit add CSV export" in content
+    assert "[project:myproject]" in content
+    # Dedup is URL/issue-scoped (matches /implement): a free-text chat goal has
+    # no URL, so a second identical send is NOT deduped — it queues again. This
+    # mirrors the spec's queueing model (dedup applies only to an issue that
+    # already has an open PR). Verified here so the behavior is pinned.
+    assert queue_mission(tmp_path, "speckit", "myproject", "add CSV export") is True
+
+
+# --- progress notes (T006 / FR-018) ------------------------------------------
+
+def test_emit_progress_writes_line(tmp_path):
+    emit_progress(tmp_path, "specify step complete")
+    text = (tmp_path / "outbox.md").read_text(encoding="utf-8")
+    assert "specify step complete" in text

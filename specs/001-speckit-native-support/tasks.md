@@ -44,8 +44,11 @@ description: "Task list for the native /speckit mission orchestration feature"
 - [ ] T006 Implement single-mission queuing (`[project:name]` tag, `model_key: mission`, via `insert_pending_mission`) and per-step outbox progress notes (via `append_to_outbox`) in koan/app/speckit_orchestration.py
 - [ ] T007 [P] Implement the quota start-gate: when the agent loop picks a `/speckit` mission and `remaining_budget() < get_speckit_config()['quota_threshold']`, leave it Pending and skip; proceed automatically on recovery in koan/app/mission_executor.py
 - [ ] T008 Write foundational tests (config defaults/coercion, constitution-gate abort, token parsing, project resolution) in koan/tests/test_speckit_skill.py
+- [ ] T008a [P] Create the speckit runner module (modeled on `implement_runner`): build the Claude command carrying the orchestration prompt loaded via `load_skill_prompt`, project/branch args, and `model_key: mission` in koan/skills/core/speckit/speckit_runner.py *(plan-correction addition — do NOT create until functional; `_discover_runner_module` would auto-discover a stub)*
+- [ ] T008b Register `speckit` and `speckit_from_branch` in `_SKILL_RUNNERS` and add `_build_speckit_cmd` (+ from-branch variant) to `_COMMAND_BUILDERS` in koan/app/skill_dispatch.py *(plan-correction addition)*
+- [ ] T008c Add speckit arg validation (project-or-URL required; from-branch needs repo-id + branch) to `validate_skill_args()` in koan/app/skill_dispatch.py *(plan-correction addition)*
 
-**Checkpoint**: Engine primitives ready — constitution gate, quota hold, resolution, queuing, and progress notes all behavior-tested.
+**Checkpoint**: Engine primitives ready — constitution gate, quota hold, resolution, queuing, progress notes, **runner + skill_dispatch registration**, all behavior-tested.
 
 ---
 

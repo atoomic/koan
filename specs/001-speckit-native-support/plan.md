@@ -99,7 +99,13 @@ Plus edits to existing files (no new modules):
 - `docs/users/user-manual.md` + `docs/users/skills.md` — document both commands.
 - `specs/skills/speckit.md` — durable per-skill design contract (Principle II).
 
-**Structure Decision**: Single-project extension (Option 1). Two thin skill handlers delegate to one shared `koan/app/speckit_orchestration.py` module so the code-enforced gates and prompt assembly live in exactly one place (Principle VI — single authority). The speckit sub-pipeline is driven by a prompt file per skill (`prompts/speckit.md`), keeping Python free of inline LLM prompts (constitution constraint). `skill_dispatch.py` is **unchanged** — `/speckit` queues a normal Claude mission like `/implement`, so it needs no `_SKILL_RUNNERS`/`_COMMAND_BUILDERS` entry.
+**Structure Decision**: Single-project extension (Option 1). Two thin skill handlers delegate to one shared `koan/app/speckit_orchestration.py` module so the code-enforced gates and prompt assembly live in exactly one place (Principle VI — single authority). The speckit sub-pipeline is driven by a prompt file per skill (`prompts/speckit.md`), keeping Python free of inline LLM prompts (constitution constraint).
+
+> **Plan correction (2026-06-29, implement phase).** Tracing `mission_executor._handle_skill_dispatch` → `skill_dispatch.is_skill_mission` / `dispatch_skill_mission` / `build_skill_command` showed a queued `/speckit` mission is dispatched like `/implement`: through a **runner module** (`_SKILL_RUNNERS`, e.g. `skills.core.speckit.speckit_runner`) plus a **command-builder** (`_COMMAND_BUILDERS`, e.g. `_build_speckit_cmd`), with arg validation in `validate_skill_args`. The earlier "zero `skill_dispatch.py` changes" assumption (research R1) was **wrong**. Corrected integration:
+> - `koan/skills/core/speckit/speckit_runner.py` + `koan/skills/core/speckit_from_branch/speckit_from_branch_runner.py` — runner modules (modeled on `implement_runner`) that build the Claude command carrying the orchestration prompt.
+> - `koan/app/skill_dispatch.py` — register both in `_SKILL_RUNNERS`; add `_build_speckit_cmd` (and the from-branch variant) to `_COMMAND_BUILDERS`; add speckit to `validate_skill_args`.
+> - Do **not** create a stub `*_runner.py` before it is functional — `_discover_runner_module` auto-discovers `<name>_runner.py`, which would route `/speckit` missions to a no-op stub. Runner + registration land together in the Foundational phase.
+> - The handler (`handler.py`) still queues `- [project:name] /speckit <goal>` at the bridge; the runner executes it in the agent loop. `speckit_orchestration.py` holds the shared gates/prompt-assembly used by both.
 
 ## Complexity Tracking
 

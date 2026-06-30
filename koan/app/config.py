@@ -1825,6 +1825,54 @@ def get_review_reflect_config() -> dict:
     return {"threshold": max(0, min(10, threshold))}
 
 
+def get_speckit_config() -> dict:
+    """Get the native ``/speckit`` skill configuration from config.yaml.
+
+    Single read path for every speckit tunable (constitution Principle VI).
+
+    Config key: ``speckit``
+      - quota_threshold (int, 0-100): minimum remaining session-quota
+        percentage required to START a ``/speckit`` run. Below it the mission
+        is held (left Pending) until quota recovers (FR-017). Default: 15.
+      - review_max_iterations (int, >=0): cap on the private review->fix loop
+        run after implementation (FR-009). Default: 3.
+      - review_severity (str): severity floor for review findings to fix.
+        Default: "important".
+
+    Returns:
+        Dict with keys ``quota_threshold`` (int), ``review_max_iterations``
+        (int), ``review_severity`` (str). Always present; safe defaults applied.
+    """
+    config = _load_config()
+    speckit_cfg = config.get("speckit", {}) or {}
+    if not isinstance(speckit_cfg, dict):
+        speckit_cfg = {}
+
+    quota_threshold = speckit_cfg.get("quota_threshold", 15)
+    try:
+        quota_threshold = int(quota_threshold)
+    except (TypeError, ValueError):
+        quota_threshold = 15
+    quota_threshold = max(0, min(100, quota_threshold))
+
+    review_max_iterations = speckit_cfg.get("review_max_iterations", 3)
+    try:
+        review_max_iterations = int(review_max_iterations)
+    except (TypeError, ValueError):
+        review_max_iterations = 3
+    review_max_iterations = max(0, review_max_iterations)
+
+    review_severity = speckit_cfg.get("review_severity", "important")
+    if not isinstance(review_severity, str) or not review_severity.strip():
+        review_severity = "important"
+
+    return {
+        "quota_threshold": quota_threshold,
+        "review_max_iterations": review_max_iterations,
+        "review_severity": review_severity,
+    }
+
+
 def get_review_memory_config() -> dict:
     """Get the review session-memory injection configuration from config.yaml.
 
