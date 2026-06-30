@@ -4,7 +4,7 @@ scope: core
 group: code
 emoji: 📋
 description: "Run a spec-kit pipeline (specify -> plan -> tasks -> implement) for a goal or tracker issue, then best-effort review/CI and a draft PR"
-version: 0.1.0
+version: 1.0.0
 audience: hybrid
 model_key: mission
 github_enabled: true
@@ -13,10 +13,12 @@ commands:
   - name: speckit
     description: "Run the spec-kit SDD pipeline for a project goal or tracker issue"
     usage: "/speckit <project> <goal> | /speckit <issue-url> [repo:.. branch:..]"
+handler: handler.py
 ---
 
-> **Scaffold (Phase 1).** This skill is under construction. The bridge handler
-> (`handler.py`), agent-loop runner (`speckit_runner.py`), and orchestration
-> prompt (`prompts/speckit.md`) are added in the Foundational + US1 phases per
-> `specs/001-speckit-native-support/tasks.md`. Until then `/speckit` is a
-> placeholder.
+Queue a `/speckit` mission: the handler gates on the target project's spec-kit
+constitution (`.specify/memory/constitution.md`) and queues a single mission. The
+agent loop then runs `speckit_runner`, which drives the specify → plan → tasks →
+implement pipeline (committing once per task), a best-effort private review loop,
+CI/test validation, and a draft PR. See
+`specs/001-speckit-native-support/plan.md`.

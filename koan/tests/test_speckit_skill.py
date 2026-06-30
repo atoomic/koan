@@ -16,6 +16,7 @@ from app.speckit_orchestration import (
     has_constitution,
     queue_mission,
 )
+from app.skills import SkillContext
 
 
 # --- config accessor (T003) ---------------------------------------------------
@@ -135,3 +136,59 @@ def test_emit_progress_writes_line(tmp_path):
     emit_progress(tmp_path, "specify step complete")
     text = (tmp_path / "outbox.md").read_text(encoding="utf-8")
     assert "specify step complete" in text
+
+
+# --- handler gate logic (US1) -------------------------------------------------
+
+def _ctx(args, tmp_path):
+    return SkillContext(
+        koan_root=tmp_path, instance_dir=tmp_path, command_name="speckit", args=args,
+    )
+
+
+def test_handler_usage_on_empty_args(tmp_path):
+    from skills.core.speckit.handler import handle
+
+    assert "Usage" in handle(_ctx("", tmp_path))
+
+
+def test_handler_unknown_project(tmp_path, monkeypatch):
+    import app.speckit_orchestration as orch
+
+    monkeypatch.setattr(orch, "resolve_target", lambda arg: (None, None))
+    from skills.core.speckit.handler import handle
+
+    assert "Unknown project" in handle(_ctx("ghostproject add X", tmp_path))
+
+
+def test_handler_aborts_without_constitution(tmp_path, monkeypatch):
+    import app.speckit_orchestration as orch
+
+    monkeypatch.setattr(orch, "resolve_target", lambda arg: (str(tmp_path), "myproject"))
+    monkeypatch.setattr(orch, "has_constitution", lambda path: False)
+    queued = []
+    monkeypatch.setattr(orch, "queue_mission", lambda *a, **k: queued.append(a) or True)
+    from skills.core.speckit.handler import handle
+
+    reply = handle(_ctx("myproject add CSV export", tmp_path))
+    assert "constitution" in reply
+    assert queued == []  # gated: nothing queued
+
+
+def test_handler_queues_when_constitution_present(tmp_path, monkeypatch):
+    import app.speckit_orchestration as orch
+
+    monkeypatch.setattr(orch, "resolve_target", lambda arg: (str(tmp_path), "myproject"))
+    monkeypatch.setattr(orch, "has_constitution", lambda path: True)
+    seen = {}
+
+    def fake_queue(instance_dir, command, project_name, goal, **k):
+        seen.update(command=command, project_name=project_name, goal=goal)
+        return True
+
+    monkeypatch.setattr(orch, "queue_mission", fake_queue)
+    from skills.core.speckit.handler import handle
+
+    reply = handle(_ctx("myproject add CSV export", tmp_path))
+    assert "Queued" in reply
+    assert seen == {"command": "speckit", "project_name": "myproject", "goal": "add CSV export"}
