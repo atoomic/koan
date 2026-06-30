@@ -1104,6 +1104,24 @@ class TestGetPendingPrsEdgeCases:
 
             assert result == []
 
+    def test_passes_limit_to_avoid_30_cap(self, research_env):
+        """Fetch passes an explicit --limit so a >30 PR queue isn't silently truncated."""
+        with patch("app.github.run_gh", return_value="[]") as mock_gh:
+            research = DeepResearch(
+                research_env["instance"],
+                research_env["project_name"],
+                research_env["project_path"],
+            )
+            research._pending_prs = None  # Reset autouse cache
+
+            research.get_pending_prs()
+
+            args = mock_gh.call_args.args
+            assert "--limit" in args
+            # The limit value follows the flag and exceeds gh's 30 default.
+            limit_val = int(args[args.index("--limit") + 1])
+            assert limit_val > 30
+
 
 # ---------------------------------------------------------------------------
 # get_open_issues edge cases
