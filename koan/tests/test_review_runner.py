@@ -4693,6 +4693,29 @@ class TestReviewBinaryRouting:
         assert cmd[cmd.index("--model") + 1] == "opus"
         assert "codex-WRONG" not in cmd
 
+    def test_review_attribution_uses_review_provider(self):
+        """The footer attribution (provider + model) reflects the review_mode
+        provider, not the global one (PR #2251 comment-4848512613)."""
+        from unittest.mock import patch
+        import app.provider as provider
+        from app.review_runner import _review_attribution
+
+        full = {
+            "cli_provider": "codex",
+            "cli": {"default": {"review_mode": "claude:/opt/review-claude"}},
+            "models": {
+                "codex": {"review_mode": "codex-WRONG"},
+                "claude": {"review_mode": "opus"},
+            },
+        }
+        with patch("app.config._load_config", return_value=full), \
+             patch("app.config._load_project_overrides", return_value={}), \
+             patch("app.utils.load_config", return_value=full):
+            provider.reset_provider()
+            name, model = _review_attribution()
+        assert name == "claude"
+        assert model == "opus"
+
     def test_per_project_cli_review_mode_applies(self):
         """A per-project cli.review_mode override routes the review binary."""
         from unittest.mock import MagicMock, patch

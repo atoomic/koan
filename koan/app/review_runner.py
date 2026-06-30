@@ -746,6 +746,30 @@ def build_review_prompt(
     return load_prompt_or_skill(skill_dir, prompt_name, **kwargs)
 
 
+def _review_attribution(project_name: str = "") -> Tuple[str, str]:
+    """Return ``(provider_name, model)`` the review actually runs on.
+
+    Resolves the ``review_mode`` role against the same provider the review CLI
+    uses (``resolve_role_provider`` — including any launch-fallback swap) and
+    reads that provider's model section (``review_mode`` then ``mission``).
+    Single source of truth for both the review invocation and the footer
+    attribution, so the displayed provider/model can never drift from the
+    binary/model actually used.
+    """
+    from app.cli_provider import resolve_role_provider
+    from app.config import get_model_config
+
+    provider = resolve_role_provider("review_mode", project_name)
+    models = get_model_config(
+        project_name,
+        role_providers={
+            "review_mode": provider.name,
+            "mission": provider.name,
+        },
+    )
+    return provider.name, (models.get("review_mode") or models.get("mission", ""))
+
+
 def _run_claude_review(
     prompt: str,
     project_path: str,
@@ -770,25 +794,14 @@ def _run_claude_review(
         (output, error) tuple. output is the provider's review text (empty on
         failure), error is the failure reason (empty on success).
     """
-    from app.cli_provider import resolve_role_provider, run_command_streaming
-    from app.config import get_model_config, get_skill_max_turns
+    from app.cli_provider import run_command_streaming
+    from app.config import get_skill_max_turns
 
     if model is None:
-        # Resolve the model against the SAME provider run_command_streaming will
-        # run on (resolve_role_provider — including any launch fallback swap),
-        # NOT the global provider. Otherwise a review pinned to a Claude binary
-        # (cli.review_mode: claude:...) under a global Codex would receive a
-        # Codex model name. Mirrors build_mission_command's role_providers; the
-        # mission model is kept as the fallback, matching the prior behavior.
-        review_provider = resolve_role_provider("review_mode", project_name)
-        models = get_model_config(
-            project_name,
-            role_providers={
-                "review_mode": review_provider.name,
-                "mission": review_provider.name,
-            },
-        )
-        model = models.get("review_mode") or models.get("mission", "")
+        # Resolve the model against the review_mode provider (not the global
+        # one) so it matches the binary the review runs on — see
+        # _review_attribution, shared with the footer attribution below.
+        _, model = _review_attribution(project_name)
 
     try:
         # Resolve the review-path CLI via the "review_mode" role (the cli:
@@ -2762,15 +2775,10 @@ def run_review(
         prior_review=prior_review_text,
     )
 
-    # Resolve provider/model for footer attribution
-    from app.config import get_model_config as _get_model_config
-    from app.provider import get_provider_name
-    _review_models = _get_model_config()
-    review_model = (
-        _review_models.get("review_mode")
-        or _review_models.get("mission", "")
-    )
-    review_provider_name = get_provider_name()
+    # Resolve provider/model for footer attribution against the review_mode
+    # provider (the one the review actually runs on), so the footer reflects the
+    # binary/model used rather than the global provider.
+    review_provider_name, review_model = _review_attribution(project_name or "")
 
     # Step 3: Run provider review (read-only)
     notify_fn(f"Analyzing code changes on `{context['branch']}`...")
