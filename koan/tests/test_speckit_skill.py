@@ -233,3 +233,47 @@ def test_speckit_skills_are_github_enabled_for_mention():
         skill = validate_command(cmd, registry)
         assert skill is not None, f"/{cmd} is not github_enabled"
         assert skill.github_enabled is True
+
+
+# --- US2: issue-URL trigger + repo:/branch: override forwarding --------------
+
+def test_handler_forwards_issue_url_and_override_tokens(tmp_path, monkeypatch):
+    import app.speckit_orchestration as orch
+
+    monkeypatch.setattr(orch, "resolve_target", lambda arg: (str(tmp_path), "myrepo"))
+    monkeypatch.setattr(orch, "has_constitution", lambda path: True)
+    seen = {}
+
+    def fake_queue(instance_dir, command, project_name, goal, **k):
+        seen["goal"] = goal
+        return True
+
+    monkeypatch.setattr(orch, "queue_mission", fake_queue)
+    from skills.core.speckit.handler import handle
+
+    reply = handle(_ctx("https://github.com/o/r/issues/42 repo:r branch:feat", tmp_path))
+    assert "Queued" in reply
+    assert "https://github.com/o/r/issues/42" in seen["goal"]
+    assert "repo:r" in seen["goal"]      # forwarded verbatim
+    assert "branch:feat" in seen["goal"]
+
+
+def test_runner_applies_branch_override_and_strips_tokens(monkeypatch, tmp_path):
+    import skills.core.speckit.speckit_runner as runner
+
+    monkeypatch.setattr(runner, "has_constitution", lambda path: True)
+    captured = {}
+    monkeypatch.setattr(
+        runner, "load_prompt_or_skill",
+        lambda skill_dir, name, **kw: captured.update(kw) or "PROMPT",
+    )
+    monkeypatch.setattr(runner, "_invoke_claude", lambda path, prompt: "done")
+
+    runner.run_speckit(
+        project_path=str(tmp_path),
+        project_name="myrepo",
+        goal="add CSV export branch:feat-x",
+        notify_fn=lambda _msg: None,
+    )
+    assert captured["GOAL"] == "add CSV export"  # branch: stripped from the prompt goal
+    assert captured["BASE_BRANCH"] == "feat-x"   # branch: applied as base override

@@ -25,12 +25,13 @@ def handle(ctx):
     project_arg = parts[0]
     rest = parts[1] if len(parts) > 1 else ""
 
-    # Issue-URL trigger: the URL itself is the goal (the runner/agent fetches the
-    # issue content). Chat trigger: first token is the project, the rest is goal.
+    # Issue-URL trigger: the URL is the goal (the runner/agent fetches the issue
+    # content). Chat trigger: the rest is the goal. `repo:`/`branch:` override
+    # tokens are forwarded verbatim; the runner parses them (FR-007).
     if project_arg.lower().startswith(("http://", "https://")):
-        goal_source = project_arg + (" " + rest if rest else "")
+        goal = (project_arg + " " + rest).strip()
     else:
-        goal_source = rest
+        goal = rest.strip()
 
     project_path, project_name = orch.resolve_target(project_arg)
     if not project_path:
@@ -43,8 +44,6 @@ def handle(ctx):
             "before using /speckit."
         )
 
-    _repo, _branch, goal = orch.extract_overrides(goal_source)
-    goal = goal or goal_source.strip()
     if not goal:
         return "📖 Usage: /speckit <project> <goal>"
 

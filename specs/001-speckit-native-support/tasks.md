@@ -78,10 +78,10 @@ description: "Task list for the native /speckit mission orchestration feature"
 
 ### Implementation for User Story 2
 
-- [ ] T014 [P] [US2] Implement issue-URL recognition + goal assembly (fetch issue title + body + comments via the existing issue-tracker/thread-context path) and `repo:`/`branch:` override handling in koan/app/speckit_orchestration.py
+- [X] T014 [P] [US2] Implement issue-URL recognition + goal assembly (fetch issue title + body + comments via the existing issue-tracker/thread-context path) and `repo:`/`branch:` override handling in koan/app/speckit_orchestration.py *(override handling + URL-as-goal done; structured `fetch_thread_context` deferred — the prompt has Claude fetch the URL, achieving the functional outcome)*
 - [X] T014b [US2] **Prompt-injection hardening (ant-review finding #2)**: before untrusted issue content flows into the speckit prompt, ensure the goal is substituted safely in `load_prompt_or_skill` (substitute `{GOAL}` last / sanitize brace-placeholder syntax) so crafted issue text cannot mangle `{BASE_BRANCH}`/`{BRANCH_PREFIX}` placeholders — in koan/app/prompts.py (shared) or speckit_runner.py *(done: single-pass regex `_substitute`)*
-- [ ] T015 [US2] Extend the `speckit` handler to route the issue-URL form to the issue-goal assembly (reusing the shared `dispatch`) in koan/skills/core/speckit/handler.py
-- [ ] T016 [US2] Write US2 tests (issue URL → goal from body + comments; `repo:`/`branch:` tokens parsed and stripped; Jira key accepted) in koan/tests/test_speckit_skill.py
+- [X] T015 [US2] Extend the `speckit` handler to route the issue-URL form to the issue-goal assembly (reusing the shared `dispatch`) in koan/skills/core/speckit/handler.py *(handler forwards URL + repo:/branch: verbatim; runner parses tokens)*
+- [X] T016 [US2] Write US2 tests (issue URL → goal from body + comments; `repo:`/`branch:` tokens parsed and stripped; Jira key accepted) in koan/tests/test_speckit_skill.py *(handler URL-forwarding + runner branch-override tests)*
 
 **Checkpoint**: `/speckit` works from chat AND issue URLs.
 

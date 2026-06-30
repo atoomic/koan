@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from app.prompts import load_prompt_or_skill
-from app.speckit_orchestration import has_constitution
+from app.speckit_orchestration import extract_overrides, has_constitution
 
 logger = logging.getLogger(__name__)
 
@@ -83,18 +83,25 @@ def run_speckit(
     from app.pr_submit import guess_project_name
 
     cfg = get_speckit_config()
-    effective_base = base_branch or resolve_base_branch(
-        project_name or guess_project_name(project_path), project_path,
+    # FR-007: a `branch:` token in the goal overrides the base branch; `repo:` is
+    # informational (the project is already resolved). Tokens are stripped from
+    # the goal text that goes into the prompt.
+    _repo_token, branch_token, goal_text = extract_overrides(goal)
+    goal_text = goal_text or goal
+    effective_base = (
+        base_branch
+        or branch_token
+        or resolve_base_branch(project_name or guess_project_name(project_path), project_path)
     )
 
     label = project_name or project_path
-    _progress(f"Running /speckit for {label}: {goal[:80]}")
-    notify_fn(f"📋 /speckit started for {label}: {goal[:120]}")
+    _progress(f"Running /speckit for {label}: {goal_text[:80]}")
+    notify_fn(f"📋 /speckit started for {label}: {goal_text[:120]}")
 
     prompt = load_prompt_or_skill(
         _SKILL_DIR,
         "speckit",
-        GOAL=goal,
+        GOAL=goal_text,
         PROJECT=label,
         BRANCH_PREFIX=get_branch_prefix(),
         BASE_BRANCH=effective_base,
@@ -110,12 +117,12 @@ def run_speckit(
         return False, msg
 
     if not output:
-        msg = f"⚠️ /speckit produced no output for {label}: {goal[:120]}"
+        msg = f"⚠️ /speckit produced no output for {label}: {goal_text[:120]}"
         notify_fn(msg)
         return False, msg
 
     _progress("/speckit pipeline complete")
-    notify_fn(f"✅ /speckit complete for {label}: {goal[:120]}")
+    notify_fn(f"✅ /speckit complete for {label}: {goal_text[:120]}")
     return True, output.strip()
 
 
