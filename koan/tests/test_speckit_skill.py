@@ -192,3 +192,28 @@ def test_handler_queues_when_constitution_present(tmp_path, monkeypatch):
     reply = handle(_ctx("myproject add CSV export", tmp_path))
     assert "Queued" in reply
     assert seen == {"command": "speckit", "project_name": "myproject", "goal": "add CSV export"}
+
+
+# --- prompt substitution hardening (T014b / ant-review finding #2) -----------
+# Untrusted goal/issue text flows into the speckit prompt; {KEY} substitution
+# must be single-pass so a value containing literal {OTHER_KEY} text cannot
+# contaminate or probe other substitutions.
+
+def test_substitute_is_single_pass_no_cross_contamination(monkeypatch):
+    from app import prompts
+
+    monkeypatch.setattr(prompts, "_default_placeholders", lambda: {})
+    # GOAL value contains a literal {BASE_BRANCH}; it must NOT be replaced.
+    out = prompts._substitute("Goal: {GOAL} on {BASE_BRANCH}", {
+        "GOAL": "do {BASE_BRANCH} thing",
+        "BASE_BRANCH": "main",
+    })
+    assert out == "Goal: do {BASE_BRANCH} thing on main"
+
+
+def test_substitute_leaves_unknown_placeholders(monkeypatch):
+    from app import prompts
+
+    monkeypatch.setattr(prompts, "_default_placeholders", lambda: {})
+    out = prompts._substitute("hi {NAME} {UNKNOWN}", {"NAME": "koan"})
+    assert out == "hi koan {UNKNOWN}"
