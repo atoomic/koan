@@ -4582,7 +4582,8 @@ class TestRunClaudeReviewModelOverride:
 
         _, kwargs = mock_run.call_args
         assert kwargs.get("model") == "review-model"
-        assert kwargs.get("model_key") == "mission"
+        # The review path resolves its CLI via the "review_mode" role (cli:).
+        assert kwargs.get("model_key") == "review_mode"
 
     @patch("app.cli_provider.run_command_streaming")
     @patch("app.config.get_model_config", return_value={"review_mode": "", "mission": "mission-model"})
@@ -4598,7 +4599,8 @@ class TestRunClaudeReviewModelOverride:
 
         _, kwargs = mock_run.call_args
         assert kwargs.get("model") == "mission-model"
-        assert kwargs.get("model_key") == "mission"
+        # The review path resolves its CLI via the "review_mode" role (cli:).
+        assert kwargs.get("model_key") == "review_mode"
 
 
 # ---------------------------------------------------------------------------

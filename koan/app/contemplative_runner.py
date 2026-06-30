@@ -69,18 +69,22 @@ def build_contemplative_command(
         github_nickname=github_nickname,
     )
 
-    from app.cli_provider import build_full_command
+    from app.cli_provider import build_full_command, get_provider_for_role
     from app.config import get_contemplative_max_turns, get_contemplative_tools, get_mcp_configs
 
     tools_str = get_contemplative_tools(project_name=project_name)
     allowed_tools = [t.strip() for t in tools_str.split(",") if t.strip()]
     mcp_configs = get_mcp_configs(project_name)
 
+    # Contemplative sessions run on the lightweight role's provider (cli:
+    # section); extra_flags supplies the matching lightweight model.
+    provider = get_provider_for_role("lightweight", project_name)
     cmd = build_full_command(
         prompt=prompt,
         allowed_tools=allowed_tools,
         mcp_configs=mcp_configs,
         max_turns=get_contemplative_max_turns(),
+        provider=provider,
     )
     if extra_flags:
         cmd.extend(extra_flags)
