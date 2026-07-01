@@ -27,7 +27,8 @@ provider/__init__.py  → registry + resolution (env → config → default) + c
 |---|---|
 | `base.CLIProvider` | The contract: build command, run, stream, tool-name vocabulary. |
 | `base.supports_usage_tracking()` / `record_usage()` | Per-provider usage hooks. Not all CLIs surface usage the same way. |
-| `__init__.run_command()` / `run_command_streaming()` | The single invocation entry points. Callers should not spawn provider subprocesses directly. |
+| `__init__.run_command()` / `run_command_streaming()` | The single invocation entry points. Callers should not spawn provider subprocesses directly. **Both retry transient failures:** `run_command` via `run_cli_with_retry`; `run_command_streaming` via its own bounded loop (`STREAM_RETRY_MAX_ATTEMPTS`=3, `STREAM_RETRY_BACKOFF`=(60,120,240)s) gated on `_stream_error_is_retryable()` → `classify_cli_error(...) == ErrorCategory.RETRYABLE`. |
+| `__init__.STREAM_RETRY_BACKOFF` / `STREAM_RETRY_MAX_ATTEMPTS` / `_stream_error_is_retryable()` | Streaming-path retry knobs + classifier. Generous backoff because the CLI already retries internally for ~3 min on a gateway 529, so short backoffs just re-fail a sustained outage. `_stream_error_is_retryable` mirrors `run_cli_with_retry`'s policy (RETRYABLE only). |
 | `__init__.build_full_command()` | Assembles the provider-specific argv. |
 | `__init__.get_provider_display()` / `get_cli_binary_name()` | Display helpers. `get_provider_display()` returns `"<name>"` or `"<name> (<binary>)"` when `KOAN_CLAUDE_CLI_PATH` points at a different binary. Single source of truth for the global provider line shown by the startup banner and `/status`. Per-role provider overrides are summarized separately by `describe_cli_roles()`. |
 | `__init__.get_provider_for_role(role, project_name)` / `get_fallback_provider(project_name)` / `resolve_role_provider(role, project_name)` | Per-role provider selection (the `cli:` config section). `get_provider_for_role` returns the **global cached singleton** when the role is unset (parity) or a **fresh** `_PROVIDERS[flavor](binary_path=path)` otherwise — never written to `_cached_provider`. `get_fallback_provider` returns the single section-wide `cli.fallback` instance (or `None`). `resolve_role_provider` is the stateless-helper entry point: it pre-flight-swaps to the fallback when the role binary is unavailable. |
@@ -63,6 +64,17 @@ provider/__init__.py  → registry + resolution (env → config → default) + c
   when no commits were produced. Quota still pauses; transient errors still use
   the in-place retry. Do not widen this to quota — that would double-spend across
   subscriptions and change the pause contract.
+- **Both invocation entry points retry transient (RETRYABLE) errors; quota/auth/
+  terminal/unknown do not retry.** `run_command` uses `run_cli_with_retry`;
+  `run_command_streaming` runs its own popen+stream loop up to
+  `STREAM_RETRY_MAX_ATTEMPTS` (`STREAM_RETRY_BACKOFF` 60→120→240s). On each retry
+  the stdout/stderr accumulators are RESET so only the final attempt's output is
+  returned (no concatenation across attempts). Timeouts and max-turns are NOT
+  retried (timeout = possibly stuck session; max-turns = graceful partial result).
+  Quota still routes to pause_manager; auth/terminal/unknown fail fast — identical
+  to the non-streaming path. This closes the gap where a single gateway 529
+  (surfaced in a stream-json `assistant` event on stdout) failed reviews/plans on
+  the first hit because the streaming path previously had no retry.
 - **Tool-name vocabularies differ per provider.** Copilot maps its own names; the
   abstraction must translate, not leak provider-specific tool names upward.
 - **Quota/usage extraction is provider-specific.** Claude exposes usage in

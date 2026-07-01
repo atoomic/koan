@@ -359,6 +359,20 @@ Check your usage:
 claude usage
 ```
 
+### Transient gateway errors (529 / 5xx / overload)
+
+A provider gateway (e.g. Z.ai returning `API Error: 529 … temporarily
+overloaded`) can reject a request before any model output. Koan's CLI runners
+treat these as transient and retry them automatically with exponential backoff
+(60s → 120s → 240s, up to 3 attempts) before failing the call — so a brief
+overload burst no longer fails a review, plan, chat, or mission on the first
+hit. The retry fires only for genuinely transient errors (`api error: 5xx`,
+`temporarily overloaded`, connection reset/refused, timeout-style network
+errors); authentication failures, quota exhaustion, max-turns, and unknown
+errors are **not** retried. Quota exhaustion still pauses Koan as usual. You'll
+see a `[cli] retryable error (attempt N/3) … — retrying in Ns` line in `make
+logs` while it backs off.
+
 ### "Reached max turns" errors
 
 If you see this in logs, the agent ran out of allowed tool-use rounds.

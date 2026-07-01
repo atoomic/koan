@@ -27,6 +27,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -989,6 +990,38 @@ def _persist_stream_usage_snapshot(snapshot: Optional[Dict[str, Any]]) -> None:
         print(f"[provider] WARNING: stream usage sidecar write failed: {exc}", file=sys.stderr)
 
 
+# Streaming-path retry backoff (seconds). Generous on purpose: the CLI already
+# retries internally for ~3 minutes on a gateway 529, so short backoffs just
+# re-fail against a sustained outage. ``STREAM_RETRY_MAX_ATTEMPTS`` total
+# attempts means two sleeps (60s, 120s) before giving up.
+STREAM_RETRY_BACKOFF = (60, 120, 240)
+STREAM_RETRY_MAX_ATTEMPTS = 3
+
+
+def _stream_error_is_retryable(
+    returncode: int, stdout: str, stderr: str, provider: Optional[CLIProvider]
+) -> bool:
+    """True if a streaming CLI failure is transient and worth retrying.
+
+    Mirrors :func:`run_cli_with_retry`'s policy exactly: only
+    :class:`ErrorCategory.RETRYABLE` (529/overload/5xx/transient network) is
+    retried. Quota is delegated to pause_manager; auth/terminal/unknown fail
+    fast. The classifier reads stdout AND stderr, so a 529 surfaced in a
+    stream-json ``assistant`` event (e.g. the Z.ai review failure) is caught.
+    """
+    from app.cli_errors import ErrorCategory, classify_cli_error
+
+    return (
+        classify_cli_error(
+            returncode,
+            stdout,
+            stderr,
+            provider_name=getattr(provider, "name", "") or "",
+        )
+        == ErrorCategory.RETRYABLE
+    )
+
+
 def run_command_streaming(
     prompt: str,
     project_path: str,
@@ -1052,113 +1085,144 @@ def run_command_streaming(
 
     from app.cli_exec import popen_cli
 
-    # raw_lines is scanned only for error/max-turns detection, never returned,
-    # so a bounded tail is safe and caps RAM on long provider streams. 2000 is
-    # deliberately generous so terminal _format_cli_error context and the
-    # non-stream-json max-turns regex fallback keep working.
-    raw_lines = deque(maxlen=2000)  # for error reporting (terminal lines)
-    # text_lines IS the fallback return value when no result event arrives —
-    # it must stay unbounded or long sessions would silently lose output.
-    text_lines: List[str] = []  # fallback return value when no result event
-    final_result: Optional[str] = None
-    usage_snapshot: Optional[Dict[str, Any]] = None
-    saw_max_turns_event = False
-    stderr_text = ""
+    # Retry the whole popen+stream on a transient (RETRYABLE) failure — e.g. a
+    # Z.ai gateway 529 / "temporarily overloaded". The non-streaming path gets
+    # this via run_cli_with_retry; the streaming path (reviews, plans, streaming
+    # skills) did not, so a single 529 failed them outright. Accumulators are
+    # reset each attempt so only the FINAL attempt's output is returned (no
+    # concatenation across retries). Timeouts and max-turns are NOT retried
+    # (timeout = possibly stuck session; max-turns = graceful partial result);
+    # quota/auth/terminal/unknown aren't either — see _stream_error_is_retryable.
     try:
-        proc, cleanup = popen_cli(
-            cmd,
-            provider=provider,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding="utf-8",
-            errors="replace",
-            cwd=project_path,
-        )
-        # Every print() in this loop is the load-bearing watchdog signal —
-        # run.py's skill-runner liveness watchdog (600s) resets on each line
-        # emitted to stdout. Do not silence these prints; doing so reintroduces
-        # the silent-CLI hang this PR fixes (see PR #1372).
-        try:
-            for line in proc.stdout:
-                stripped = line.rstrip("\n")
-                raw_lines.append(stripped)
-                if not stripped:
-                    continue
-                event: Optional[Dict[str, Any]] = None
-                if use_stream_json:
-                    try:
-                        parsed = json.loads(stripped)
-                        if isinstance(parsed, dict):
-                            event = parsed
-                    except (json.JSONDecodeError, ValueError):
-                        event = None
-                if event is not None:
-                    print(_summarize_stream_event(event), flush=True)
-                    event_usage = _usage_snapshot_from_event(event)
-                    if event_usage is not None:
-                        usage_snapshot = event_usage
-                    # Accumulate assistant text blocks so a stream that dies
-                    # before the final ``result`` event (timeout, watchdog
-                    # kill, SIGPIPE) still returns whatever the provider managed
-                    # to print, instead of silently returning "".
-                    text_lines.extend(_extract_assistant_text_chunks(event))
-                    result_text = _extract_result_text(event)
-                    if result_text is not None:
-                        final_result = result_text
-                    if _is_stream_json_max_turns(event):
-                        saw_max_turns_event = True
-                else:
-                    # Non-JSON: provider doesn't speak stream-json or a stray
-                    # warning slipped in. Print and remember for the fallback.
-                    print(stripped, flush=True)
-                    text_lines.append(stripped)
-            stderr_text = proc.stderr.read() if proc.stderr else ""
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired as e:
-            proc.kill()
-            proc.wait()
-            raise RuntimeError(f"CLI invocation timed out after {timeout}s") from e
-        finally:
-            if proc.stdout:
-                proc.stdout.close()
-            if proc.stderr:
-                proc.stderr.close()
-            cleanup()
+        attempt = 0
+        while True:
+            # raw_lines is scanned only for error/max-turns detection, never
+            # returned, so a bounded tail is safe and caps RAM on long provider
+            # streams. 2000 is deliberately generous so terminal _format_cli_error
+            # context and the non-stream-json max-turns regex fallback keep working.
+            raw_lines = deque(maxlen=2000)  # for error reporting (terminal lines)
+            # text_lines IS the fallback return value when no result event
+            # arrives — it must stay unbounded or long sessions silently lose
+            # output. Reset each retry so only the final attempt contributes.
+            text_lines: List[str] = []  # fallback return value when no result event
+            final_result: Optional[str] = None
+            usage_snapshot: Optional[Dict[str, Any]] = None
+            saw_max_turns_event = False
+            stderr_text = ""
 
-        raw_stdout = "\n".join(raw_lines)
-        # The legacy regex still fires on non-stream-json output (codex,
-        # warnings printed before the stream begins) and on stream-json
-        # results whose subtype encodes the limit.
-        hit_max_turns = saw_max_turns_event or _is_max_turns_error(raw_stdout)
-        last_message_text = ""
-        if last_message_path:
-            with contextlib.suppress(OSError, UnicodeDecodeError):
-                last_message_text = Path(last_message_path).read_text()
-        if last_message_text.strip():
-            return_text = last_message_text
-        elif final_result is not None:
-            return_text = final_result
-        else:
-            return_text = "\n".join(text_lines)
+            proc, cleanup = popen_cli(
+                cmd,
+                provider=provider,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+                cwd=project_path,
+            )
+            # Every print() in this loop is the load-bearing watchdog signal —
+            # run.py's skill-runner liveness watchdog (600s) resets on each line
+            # emitted to stdout. Do not silence these prints; doing so
+            # reintroduces the silent-CLI hang this PR fixes (see PR #1372).
+            try:
+                for line in proc.stdout:
+                    stripped = line.rstrip("\n")
+                    raw_lines.append(stripped)
+                    if not stripped:
+                        continue
+                    event: Optional[Dict[str, Any]] = None
+                    if use_stream_json:
+                        try:
+                            parsed = json.loads(stripped)
+                            if isinstance(parsed, dict):
+                                event = parsed
+                        except (json.JSONDecodeError, ValueError):
+                            event = None
+                    if event is not None:
+                        print(_summarize_stream_event(event), flush=True)
+                        event_usage = _usage_snapshot_from_event(event)
+                        if event_usage is not None:
+                            usage_snapshot = event_usage
+                        # Accumulate assistant text blocks so a stream that dies
+                        # before the final ``result`` event (timeout, watchdog
+                        # kill, SIGPIPE) still returns whatever the provider
+                        # managed to print, instead of silently returning "".
+                        text_lines.extend(_extract_assistant_text_chunks(event))
+                        result_text = _extract_result_text(event)
+                        if result_text is not None:
+                            final_result = result_text
+                        if _is_stream_json_max_turns(event):
+                            saw_max_turns_event = True
+                    else:
+                        # Non-JSON: provider doesn't speak stream-json or a
+                        # stray warning slipped in. Print + remember fallback.
+                        print(stripped, flush=True)
+                        text_lines.append(stripped)
+                stderr_text = proc.stderr.read() if proc.stderr else ""
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired as e:
+                proc.kill()
+                proc.wait()
+                raise RuntimeError(f"CLI invocation timed out after {timeout}s") from e
+            finally:
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+                cleanup()
 
-        if proc.returncode != 0:
+            raw_stdout = "\n".join(raw_lines)
+            # The legacy regex still fires on non-stream-json output (codex,
+            # warnings printed before the stream begins) and on stream-json
+            # results whose subtype encodes the limit.
+            hit_max_turns = saw_max_turns_event or _is_max_turns_error(raw_stdout)
+            last_message_text = ""
+            if last_message_path:
+                with contextlib.suppress(OSError, UnicodeDecodeError):
+                    last_message_text = Path(last_message_path).read_text()
+            if last_message_text.strip():
+                return_text = last_message_text
+            elif final_result is not None:
+                return_text = final_result
+            else:
+                return_text = "\n".join(text_lines)
+
+            rc = proc.returncode
             # Max-turns is a graceful limit — return partial output so callers
-            # can extract useful results from an incomplete session.
-            if hit_max_turns:
+            # can extract useful results from an incomplete session. Never retried.
+            if rc != 0 and hit_max_turns:
                 _warn_max_turns(max_turns, max_turns_source)
                 from app.claude_step import strip_cli_noise
                 _persist_stream_usage_snapshot(usage_snapshot)
                 return strip_cli_noise(return_text.strip())
-            raise RuntimeError(
-                _format_cli_error(proc.returncode, raw_stdout, stderr_text)
-            )
 
-        if hit_max_turns:
-            _warn_max_turns(max_turns, max_turns_source)
+            if rc == 0:
+                if hit_max_turns:
+                    _warn_max_turns(max_turns, max_turns_source)
+                from app.claude_step import strip_cli_noise
+                _persist_stream_usage_snapshot(usage_snapshot)
+                return strip_cli_noise(return_text.strip())
 
-        from app.claude_step import strip_cli_noise
-        _persist_stream_usage_snapshot(usage_snapshot)
-        return strip_cli_noise(return_text.strip())
+            # Non-zero, not max-turns. Retry only on transient (RETRYABLE)
+            # errors; otherwise fail fast with the real exit code + diagnostics.
+            if (
+                attempt < STREAM_RETRY_MAX_ATTEMPTS - 1
+                and _stream_error_is_retryable(rc, raw_stdout, stderr_text, provider)
+            ):
+                delay = STREAM_RETRY_BACKOFF[min(attempt, len(STREAM_RETRY_BACKOFF) - 1)]
+                err_detail = (stderr_text or raw_stdout).strip()
+                err_detail = err_detail[:200] if err_detail else "unknown"
+                # This print is also a liveness-heartbeat for the skill-runner
+                # watchdog, emitted just before the sleep below.
+                print(
+                    f"[cli] retryable error (attempt {attempt + 1}/{STREAM_RETRY_MAX_ATTEMPTS}): "
+                    f"{err_detail} — retrying in {delay}s",
+                    flush=True,
+                )
+                time.sleep(delay)
+                attempt += 1
+                continue
+
+            raise RuntimeError(_format_cli_error(rc, raw_stdout, stderr_text))
     finally:
         if last_message_path:
             with contextlib.suppress(OSError):

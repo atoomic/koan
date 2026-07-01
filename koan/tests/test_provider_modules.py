@@ -2136,3 +2136,149 @@ class TestSummarizeStreamEventEdgeCases:
         })
         # Empty text should render as just "text" without preview
         assert "text" in line
+
+
+class TestRunCommandStreamingRetry:
+    """run_command_streaming retries transient (RETRYABLE) failures.
+
+    Regression coverage for the Z.ai gateway-529 review failure: a 529 surfaced
+    in a stream-json stdout event (where claude surfaces it) used to fail the
+    call on the first hit because the streaming path had no retry. It now
+    retries with STREAM_RETRY_BACKOFF (60, 120, 240), mirroring run_cli_with_retry.
+    Accumulators reset per attempt, so only the final attempt's output is returned.
+    """
+
+    def _make_proc(self, stdout_lines, stderr="", returncode=0):
+        proc = MagicMock()
+        stdout = MagicMock()
+        stdout.__iter__ = lambda self: iter(stdout_lines)
+        stdout.close = MagicMock()
+        proc.stdout = stdout
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = stderr
+        proc.returncode = returncode
+        proc.wait.return_value = None
+        return proc
+
+    @staticmethod
+    def _assistant(text):
+        return json.dumps({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": text}]},
+        })
+
+    @staticmethod
+    def _result(text):
+        return json.dumps({"type": "result", "subtype": "success", "result": text})
+
+    def _overload_proc(self):
+        # The real failure mode: 529 surfaces in a stream-json assistant event.
+        return self._make_proc(
+            [self._assistant("API Error: 529 service temporarily overloaded") + "\n"],
+            returncode=1,
+        )
+
+    def test_overload_in_stdout_retried_to_success(self, capsys):
+        from app.provider import run_command_streaming
+        proc_ok = self._make_proc([self._result("LGTM: ship it") + "\n"], returncode=0)
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli",
+                   side_effect=[(self._overload_proc(), MagicMock()), (proc_ok, MagicMock())]) as mock_popen, \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s), \
+             patch("app.provider.time.sleep") as mock_sleep:
+            out = run_command_streaming("hi", "/tmp", [])
+        assert out == "LGTM: ship it"
+        assert "API Error" not in out  # failed attempt's text did not leak
+        assert mock_popen.call_count == 2
+        mock_sleep.assert_called_once_with(60)
+        assert "retrying in 60s" in capsys.readouterr().out
+
+    def test_overload_in_stderr_retried_to_success(self):
+        from app.provider import run_command_streaming
+        proc_fail = self._make_proc(
+            ["x\n"],
+            stderr="API Error: 529 [1305] The service may be temporarily overloaded",
+            returncode=1,
+        )
+        proc_ok = self._make_proc([self._result("done") + "\n"], returncode=0)
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli",
+                   side_effect=[(proc_fail, MagicMock()), (proc_ok, MagicMock())]) as mock_popen, \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s), \
+             patch("app.provider.time.sleep"):
+            out = run_command_streaming("hi", "/tmp", [])
+        assert out == "done"
+        assert mock_popen.call_count == 2
+
+    def test_sustained_overload_exhausts_and_raises(self):
+        from app.provider import STREAM_RETRY_MAX_ATTEMPTS, run_command_streaming
+        procs = [(self._overload_proc(), MagicMock()) for _ in range(STREAM_RETRY_MAX_ATTEMPTS)]
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", side_effect=procs) as mock_popen, \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s), \
+             patch("app.provider.time.sleep") as mock_sleep:
+            with pytest.raises(RuntimeError, match="CLI invocation failed") as exc:
+                run_command_streaming("hi", "/tmp", [])
+        assert mock_popen.call_count == STREAM_RETRY_MAX_ATTEMPTS
+        assert [c.args[0] for c in mock_sleep.call_args_list] == [60, 120]
+        msg = str(exc.value)
+        assert "529" in msg or "overloaded" in msg
+
+    def test_auth_failure_not_retried(self):
+        from app.provider import run_command_streaming
+        proc = self._make_proc(
+            ["x\n"], stderr="401 Unauthorized: invalid api key", returncode=1,
+        )
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", side_effect=[(proc, MagicMock())]) as mock_popen, \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s), \
+             patch("app.provider.time.sleep") as mock_sleep:
+            with pytest.raises(RuntimeError, match="CLI invocation failed"):
+                run_command_streaming("hi", "/tmp", [])
+        assert mock_popen.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_quota_failure_not_retried(self):
+        from app.provider import run_command_streaming
+        proc = self._make_proc(['{"quota_exhausted": true}\n'], returncode=1)
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", side_effect=[(proc, MagicMock())]) as mock_popen, \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s), \
+             patch("app.provider.time.sleep") as mock_sleep:
+            with pytest.raises(RuntimeError):
+                run_command_streaming("hi", "/tmp", [])
+        assert mock_popen.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_max_turns_returns_partial_without_retry(self, capsys):
+        from app.provider import run_command_streaming
+        proc = self._make_proc(
+            ["partial report\n", "Error: Reached max turns (50)\n"], returncode=1,
+        )
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", side_effect=[(proc, MagicMock())]) as mock_popen, \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s), \
+             patch("app.provider.time.sleep") as mock_sleep:
+            out = run_command_streaming("hi", "/tmp", [], max_turns=50)
+        assert "partial report" in out
+        assert mock_popen.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_success_first_try_does_not_retry(self):
+        from app.provider import run_command_streaming
+        proc = self._make_proc([self._result("ok") + "\n"], returncode=0)
+        with patch("app.config.get_model_config", return_value={"chat": "m", "fallback": "f"}), \
+             patch("app.provider.build_full_command", return_value=["fake"]), \
+             patch("app.cli_exec.popen_cli", side_effect=[(proc, MagicMock())]) as mock_popen, \
+             patch("app.claude_step.strip_cli_noise", side_effect=lambda s: s), \
+             patch("app.provider.time.sleep") as mock_sleep:
+            out = run_command_streaming("hi", "/tmp", [])
+        assert out == "ok"
+        assert mock_popen.call_count == 1
+        mock_sleep.assert_not_called()
