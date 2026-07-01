@@ -32,6 +32,10 @@ from app.diff_triage import _GENERATED_PATTERNS, _LOCKFILE_NAMES
 
 # Below this many commits a churn ranking is statistical noise — skip entirely.
 _MIN_COMMITS_FOR_HOTSPOTS = 20
+# `gh pr list` defaults to 30 results; a busy review queue exceeds that and the
+# PR-coverage map would silently truncate, letting dedup miss covered topics and
+# re-pick them as duplicate autonomous work. Cap high enough to hold the queue.
+_MAX_OPEN_PRS_FOR_COVERAGE = 200
 # Test files are intentionally high-churn; they are not debt hotspots.
 _TEST_PATH_RE = re.compile(r"(?:^|/)(?:tests?|__tests__)/|(?:^|/)test_[^/]+\.[a-z]+$|_test\.[a-z]+$")
 
@@ -184,6 +188,7 @@ class DeepResearch:
             output = run_gh(
                 "pr", "list",
                 "--state", "open",
+                "--limit", str(_MAX_OPEN_PRS_FOR_COVERAGE),
                 "--json", "number,title,createdAt,headRefName,body",
                 cwd=self.project_path,
             )
