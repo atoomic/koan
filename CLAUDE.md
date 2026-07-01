@@ -101,3 +101,9 @@ The full two-process detail, the complete per-module reference (`Key modules`), 
 - **Documentation maintenance** — When adding or modifying a feature, update the corresponding section in `README.md` and/or the relevant docs file. Use the nested docs layout in `docs/README.md`: user behavior in `docs/users/`, daemon design in `docs/architecture/`, providers in `docs/providers/`, messaging and tracker integrations in `docs/messaging/`, operations in `docs/operations/`, durable decisions in `docs/design/`, threat models and audit docs in `docs/security/`, and deployment guides in `docs/setup/`. If no documentation file exists for the feature, create one in the matching directory. Public-facing documentation and implementation references must stay in sync with the codebase — undocumented features are invisible to users.
 
 > Python-specific conventions (temp files, linting, tests, prompt extraction) and skill-authoring conventions (help groups, naming, the new-skill checklist) live in `koan/CLAUDE.md` and `koan/skills/CLAUDE.md` respectively — see "On-demand guidance" above.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan:
+specs/001-speckit-native-support/plan.md
+<!-- SPECKIT END -->
