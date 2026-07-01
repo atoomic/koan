@@ -147,9 +147,12 @@ def _fetch_gh_jsonl(
     """
     try:
         from app.github import run_gh
+        # --paginate follows GitHub's Link headers so PRs with >30 reviews or
+        # comments aren't silently truncated at the default page size. gh runs
+        # --jq per page, so the JSONL output concatenates cleanly across pages.
         raw = run_gh(
-            "api", endpoint, "--jq", jq_filter,
-            cwd=project_path, timeout=10,
+            "api", endpoint, "--paginate", "--jq", jq_filter,
+            cwd=project_path, timeout=30,
         )
         if not raw.strip():
             return []
