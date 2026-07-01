@@ -92,15 +92,22 @@ def build_contemplative_command(
     return cmd
 
 
-def get_contemplative_flags() -> List[str]:
+def get_contemplative_flags(project_name: str = "") -> List[str]:
     """Get CLI flags for contemplative role from config.
+
+    Args:
+        project_name: Optional project name for per-project ``cli.lightweight``
+            overrides. The contemplative binary is already resolved against the
+            project's lightweight provider (``build_contemplative_command``); the
+            model flag must resolve the same way so a project-pinned binary
+            receives a matching model.
 
     Returns:
         List of CLI flag strings (may be empty).
     """
     from app.config import get_claude_flags_for_role
 
-    flags_str = get_claude_flags_for_role("contemplative")
+    flags_str = get_claude_flags_for_role("contemplative", project_name=project_name)
     if not flags_str.strip():
         return []
     return flags_str.split()
@@ -127,7 +134,7 @@ def run_contemplative_session(
     """
     from app.claude_step import run_claude
 
-    flags = get_contemplative_flags()
+    flags = get_contemplative_flags(project_name=project_name)
     cmd = build_contemplative_command(
         instance=instance,
         project_name=project_name,
