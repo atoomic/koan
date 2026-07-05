@@ -91,7 +91,7 @@ def _parse_passive_data(data: dict) -> Optional[PassiveState]:
             reason=str(data.get("reason", "")),
         )
     except (TypeError, ValueError):
-        log_safe("warning", f"Corrupted passive data: {data}")
+        log_safe("warning", f"Corrupted passive data: {data}", force_stderr=True)
         return None
 
 

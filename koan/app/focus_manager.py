@@ -81,7 +81,7 @@ def _parse_focus_data(data: dict) -> Optional[FocusState]:
             reason=str(data.get("reason", "")),
         )
     except (TypeError, ValueError):
-        log_safe("warning", f"Corrupted focus data: {data}")
+        log_safe("warning", f"Corrupted focus data: {data}", force_stderr=True)
         return None
 
 

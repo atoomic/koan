@@ -89,13 +89,13 @@ def _parse_pause_content(content: str) -> Optional[PauseState]:
     Returns None for empty or unparseable content.
     """
     if not content:
-        log_safe("warning", "Empty pause file content")
+        log_safe("warning", "Empty pause file content", force_stderr=True)
         return None
 
     lines = content.splitlines()
     reason = lines[0].strip()
     if not reason:
-        log_safe("warning", "Invalid pause file content: missing reason")
+        log_safe("warning", "Invalid pause file content: missing reason", force_stderr=True)
         return None
 
     timestamp = 0
