@@ -720,6 +720,57 @@ class TestFetchPrContext:
         assert "Will do" in context["issue_comments"]
         assert context["has_pending_reviews"] is False  # comments fetched OK
 
+    @staticmethod
+    def _diff_side_effect(diff: str) -> list:
+        """Ordered gh-call mocks with *diff* as the pr-diff response."""
+        return [
+            MagicMock(returncode=0, stdout=json.dumps({
+                "title": "T", "headRefName": "br", "baseRefName": "main",
+                "state": "OPEN", "author": {"login": "dev"},
+                "url": "https://github.com/o/r/pull/1",
+            })),
+            MagicMock(returncode=0, stdout="0"),  # review_comments count
+            MagicMock(returncode=0, stdout=diff),
+            MagicMock(returncode=0, stdout=""),
+            MagicMock(returncode=0, stdout=""),
+            MagicMock(returncode=0, stdout=""),
+        ]
+
+    @staticmethod
+    def _file_block(path: str, line: str, count: int) -> str:
+        """Build one file block of a unified diff with *count* added lines."""
+        return (
+            f"diff --git a/{path} b/{path}\n"
+            f"index aaa..bbb 100644\n"
+            f"--- a/{path}\n+++ b/{path}\n"
+            f"@@ -0,0 +1,{count} @@\n" + line * count
+        )
+
+    @patch("app.github.subprocess.run")
+    def test_default_cap_truncates_large_diff(self, mock_run):
+        """Diffs over the default 32k cap lose whole file blocks (with footer)."""
+        early = self._file_block("aaa/early.py", "+early_payload\n", 2100)  # ~31k
+        late = self._file_block("zzz/later.py", "+late_payload\n", 300)  # ~4k
+        mock_run.side_effect = self._diff_side_effect(early + late)
+
+        context = fetch_pr_context("o", "r", "1")
+        assert "early_payload" in context["diff"]
+        assert "late_payload" not in context["diff"]
+        assert "Omitted files" in context["diff"]
+        assert "zzz/later.py" in context["diff"]
+
+    @patch("app.github.subprocess.run")
+    def test_max_diff_chars_overrides_cap(self, mock_run):
+        """A caller-supplied budget keeps files the default cap would drop."""
+        early = self._file_block("aaa/early.py", "+early_payload\n", 2100)
+        late = self._file_block("zzz/later.py", "+late_payload\n", 300)
+        mock_run.side_effect = self._diff_side_effect(early + late)
+
+        context = fetch_pr_context("o", "r", "1", max_diff_chars=300_000)
+        assert "early_payload" in context["diff"]
+        assert "late_payload" in context["diff"]
+        assert "Omitted files" not in context["diff"]
+
     @patch("app.github.subprocess.run")
     def test_handles_empty_responses(self, mock_run):
         mock_run.side_effect = [

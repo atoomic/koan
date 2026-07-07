@@ -92,6 +92,28 @@ BURN_RATE_WARNING_MIN_RESET_GAP_MIN = 120.0
 MAX_SELECTION_AUDIT_ENTRIES = 200
 
 # ---------------------------------------------------------------------------
+# PR diff budgets  (rebase_pr.py / review_runner.py)
+# ---------------------------------------------------------------------------
+
+# Default fetch-time cap on PR diffs (characters), applied by
+# ``rebase_pr.fetch_pr_context()``.  Non-review consumers (/pr, /rebase,
+# /squash, /explain) embed the diff directly into prompts with no downstream
+# compression, so this stays conservative.
+PR_CONTEXT_DIFF_MAX_CHARS = 32_000
+
+# Fetch cap for review paths — aligned with the diff compressor's budget:
+# 80_000 tokens x 3.5 chars/token (see ``diff_compressor.estimate_tokens``).
+# Fetching more is pointless: ``compress_diff`` would discard the excess.
+# Only used when the review compressor is enabled; otherwise review falls
+# back to PR_CONTEXT_DIFF_MAX_CHARS since nothing downstream bounds the diff.
+REVIEW_DIFF_FETCH_MAX_CHARS = 280_000
+
+# Cap on the diff slice passed to the review reflection pass (lightweight
+# model).  Applied to the already-compressed, priority-ordered diff, so the
+# first 32k chars are the highest-priority files.
+REVIEW_REFLECT_DIFF_MAX_CHARS = 32_000
+
+# ---------------------------------------------------------------------------
 # Org-wide missions  (iteration_manager.py, mission_executor.py)
 # ---------------------------------------------------------------------------
 

@@ -3,7 +3,7 @@ type: doc
 title: "GitHub And Trackers"
 tags: [architecture]
 created: 2026-05-28
-updated: 2026-06-23
+updated: 2026-07-06
 ---
 
 # GitHub And Trackers
@@ -53,6 +53,29 @@ request is incorrect — while complying when the human insists. Trivial/mechani
 feedback takes a fast-path. The review-learning extraction additionally records
 pushback outcomes (validated vs. overridden) so the agent learns which pushbacks to
 trust.
+
+## Review Diff Budgets and Filters
+
+See `specs/skills/review.md` → "Diff budget pipeline" for the full contract.
+The diff a `/review` agent sees goes through a fixed reduction chain:
+
+1. **Fetch cap** — `fetch_pr_context()` caps the raw diff at 280k chars for
+   review (32k for all other flows: `/pr`, `/rebase`, `/squash`, `/explain`).
+   Files that do not fit are listed in an "Omitted files" footer.
+2. **`review_ignore`** (`config.yaml`) — glob/regex patterns removed from the
+   diff before review (e.g. `vendor/**`, `*.lock`). Default: none.
+3. **`review_triage`** (`config.yaml`) — content-aware skip of trivial changes
+   (lockfiles, generated files, whitespace-only, rename-only). Default:
+   disabled.
+4. **Compressor** (`optimizations.review_compressor.enabled`, default on) —
+   fits the diff into an 80k-token budget in language-priority order (source
+   files first, data/lockfiles last), so when something must be dropped it is
+   the least review-relevant files, never the source under review. Dropped
+   files are named in a note the reviewing agent sees.
+
+If the compressor is disabled, review falls back to the conservative 32k fetch
+cap, which keeps whole files in git path order — large PRs may then lose
+later-sorting source files from the review.
 
 ## Review Issue-Tracker Enrichment
 

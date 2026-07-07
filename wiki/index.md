@@ -12,7 +12,7 @@ This wiki spans two content roots — `docs/` (operational "how to use", see [`d
 
 ### Architecture
 - [`architecture/daemon.md`](docs/architecture/daemon.md) — Describes how the Koan daemon is assembled: startup/process management, the bridge's chat/bg worker lanes, the agent loop's modular pieces, runtime modes, parallel sessions, and the bounded-memory model for CLI stdout capture.
-- [`architecture/github-and-trackers.md`](docs/architecture/github-and-trackers.md) — Covers GitHub/Jira notification flow, PR workflows (footer, receiving-code-review protocol), review issue-tracker enrichment, and the instance/ tracker files used to dedupe work.
+- [`architecture/github-and-trackers.md`](docs/architecture/github-and-trackers.md) — Covers GitHub/Jira notification flow, PR workflows (footer, receiving-code-review protocol), review diff budgets/filters (fetch cap, review_ignore, triage, compressor), review issue-tracker enrichment, and the instance/ tracker files used to dedupe work.
 - [`architecture/memory.md`](docs/architecture/memory.md) — Details Koan's Markdown+JSONL memory store, the SQLite FTS5 secondary index (confidence-weighted BM25 ranking, dual-write, fallback), entry schema, read/write paths, and compaction.
 - [`architecture/mission-lifecycle.md`](docs/architecture/mission-lifecycle.md) — Explains the mission queue format and lifecycle (Pending/In Progress/Done/Failed), org-wide missions, branch prep, direct skill dispatch, scheduling, recovery/retries, and missions.md integrity/size-bound safeguards.
 - [`architecture/overview.md`](docs/architecture/overview.md) — High-level architecture summary of Koan's two main processes (bridge and agent loop), major subsystems, and the human-decides safety model.
@@ -111,7 +111,7 @@ Per `specs/README.md`'s coverage policy: only the ~10 highest-impact skills have
 - [`skills/plan.md`](specs-skills/plan.md) — Documents the `/plan` skill that deep-thinks an idea (or iterates an existing issue) into a structured tracker-issue plan via a critic→regenerate loop, covered by the deterministic eval harness.
 - [`skills/rebase.md`](specs-skills/rebase.md) — Documents the `/rebase` skill that rebases a PR onto its current base and addresses review feedback, including its already-solved detection JSON scored by the eval harness.
 - [`skills/recreate.md`](specs-skills/recreate.md) — Documents the `/recreate` skill that rebuilds a too-far-diverged PR from scratch on current upstream via a fresh branch and reimplementation, rather than rebasing.
-- [`skills/review.md`](specs-skills/review.md) — Documents the `/review` skill that queues a code-review mission on PRs/issues, posting findings as a comment with severity-driven LGTM logic and re-review comment handling, covered by the eval harness.
+- [`skills/review.md`](specs-skills/review.md) — Documents the `/review` skill that queues a code-review mission on PRs/issues, posting findings as a comment with severity-driven LGTM logic and re-review comment handling, covered by the eval harness; includes the diff budget pipeline contract (fetch cap → ignore → triage → priority compressor).
 - [`skills/security_audit.md`](specs-skills/security_audit.md) — Documents the `/security_audit` skill that runs a background SDLC security audit of a project and files up to 5 critical-vulnerability tracker issues via the provider-neutral tracker service.
 
 ### Overview

@@ -53,6 +53,7 @@ from app.config import (
     get_skill_max_turns,
     get_skill_timeout,
 )
+from app.constants import PR_CONTEXT_DIFF_MAX_CHARS
 from app.git_utils import ordered_remotes as _ordered_remotes
 from app.github import run_gh, sanitize_github_comment
 from app.prompts import load_prompt, load_prompt_or_skill, load_skill_prompt  # noqa: F401 — safety import
@@ -399,6 +400,8 @@ def fetch_pr_context(
     repo: str,
     pr_number: str,
     project_path: Optional[str] = None,
+    *,
+    max_diff_chars: int = PR_CONTEXT_DIFF_MAX_CHARS,
 ) -> dict:
     """Fetch PR details, diff, and all comments via gh CLI.
 
@@ -409,6 +412,10 @@ def fetch_pr_context(
     (GitHub HTTP 406: > 300 files) trigger a local ``git fetch`` +
     ``git diff`` fallback. Without ``project_path``, the diff is left
     empty and a warning is logged.
+
+    ``max_diff_chars`` caps the returned diff (whole file blocks kept in
+    order, see :func:`app.utils.truncate_diff`); callers with downstream
+    compression (the review pipeline) pass a larger budget.
     """
     full_repo = f"{owner}/{repo}"
 
@@ -541,7 +548,7 @@ def fetch_pr_context(
         "author": metadata.get("author", {}).get("login", ""),
         "head_owner": metadata.get("headRepositoryOwner", {}).get("login", ""),
         "url": metadata.get("url", ""),
-        "diff": truncate_diff(diff, 32000),
+        "diff": truncate_diff(diff, max_diff_chars),
         "diff_error": truncate_text(diff_error, 1000),
         "review_comments": truncate_text(comments_json, 4000),
         "reviews": truncate_text(reviews_json, 3000),

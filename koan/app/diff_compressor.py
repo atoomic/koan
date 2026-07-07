@@ -123,9 +123,13 @@ def parse_diff_hunks(raw_diff: str) -> List[FileDiff]:
     if not raw_diff.strip():
         return []
 
-    # Split the diff at each "diff --git" boundary.  The first element before
-    # the first boundary is discarded (empty or preamble).
-    parts = _FILE_HEADER_RE.split(raw_diff)
+    # Split the diff at each "diff --git" boundary.  re.split consumes the
+    # delimiter, so the first element is whatever precedes the first file
+    # header — empty when the diff starts cleanly, preamble text otherwise,
+    # or the whole string for non-diff input.  Discard it rather than
+    # fabricating a file block out of it (compress_diff then returns
+    # non-diff input unchanged).
+    parts = _FILE_HEADER_RE.split(raw_diff)[1:]
     results: List[FileDiff] = []
 
     for part in parts:

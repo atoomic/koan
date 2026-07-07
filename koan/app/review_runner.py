@@ -28,13 +28,18 @@ from urllib.parse import quote
 
 from app.claude_step import resolve_pr_location
 from app.config import get_review_bot_triage_config, get_review_history_config, get_review_inline_comments_config, get_review_reply_config, get_review_verdict_config, is_review_compressor_enabled
+from app.constants import (
+    PR_CONTEXT_DIFF_MAX_CHARS,
+    REVIEW_DIFF_FETCH_MAX_CHARS,
+    REVIEW_REFLECT_DIFF_MAX_CHARS,
+)
 from app.run_log import log
 from app.diff_compressor import compress_diff
 from app.github import run_gh, sanitize_github_comment, find_bot_comment
 from app.github_url_parser import ISSUE_URL_PATTERN
 from app.prompts import load_prompt, load_prompt_or_skill, load_skill_prompt
 from app.rebase_pr import fetch_pr_context
-from app.utils import KOAN_ROOT
+from app.utils import KOAN_ROOT, truncate_diff
 from app.review_markers import (
     SUMMARY_TAG,
     COMMIT_IDS_START,
@@ -690,21 +695,28 @@ def build_review_prompt(
         project_memory += _build_review_session_memory(project_name, task_text)
 
     raw_diff = context["diff"]
-    skipped_note = ""
-    if is_review_compressor_enabled():
+    # Pipeline callers arrive with the diff already compressed by
+    # _apply_review_diff_filters (the "compressor_skipped_files" key is the
+    # sentinel, present even when empty). Direct callers (skill evals, ad-hoc
+    # contexts) bypass that step, so compress here to keep the prompt bounded.
+    compressor_skipped = context.get("compressor_skipped_files")
+    if compressor_skipped is None and is_review_compressor_enabled():
         compressed = compress_diff(raw_diff)
         raw_diff = compressed.diff_text
+        compressor_skipped = compressed.skipped_files
         if compressed.skipped_files:
             log(
                 "review",
                 f"Diff compressed — {len(compressed.skipped_files)} file(s) skipped: "
                 + ", ".join(compressed.skipped_files),
             )
-            skipped_list = ", ".join(f"`{f}`" for f in compressed.skipped_files)
-            skipped_note = (
-                f"> ⚠️ Diff compressed — {len(compressed.skipped_files)} file(s) omitted"
-                f" due to size: {skipped_list}\n\n"
-            )
+    skipped_note = ""
+    if compressor_skipped:
+        skipped_list = ", ".join(f"`{f}`" for f in compressor_skipped)
+        skipped_note = (
+            f"> ⚠️ Diff compressed — {len(compressor_skipped)} file(s) omitted"
+            f" due to size: {skipped_list}\n\n"
+        )
 
     if triaged_files:
         triaged_list = ", ".join(
@@ -2408,13 +2420,30 @@ def _submit_review_verdict(
         return False
 
 
+def _review_diff_fetch_budget() -> int:
+    """Raw-diff chars to fetch for review.
+
+    Compressor-aligned when the compressor is on (it re-fits the diff to its
+    token budget in priority order); the legacy conservative cap otherwise,
+    since nothing downstream would bound the prompt.
+    """
+    if is_review_compressor_enabled():
+        return REVIEW_DIFF_FETCH_MAX_CHARS
+    return PR_CONTEXT_DIFF_MAX_CHARS
+
+
 def _apply_review_diff_filters(
     context: dict, *, label: str = "",
 ) -> Tuple[dict, list]:
     """Filter a PR diff for review and report what was dropped.
 
     Applies the configured ``review_ignore`` glob/regex filters, then
-    content-aware triage of trivial file changes, returning the (possibly
+    content-aware triage of trivial file changes, then (when enabled) the
+    priority-aware diff compressor — so every downstream consumer of
+    ``context["diff"]`` (main prompt, reflection, error hunter, plan-size
+    check) sees the compressed diff. Sets ``compressor_skipped_files`` on
+    the context (present even when empty) as the "already compressed"
+    sentinel for :func:`build_review_prompt`. Returns the (possibly
     reduced) context and the list of triaged files. *label* prefixes the
     diagnostic output so callers can distinguish e.g. private-gate runs.
     """
@@ -2451,6 +2480,20 @@ def _apply_review_diff_filters(
             f"{triage_summary}",
         )
         context = {**context, "diff": triaged_diff}
+
+    if is_review_compressor_enabled():
+        compressed = compress_diff(context.get("diff", ""))
+        context = {
+            **context,
+            "diff": compressed.diff_text,
+            "compressor_skipped_files": compressed.skipped_files,
+        }
+        if compressed.skipped_files:
+            log(
+                "review",
+                f"{label}diff compressed — {len(compressed.skipped_files)} "
+                "file(s) skipped: " + ", ".join(compressed.skipped_files),
+            )
 
     return context, triaged_files
 
@@ -2512,7 +2555,10 @@ def _run_review_analysis(
         calibration_hints = _load_calibration_hints(project_name)
         review_data["file_comments"] = _reflect_findings(
             review_data["file_comments"],
-            diff,
+            # Reflection runs on a lightweight model — bound its prompt. The
+            # diff is priority-compressed by now, so the head of the slice is
+            # the highest-priority files.
+            truncate_diff(diff, REVIEW_REFLECT_DIFF_MAX_CHARS),
             project_path,
             reflect_model,
             reflect_threshold,
@@ -2572,7 +2618,10 @@ def run_private_review(
     notify_fn(f"Privately reviewing PR #{pr_number} ({full_repo})...")
 
     try:
-        context = fetch_pr_context(owner, repo, pr_number, project_path)
+        context = fetch_pr_context(
+            owner, repo, pr_number, project_path,
+            max_diff_chars=_review_diff_fetch_budget(),
+        )
     except Exception as e:
         return False, f"Failed to fetch PR context: {e}", None, {}
 
@@ -2703,6 +2752,7 @@ def run_review(
         with ThreadPoolExecutor(max_workers=min(2, github_workers)) as pool:
             f_context = pool.submit(
                 fetch_pr_context, owner, repo, pr_number, project_path,
+                max_diff_chars=_review_diff_fetch_budget(),
             )
             f_comments = pool.submit(
                 fetch_repliable_comments, owner, repo, pr_number, True, bot_username,
@@ -2714,7 +2764,10 @@ def run_review(
             repliable_comments = f_comments.result()
     else:
         try:
-            context = fetch_pr_context(owner, repo, pr_number, project_path)
+            context = fetch_pr_context(
+                owner, repo, pr_number, project_path,
+                max_diff_chars=_review_diff_fetch_budget(),
+            )
         except Exception as e:
             return False, f"Failed to fetch PR context: {e}", None
         repliable_comments = fetch_repliable_comments(

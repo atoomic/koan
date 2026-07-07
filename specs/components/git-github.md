@@ -3,7 +3,7 @@ type: component-spec
 title: "Component Spec — Git & GitHub"
 tags: [git-github]
 created: 2026-06-27
-updated: 2026-06-27
+updated: 2026-07-06
 ---
 
 # Component Spec — Git & GitHub
@@ -33,6 +33,7 @@ workflows.
 | `claude_step.py::run_ci_fix_loop()` | Shared CI-fix loop; `use_polling` toggles polling vs single-shot recheck; caller supplies `prompt_builder`. |
 | `head_tracker.py` | Detects remote HEAD change (master→main), throttled 12h, state in `.head-tracker.json`. |
 | `github_url_parser.py` | Single PR/issue URL parsing path. |
+| `rebase_pr.py::fetch_pr_context()` | Shared PR context fetch (metadata + diff + comments). The diff is capped at `max_diff_chars` (default `PR_CONTEXT_DIFF_MAX_CHARS` = 32k, whole file blocks kept in git's lexicographic order). Review paths pass a compressor-aligned budget (`REVIEW_DIFF_FETCH_MAX_CHARS`); all other consumers (`/pr`, `/rebase`, `/squash`, `/explain`, recreate, CI queue) keep the default because they have no downstream size guard. See `specs/skills/review.md` → "Diff budget pipeline". |
 
 ## Invariants
 

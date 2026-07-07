@@ -8,11 +8,17 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from app.constants import (
+    PR_CONTEXT_DIFF_MAX_CHARS,
+    REVIEW_DIFF_FETCH_MAX_CHARS,
+)
 from app.review_runner import (
     build_review_prompt,
     fetch_repliable_comments,
     run_review,
     run_private_review,
+    _apply_review_diff_filters,
+    _review_diff_fetch_budget,
     _collapse_old_review,
     _detect_plan_url,
     _fetch_plan_body,
@@ -143,6 +149,35 @@ class TestBuildReviewPrompt:
             build_review_prompt(pr_context, skill_dir=review_skill_dir)
 
         assert call_args.get("called"), "compress_diff was not called"
+
+    def test_precompressed_context_skips_compression(
+        self, pr_context, review_skill_dir,
+    ):
+        """A context already compressed by _apply_review_diff_filters (sentinel
+        key present) is not compressed again, but its skipped-files note still
+        renders in the prompt."""
+        pr_context = dict(pr_context)
+        pr_context["compressor_skipped_files"] = ["big.json"]
+
+        with patch("app.review_runner.compress_diff") as mock_compress:
+            prompt = build_review_prompt(pr_context, skill_dir=review_skill_dir)
+
+        mock_compress.assert_not_called()
+        assert "omitted due to size" in prompt
+        assert "big.json" in prompt
+
+    def test_precompressed_empty_sentinel_no_note(
+        self, pr_context, review_skill_dir,
+    ):
+        """An empty sentinel (compressed, nothing skipped) renders no note."""
+        pr_context = dict(pr_context)
+        pr_context["compressor_skipped_files"] = []
+
+        with patch("app.review_runner.compress_diff") as mock_compress:
+            prompt = build_review_prompt(pr_context, skill_dir=review_skill_dir)
+
+        mock_compress.assert_not_called()
+        assert "omitted due to size" not in prompt
 
     def test_skipped_files_note_absent_for_small_diff(self, pr_context, review_skill_dir):
         """No skipped-files note when diff fits within budget."""
@@ -1406,6 +1441,148 @@ class TestPostReviewComment:
 
 
 # ---------------------------------------------------------------------------
+# Review diff pipeline: fetch budget, filters+compression, reflect cap
+# ---------------------------------------------------------------------------
+
+def _diff_file_block(path: str, line: str, count: int) -> str:
+    """Build one file block of a unified diff with *count* added lines."""
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"index aaa..bbb 100644\n"
+        f"--- a/{path}\n+++ b/{path}\n"
+        f"@@ -0,0 +1,{count} @@\n" + line * count
+    )
+
+
+class TestReviewDiffFetchBudget:
+    def test_compressor_enabled_uses_review_budget(self):
+        with patch("app.review_runner.is_review_compressor_enabled", return_value=True):
+            assert _review_diff_fetch_budget() == REVIEW_DIFF_FETCH_MAX_CHARS
+
+    def test_compressor_disabled_falls_back_to_default_cap(self):
+        with patch("app.review_runner.is_review_compressor_enabled", return_value=False):
+            assert _review_diff_fetch_budget() == PR_CONTEXT_DIFF_MAX_CHARS
+
+
+@patch("app.config.get_review_triage_config", return_value={"enabled": False})
+@patch("app.config.get_review_ignore_config", return_value={"glob": [], "regex": []})
+class TestApplyReviewDiffFilters:
+    def test_over_budget_diff_compressed_and_skips_recorded(self, _ign, _tri):
+        """Low-priority files beyond the token budget are dropped and listed."""
+        small_py = _diff_file_block("src/app.py", "+py_payload\n", 50)
+        # ~300k chars (~86k tokens) — exceeds the compressor's 80k-token budget.
+        huge_json = _diff_file_block("data/big.json", "+json_payload_line\n", 16_000)
+        context = {"diff": small_py + huge_json}
+
+        with patch("app.review_runner.is_review_compressor_enabled", return_value=True):
+            filtered, triaged = _apply_review_diff_filters(context)
+
+        assert triaged == []
+        assert "py_payload" in filtered["diff"]
+        assert "json_payload_line" not in filtered["diff"]
+        assert filtered["compressor_skipped_files"] == ["data/big.json"]
+
+    def test_small_diff_intact_with_empty_sentinel(self, _ign, _tri):
+        """Under-budget diffs pass through unchanged, sentinel key set to []."""
+        diff = _diff_file_block("src/app.py", "+py_payload\n", 50)
+        context = {"diff": diff}
+
+        with patch("app.review_runner.is_review_compressor_enabled", return_value=True):
+            filtered, _ = _apply_review_diff_filters(context)
+
+        assert filtered["diff"] == diff
+        assert filtered["compressor_skipped_files"] == []
+
+    def test_compressor_disabled_leaves_diff_untouched(self, _ign, _tri):
+        """With the compressor off, no compression and no sentinel key."""
+        diff = _diff_file_block("src/app.py", "+py_payload\n", 50)
+        context = {"diff": diff}
+
+        with patch("app.review_runner.is_review_compressor_enabled", return_value=False):
+            filtered, _ = _apply_review_diff_filters(context)
+
+        assert filtered["diff"] == diff
+        assert "compressor_skipped_files" not in filtered
+
+
+class TestRunReviewAnalysisReflectCap:
+    @patch("app.review_runner._load_calibration_hints", return_value="")
+    @patch("app.config.get_review_reflect_config", return_value={"threshold": 5})
+    @patch("app.config.get_model_config", return_value={
+        "reflect": "haiku", "lightweight": "haiku",
+    })
+    @patch("app.cli_provider.resolve_role_provider")
+    @patch("app.review_runner._reflect_findings", return_value=[])
+    @patch("app.review_runner._run_claude_review")
+    def test_reflect_receives_bounded_diff(
+        self, mock_claude, mock_reflect, mock_provider, *_,
+    ):
+        """The reflection pass gets a capped slice of the (possibly huge) diff."""
+        from app.review_runner import _run_review_analysis
+
+        mock_provider.return_value.name = "claude"
+        mock_claude.return_value = (json.dumps(VALID_REVIEW_JSON), "")
+        big_diff = _diff_file_block("src/app.py", "+x = 1  # padding\n", 8_000)
+        assert len(big_diff) > 100_000
+
+        _run_review_analysis("prompt", "/tmp/project", big_diff)
+
+        mock_reflect.assert_called_once()
+        reflect_diff = mock_reflect.call_args[0][1]
+        assert len(reflect_diff) <= 32_000
+        assert len(reflect_diff) < len(big_diff)
+
+
+class TestReviewDiffPipelineRegression:
+    """Replicates the real-world failure: a PR whose lexicographically-early
+    blocks (generated client, tests) filled the old 32k fetch cap, silently
+    dropping the later-sorting source file the review was supposed to verify.
+    """
+
+    @patch("app.config.get_review_triage_config", return_value={"enabled": False})
+    @patch("app.config.get_review_ignore_config", return_value={"glob": [], "regex": []})
+    def test_late_sorting_source_file_survives_pipeline(
+        self, _ign, _tri, review_skill_dir,
+    ):
+        from app.utils import truncate_diff
+
+        # Three ~10.5k-char low-priority blocks sort before the source file
+        # and together nearly fill the old 32k cap.
+        early = "".join(
+            _diff_file_block(f"{prefix}/bulk.json", "+bulk_payload_data\n", 550)
+            for prefix in ("aaa", "bbb", "ccc")
+        )
+        source = _diff_file_block(
+            "src/components/SearchWidget.tsx", "+const toggle = useToggle();\n", 100,
+        )
+        full_diff = early + source
+
+        # Old behavior (fetch-time 32k lexicographic cap): source file dropped.
+        old_diff = truncate_diff(full_diff, PR_CONTEXT_DIFF_MAX_CHARS)
+        kept_section = old_diff.split("Omitted files")[0]
+        assert "useToggle" not in kept_section
+        assert "SearchWidget.tsx" in old_diff  # only named in the footer
+
+        # New pipeline: review-budget fetch keeps everything; the compressor
+        # (priority-aware) fits the whole diff, and the prompt sees the source.
+        context = {
+            "title": "t", "body": "", "branch": "b", "base": "main",
+            "author": "a", "url": "u",
+            "diff": truncate_diff(full_diff, REVIEW_DIFF_FETCH_MAX_CHARS),
+            "review_comments": "", "reviews": "", "issue_comments": "",
+        }
+        with patch("app.review_runner.is_review_compressor_enabled", return_value=True):
+            filtered, _ = _apply_review_diff_filters(context)
+            prompt = build_review_prompt(
+                filtered, skill_dir=review_skill_dir, issue_context="",
+            )
+
+        assert filtered["compressor_skipped_files"] == []
+        assert "useToggle" in prompt
+        assert "omitted due to size" not in prompt
+
+
+# ---------------------------------------------------------------------------
 # run_review (integration, mocked externals)
 # ---------------------------------------------------------------------------
 
@@ -1435,7 +1612,10 @@ class TestRunReview:
         assert "42" in summary
         assert review_data is not None
         assert review_data["review_summary"]["lgtm"] is True
-        mock_fetch.assert_called_once_with("owner", "repo", "42", "/tmp/project")
+        mock_fetch.assert_called_once_with(
+            "owner", "repo", "42", "/tmp/project",
+            max_diff_chars=REVIEW_DIFF_FETCH_MAX_CHARS,
+        )
         mock_claude.assert_called_once()
         mock_gh.assert_called_once()  # post comment
         assert mock_notify.call_count >= 2
