@@ -93,6 +93,7 @@ CONFIG_SCHEMA: Dict[str, Any] = {
     "thinking": _NESTED,
     "stagnation": _NESTED,
     "optimizations": _NESTED,
+    "verification": _NESTED,
 }
 
 # Top-level keys that are recognized but deprecated: they still work (honored
@@ -243,6 +244,9 @@ SECTION_SCHEMAS: Dict[str, Dict[str, str]] = {
         "abort_after_cycles": "int",
         "sample_lines": "int",
         "max_retry_on_stagnation": "int",
+    },
+    "verification": {
+        "max_requeue": "int",
     },
     "branch_cleanup": {
         "enabled": "bool",

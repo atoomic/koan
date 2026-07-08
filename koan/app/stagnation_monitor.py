@@ -550,12 +550,22 @@ def get_verify_count(instance_dir: str, mission_title: str) -> int:
     path = _retry_tracker_path(instance_dir)
     data = locked_json_read(path, default={})
     if not isinstance(data, dict):
+        print(
+            f"[stagnation_monitor] verify tracker is not a dict "
+            f"(reading verify_count as 0): {path}",
+            file=sys.stderr,
+        )
         return 0
     raw = data.get(_mission_key(mission_title), {})
     if isinstance(raw, dict):
         try:
             return max(0, int(raw.get("verify_count", 0)))
         except (TypeError, ValueError):
+            print(
+                f"[stagnation_monitor] unparseable verify_count "
+                f"(reading as 0): {raw.get('verify_count')!r}",
+                file=sys.stderr,
+            )
             return 0
     return 0
 
