@@ -99,7 +99,7 @@ def plan_review_skill_dir(tmp_path):
 class TestBuildReviewPrompt:
     def test_with_skill_dir(self, pr_context, review_skill_dir):
         """Prompt is built from skill dir template."""
-        prompt = build_review_prompt(pr_context, skill_dir=review_skill_dir)
+        prompt, _ = build_review_prompt(pr_context, skill_dir=review_skill_dir)
         assert "Fix auth bypass" in prompt
         assert "dev123" in prompt
         assert "fix-auth" in prompt
@@ -107,7 +107,7 @@ class TestBuildReviewPrompt:
 
     def test_placeholders_substituted(self, pr_context, review_skill_dir):
         """All {PLACEHOLDER} values are substituted."""
-        prompt = build_review_prompt(pr_context, skill_dir=review_skill_dir)
+        prompt, _ = build_review_prompt(pr_context, skill_dir=review_skill_dir)
         assert "{TITLE}" not in prompt
         assert "{AUTHOR}" not in prompt
         assert "{BRANCH}" not in prompt
@@ -146,15 +146,54 @@ class TestBuildReviewPrompt:
 
     def test_skipped_files_note_absent_for_small_diff(self, pr_context, review_skill_dir):
         """No skipped-files note when diff fits within budget."""
-        prompt = build_review_prompt(pr_context, skill_dir=review_skill_dir)
-        assert "omitted due to size" not in prompt
+        prompt, _ = build_review_prompt(pr_context, skill_dir=review_skill_dir)
+        assert "Partial review" not in prompt
+
+    def test_build_coverage_note_merges_all_sources(self):
+        from types import SimpleNamespace
+        from app.review_runner import _build_coverage_note
+        triaged = [SimpleNamespace(path="gen.pb.go", reason="generated")]
+        note = _build_coverage_note(
+            fetch_skipped=["huge.py"],
+            compressor_skipped=["big.py"],
+            triaged_files=triaged,
+        )
+        assert "Partial review" in note
+        assert "`huge.py`" in note and "`big.py`" in note
+        assert "Triaged" in note and "`gen.pb.go`" in note
+
+    def test_build_coverage_note_empty_when_nothing_skipped(self):
+        from app.review_runner import _build_coverage_note
+        assert _build_coverage_note([], [], None) == ""
+
+    def test_build_coverage_note_dedupes_across_stages(self):
+        from app.review_runner import _build_coverage_note
+        note = _build_coverage_note(
+            fetch_skipped=["dup.py"],
+            compressor_skipped=["dup.py"],
+            triaged_files=None,
+        )
+        assert note.count("`dup.py`") == 1
+        assert "1 file(s) omitted" in note
+
+    def test_build_review_prompt_returns_note_matching_prompt_slot(
+        self, pr_context, review_skill_dir,
+    ):
+        """The returned coverage_note is exactly what lands in the {SKIPPED_FILES} slot."""
+        pr_context = dict(pr_context, diff_skipped_files=["dropped.py"])
+        prompt, coverage_note = build_review_prompt(
+            pr_context, skill_dir=review_skill_dir,
+        )
+        assert "`dropped.py`" in coverage_note
+        # No divergence: the returned note is present verbatim in the prompt body.
+        assert coverage_note.strip() in prompt
 
     def test_explicit_issue_context_injected(self, pr_context, tmp_path):
         """An explicit issue_context lands in the {ISSUE_CONTEXT} slot."""
         prompts_dir = tmp_path / "prompts"
         prompts_dir.mkdir()
         (prompts_dir / "review.md").write_text("Body: {BODY}{ISSUE_CONTEXT}\nDiff: {DIFF}\n")
-        prompt = build_review_prompt(
+        prompt, _ = build_review_prompt(
             pr_context, skill_dir=tmp_path,
             issue_context="\n## Issue Tracker Context\n\n- PROJ-1: Fix it\n",
         )
@@ -179,7 +218,7 @@ class TestBuildReviewPrompt:
             "app.issue_tracker.enrichment.fetch_issue_context",
             return_value="\n## Issue Tracker Context\n\n- PROJ-9: Title\n",
         ) as fetch_mock:
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=tmp_path,
                 project_name="myproj", project_path="/tmp/myproj",
             )
@@ -197,7 +236,7 @@ class TestBuildReviewPrompt:
         ), patch(
             "app.issue_tracker.enrichment.fetch_issue_context",
         ) as fetch_mock:
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=tmp_path, project_name="myproj",
             )
         fetch_mock.assert_not_called()
@@ -257,7 +296,7 @@ class TestReviewVerdictContract:
 
     def test_partials_resolve_into_real_prompt(self, pr_context, real_review_skill_dir):
         """Sanity: the shipped prompt has its {@include} partials resolved."""
-        prompt = build_review_prompt(pr_context, skill_dir=real_review_skill_dir)
+        prompt, _ = build_review_prompt(pr_context, skill_dir=real_review_skill_dir)
         assert "{@include" not in prompt
         # "Output ONLY the JSON object" lives in the review-output-rules partial,
         # so its presence proves the partial was rendered, not left as a token.
@@ -267,7 +306,7 @@ class TestReviewVerdictContract:
         self, pr_context, real_review_skill_dir
     ):
         """review.md carries an explicit Verdict Contract (body-only marker)."""
-        prompt = build_review_prompt(pr_context, skill_dir=real_review_skill_dir)
+        prompt, _ = build_review_prompt(pr_context, skill_dir=real_review_skill_dir)
         # This sentence exists only in the review.md Verdict Contract section —
         # not in any partial — so it is a non-vacuous, single-source marker.
         assert "Never reject a PR" in prompt
@@ -282,7 +321,7 @@ class TestReviewVerdictContract:
         rendered prompt (not the source file) keeps the test honest about what
         the model actually sees.
         """
-        prompt = build_review_prompt(pr_context, skill_dir=real_review_skill_dir)
+        prompt, _ = build_review_prompt(pr_context, skill_dir=real_review_skill_dir)
         assert "suggestion" in prompt.lower()
         # "non-blocking" is present only in the sharpened rule; the pre-fix
         # wording ("no blocking issues") did not contain it.
@@ -304,7 +343,7 @@ class TestPriorReviewSlot:
         with patch(
             "app.config.get_review_context_config", return_value=self._cfg(),
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_skill_dir,
                 prior_review="FINDING_ALPHA: validate the token",
             )
@@ -315,7 +354,7 @@ class TestPriorReviewSlot:
         with patch(
             "app.config.get_review_context_config", return_value=self._cfg(),
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_skill_dir, prior_review=None,
             )
         assert "(No prior automated review.)" in prompt
@@ -333,7 +372,7 @@ class TestPriorReviewSlot:
         with patch(
             "app.config.get_review_context_config", return_value=self._cfg(),
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_skill_dir,
                 prior_review="prior review text",
             )
@@ -351,7 +390,7 @@ class TestPriorReviewSlot:
         with patch(
             "app.config.get_review_context_config", return_value=self._cfg(),
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_skill_dir, prior_review=None,
             )
         assert "KEEP_THIS_BODY" in prompt
@@ -362,7 +401,7 @@ class TestPriorReviewSlot:
             "app.config.get_review_context_config",
             return_value=self._cfg(prior_review_max_chars=20),
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_skill_dir, prior_review=long_text,
             )
         assert "HEAD_KEPT" in prompt
@@ -374,7 +413,7 @@ class TestPriorReviewSlot:
             "app.config.get_review_context_config",
             return_value=self._cfg(include_bot_feedback=False),
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_skill_dir,
                 prior_review="SHOULD_NOT_APPEAR",
             )
@@ -394,7 +433,7 @@ class TestPriorReviewSlot:
         with patch(
             "app.config.get_review_context_config", return_value=self._cfg(),
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_dir,
                 prior_review="FINDING_BETA: handle the proxy case",
             )
@@ -441,7 +480,7 @@ class TestReviewProjectMemory:
             "app.config.get_review_memory_config",
             return_value={"enabled": False, "max_entries": 8},
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_skill_dir,
                 project_path="/fake/proj", project_name="my-toolkit",
             )
@@ -469,7 +508,7 @@ class TestReviewProjectMemory:
             "app.config.get_review_memory_config",
             return_value={"enabled": True, "max_entries": 8},
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_skill_dir,
                 project_path="/fake/proj", project_name="my-toolkit",
             )
@@ -492,7 +531,7 @@ class TestReviewProjectMemory:
             "app.config.get_review_memory_config",
             return_value={"enabled": True, "max_entries": 8},
         ):
-            prompt = build_review_prompt(
+            prompt, _ = build_review_prompt(
                 pr_context, skill_dir=review_skill_dir,
                 project_path="/fake/proj",
             )
@@ -1344,6 +1383,28 @@ class TestPostReviewComment:
         assert "truncated" in body.lower()
 
     @patch("app.review_runner.run_gh")
+    def test_coverage_note_prepended_to_posted_body(self, mock_gh):
+        """The coverage note is prepended to the posted review body, above the verdict."""
+        note = ("> ⚠️ **Partial review** — 2 file(s) omitted due to diff size "
+                "and NOT reviewed: `big.py`, `huge.py`")
+        _post_review_comment(
+            "owner", "repo", "42", "LGTM, no issues found.",
+            coverage_note=note,
+        )
+        body = [a for a in mock_gh.call_args[0] if isinstance(a, str) and "LGTM" in a][0]
+        assert "Partial review" in body
+        assert "`big.py`" in body and "`huge.py`" in body
+        # Warning appears before the verdict text.
+        assert body.index("Partial review") < body.index("LGTM")
+
+    @patch("app.review_runner.run_gh")
+    def test_no_coverage_note_leaves_body_clean(self, mock_gh):
+        """Empty coverage note adds no warning."""
+        _post_review_comment("owner", "repo", "42", "LGTM", coverage_note="")
+        body = [a for a in mock_gh.call_args[0] if isinstance(a, str) and "LGTM" in a][0]
+        assert "Partial review" not in body
+
+    @patch("app.review_runner.run_gh")
     def test_no_double_heading_for_structured_review(self, mock_gh):
         """Reviews starting with ## don't get an extra ## Code Review header."""
         from app.review_markers import SUMMARY_TAG
@@ -1435,7 +1496,11 @@ class TestRunReview:
         assert "42" in summary
         assert review_data is not None
         assert review_data["review_summary"]["lgtm"] is True
-        mock_fetch.assert_called_once_with("owner", "repo", "42", "/tmp/project")
+        from app.config import get_review_max_diff_chars
+        mock_fetch.assert_called_once_with(
+            "owner", "repo", "42", "/tmp/project",
+            max_diff_chars=get_review_max_diff_chars(),
+        )
         mock_claude.assert_called_once()
         mock_gh.assert_called_once()  # post comment
         assert mock_notify.call_count >= 2
@@ -2041,7 +2106,7 @@ class TestArchitectureFlag:
             "Issue: {ISSUE_COMMENTS}\n"
         )
 
-        prompt = build_review_prompt(
+        prompt, _ = build_review_prompt(
             pr_context, skill_dir=tmp_path, architecture=True,
         )
         assert "ARCH REVIEW:" in prompt
@@ -2051,7 +2116,7 @@ class TestArchitectureFlag:
         self, pr_context, review_skill_dir,
     ):
         """build_review_prompt without architecture uses standard review template."""
-        prompt = build_review_prompt(
+        prompt, _ = build_review_prompt(
             pr_context, skill_dir=review_skill_dir, architecture=False,
         )
         assert "Review PR:" in prompt
@@ -2237,7 +2302,7 @@ class TestUltraReview:
         """ultra=True selects the architecture prompt AND runs the error hunter,
         and the posted summary is labelled as an ultra review."""
         mock_fetch.return_value = pr_context
-        mock_build.return_value = "PROMPT"
+        mock_build.return_value = ("PROMPT", "")
         mock_claude.return_value = (json.dumps(LGTM_REVIEW_JSON), "")
         mock_notify = MagicMock()
 
@@ -2810,7 +2875,7 @@ class TestBuildReviewPromptWithPlan:
         (prompts_dir / "review.md").write_text("Standard review: {TITLE} {AUTHOR} {BRANCH} {BASE} {BODY} {DIFF} {REVIEWS} {REVIEW_COMMENTS} {ISSUE_COMMENTS} {REPLIABLE_COMMENTS}")
         (prompts_dir / "review-with-plan.md").write_text("Plan review: {PLAN} {TITLE} {AUTHOR} {BRANCH} {BASE} {BODY} {DIFF} {REVIEWS} {REVIEW_COMMENTS} {ISSUE_COMMENTS} {REPLIABLE_COMMENTS}")
 
-        prompt = build_review_prompt(pr_context, skill_dir=tmp_path, plan_body="The plan content.")
+        prompt, _ = build_review_prompt(pr_context, skill_dir=tmp_path, plan_body="The plan content.")
         assert "Plan review:" in prompt
         assert "The plan content." in prompt
 
@@ -2821,7 +2886,7 @@ class TestBuildReviewPromptWithPlan:
         (prompts_dir / "review.md").write_text("Standard review: {TITLE} {AUTHOR} {BRANCH} {BASE} {BODY} {DIFF} {REVIEWS} {REVIEW_COMMENTS} {ISSUE_COMMENTS} {REPLIABLE_COMMENTS}")
         (prompts_dir / "review-with-plan.md").write_text("Plan review: {PLAN} {TITLE} {AUTHOR} {BRANCH} {BASE} {BODY} {DIFF} {REVIEWS} {REVIEW_COMMENTS} {ISSUE_COMMENTS} {REPLIABLE_COMMENTS}")
 
-        prompt = build_review_prompt(pr_context, skill_dir=tmp_path, plan_body=None)
+        prompt, _ = build_review_prompt(pr_context, skill_dir=tmp_path, plan_body=None)
         assert "Standard review:" in prompt
         assert "Plan review:" not in prompt
 
@@ -2832,7 +2897,7 @@ class TestBuildReviewPromptWithPlan:
         (prompts_dir / "review-architecture.md").write_text("Architecture review: {TITLE} {AUTHOR} {BRANCH} {BASE} {BODY} {DIFF} {REVIEWS} {REVIEW_COMMENTS} {ISSUE_COMMENTS} {REPLIABLE_COMMENTS}")
         (prompts_dir / "review-with-plan.md").write_text("Plan review: {PLAN} {TITLE} {AUTHOR} {BRANCH} {BASE} {BODY} {DIFF} {REVIEWS} {REVIEW_COMMENTS} {ISSUE_COMMENTS} {REPLIABLE_COMMENTS}")
 
-        prompt = build_review_prompt(
+        prompt, _ = build_review_prompt(
             pr_context, skill_dir=tmp_path,
             architecture=True, plan_body="The plan.",
         )
@@ -2847,7 +2912,7 @@ class TestBuildReviewPromptWithPlan:
 
         large_plan = "## Summary\n\nShort summary.\n\n" + "x" * 90_000
         pr_context["diff"] = "small diff"
-        prompt = build_review_prompt(pr_context, skill_dir=tmp_path, plan_body=large_plan)
+        prompt, _ = build_review_prompt(pr_context, skill_dir=tmp_path, plan_body=large_plan)
         # The plan should have been truncated — not 90K chars
         assert len(prompt) < 90_000 + 5000
 
