@@ -8,7 +8,8 @@ permissions:
 
 jobs:
   assign:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: webpros-sandbox
     steps:
       - uses: actions/github-script@v9
         with:

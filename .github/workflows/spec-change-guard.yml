@@ -28,7 +28,8 @@ permissions:
 
 jobs:
   spec-change-guard:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: webpros-sandbox
     timeout-minutes: 10
 
     steps:

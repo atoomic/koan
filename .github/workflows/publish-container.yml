@@ -21,7 +21,8 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: webpros-sandbox
     timeout-minutes: 2
     name: validate
     outputs:

@@ -17,7 +17,8 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: webpros-sandbox
     timeout-minutes: 30
     name: publish
 

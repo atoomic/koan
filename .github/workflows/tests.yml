@@ -18,7 +18,8 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: webpros-sandbox
     timeout-minutes: 50
     strategy:
       fail-fast: true
@@ -84,7 +85,8 @@ jobs:
 
   check-coverage:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on:
+      group: webpros-sandbox
     timeout-minutes: 5
     name: check-coverage
 

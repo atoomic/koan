@@ -29,7 +29,8 @@ permissions:
 
 jobs:
   wiki-sync:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: webpros-sandbox
     timeout-minutes: 15
     # Skip on fork PRs — GITHUB_TOKEN can't push to a fork's branch.
     if: github.event.pull_request.head.repo.full_name == github.repository
