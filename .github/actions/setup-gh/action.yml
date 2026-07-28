@@ -1,0 +1,54 @@
+name: Setup GitHub CLI
+description: >-
+  Ensure the `gh` CLI is on PATH. GitHub-hosted images ship it preinstalled; the
+  self-hosted webpros-sandbox runner image does not. No-ops when gh is already
+  present, so this stays correct if the image gains it later.
+
+# Installs sudo-free into ~/.local/bin and exports that via $GITHUB_PATH, so it
+# works on container runners that do not grant root. See
+# docs/operations/ci-runners.md.
+
+inputs:
+  version:
+    description: "gh CLI version to install (no leading v)"
+    required: false
+    default: "2.96.0"
+
+runs:
+  using: composite
+  steps:
+    - name: 📦 Install GitHub CLI
+      shell: bash
+      env:
+        GH_CLI_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        if command -v gh >/dev/null 2>&1; then
+          echo "gh already on PATH: $(gh --version | head -1)"
+          exit 0
+        fi
+
+        case "$(uname -m)" in
+          x86_64)        arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *)
+            echo "::error::Unsupported architecture '$(uname -m)' — no gh release asset for it."
+            exit 1
+            ;;
+        esac
+
+        pkg="gh_${GH_CLI_VERSION}_linux_${arch}"
+        url="https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/${pkg}.tar.gz"
+
+        echo "Installing gh ${GH_CLI_VERSION} (${arch}) from ${url}"
+        curl -fsSL --retry 3 --retry-delay 2 "$url" -o /tmp/gh.tar.gz
+        tar -xzf /tmp/gh.tar.gz -C /tmp
+
+        mkdir -p "$HOME/.local/bin"
+        install -m 0755 "/tmp/${pkg}/bin/gh" "$HOME/.local/bin/gh"
+        rm -rf /tmp/gh.tar.gz "/tmp/${pkg}"
+
+        # Make it visible to every subsequent step in the job.
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/gh" --version

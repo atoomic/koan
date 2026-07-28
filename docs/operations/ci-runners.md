@@ -66,6 +66,20 @@ The `webpros-sandbox` image is Debian/Ubuntu-based with `sudo`, but it is **lean
 than a GitHub-hosted image**. Things that are free on `ubuntu-latest` may need an
 explicit setup step:
 
+- **No preinstalled `gh` (GitHub CLI).** This one bit us on the first run: five
+  tests in `tests/test_loop_manager.py` and `tests/test_github_command_handler.py`
+  exercise code paths that shell out to `gh`, and on the self-hosted image they
+  failed with `FileNotFoundError: [Errno 2] No such file or directory: 'gh'`
+  instead of taking the graceful auth-failure path they assert on. `release.yml`
+  also needs it for `gh release create`. Both jobs now pull in the
+  `./.github/actions/setup-gh` composite action, which installs a pinned `gh`
+  sudo-free into `~/.local/bin` and exports it via `$GITHUB_PATH`. It no-ops when
+  `gh` is already present, so it stays correct if the image ever gains it.
+
+  Those five tests are only *incompletely mocked* — a unit test arguably should not
+  depend on a real `gh` binary at all. Tightening their mocks is a worthwhile
+  follow-up; installing `gh` restores the environment parity they were written
+  against without changing what they assert.
 - **No preinstalled Node.** Any job that shells out to `node` in a `run:` step must
   add `actions/setup-node` first. Note this does *not* affect JavaScript actions
   themselves (`actions/checkout`, `actions/setup-python`, `actions/github-script`) —

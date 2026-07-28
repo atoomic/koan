@@ -56,6 +56,13 @@ jobs:
           pip install -r koan/requirements.txt
           pip install pytest pytest-split pytest-cov pytest-xdist
 
+      # Parts of the suite exercise code paths that shell out to `gh`. The
+      # self-hosted runner image does not ship it (ubuntu-latest did), which
+      # surfaced as FileNotFoundError: 'gh' rather than the graceful
+      # auth-failure path the tests assert on.
+      - name: 🐙 Set up GitHub CLI
+        uses: ./.github/actions/setup-gh
+
       - name: ▶️ Run tests (${{ matrix.group.name }})
         if: ${{ !inputs.group || matrix.group.name == inputs.group }}
         working-directory: koan
