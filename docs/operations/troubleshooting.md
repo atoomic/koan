@@ -4,7 +4,7 @@ title: "Troubleshooting"
 description: "Catalogs common operational issues (agent loop, git/worktrees, memory, bridge, GitHub, CLI provider, parallel sessions, config) and their fixes."
 tags: [operations]
 created: 2026-06-04
-updated: 2026-07-17
+updated: 2026-07-29
 ---
 
 # Troubleshooting
@@ -219,5 +219,5 @@ Most config is read on each iteration. A few settings (process-level: API bind, 
 
 1. **Collect diagnostics**: `/doctor --full` output, recent logs (`/logs all`), and `make status`.
 2. **Restart the stack**: `make stop && make start`.
-3. **Check upstream issues**: review the [GitHub repository](https://github.com/Anantys-oss/koan) for known issues.
+3. **Check upstream issues**: review the [GitHub repository](https://github.com/webpros-sandbox/koan-bot) for known issues.
 4. **Export a snapshot**: `/snapshot` before making destructive changes — it backs up memory state.

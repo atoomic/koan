@@ -4,7 +4,7 @@ title: "Onboarding Guide"
 description: "Documents the interactive 12-step onboarding wizard that sets up a new Koan instance, its resumability, personality presets, and non-interactive/CI mode."
 tags: [users]
 created: 2026-05-28
-updated: 2026-06-25
+updated: 2026-07-29
 ---
 
 # Onboarding Guide
@@ -42,7 +42,7 @@ The wizard runs through 12 steps:
 | 6. Messaging | Configures Telegram, Slack, or Matrix credentials | `.env` |
 | 7. Language | Sets preferred reply language | `instance/language.json` |
 | 8. Personality | Chooses agent tonality (soul preset) | `instance/soul.md` |
-| 9. Kōan workspace | Clones `https://github.com/Anantys-oss/koan` into `workspace/koan` | `workspace/koan/` |
+| 9. Kōan workspace | Clones `https://github.com/webpros-sandbox/koan-bot` into `workspace/koan` | `workspace/koan/` |
 | 10. GitHub | Configures gh auth and @mention support | `.env`, `instance/config.yaml` |
 | 11. Deployment | Chooses terminal or systemd | — |
 | 12. Verification | Shows summary and next steps | — |

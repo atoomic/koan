@@ -4,7 +4,7 @@ title: "Docker Setup"
 description: "Covers Docker Compose setup for Koan (pull vs. build from source), workspace project mounts, authentication (Claude/GitHub), volume layout, and troubleshooting common container issues."
 tags: [setup]
 created: 2026-05-28
-updated: 2026-07-18
+updated: 2026-07-29
 ---
 
 # Docker Setup
@@ -32,7 +32,7 @@ Pull the published image from GitHub Container Registry — no local build neede
 
 ```bash
 # 1. Clone and enter the repo (needed for compose, setup-docker.sh, env template)
-git clone https://github.com/Anantys-oss/koan.git
+git clone https://github.com/webpros-sandbox/koan-bot.git koan
 cd koan
 
 # 2. Create your instance directory

@@ -1034,7 +1034,7 @@ class TestIntroScreen:
 
         captured = capsys.readouterr()
         assert "Welcome to Kōan" in captured.out
-        assert "koan.anantys.com" in captured.out
+        assert "github.com/webpros-sandbox/koan-bot" in captured.out
         assert "steps" in captured.out
 
     def test_hidden_on_resume(self, onboarding_root, capsys):

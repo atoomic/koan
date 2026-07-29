@@ -1607,12 +1607,11 @@ def _print_intro_screen() -> None:
         print(f"  {dim(' · '.join(info_parts))}")
         print()
 
-    website_url = "https://koan.anantys.com"
-    print(f"  {dim('Website:')}  {_osc8_link(website_url, 'koan.anantys.com')}")
-    print()
-
-    docs_url = "https://koan.anantys.com/docs"
-    print(f"  {dim('Docs:')}     {_osc8_link(docs_url, 'koan.anantys.com/docs')}")
+    website_url = "https://github.com/webpros-sandbox/koan-bot"
+    print(
+        f"  {dim('Website:')}  "
+        f"{_osc8_link(website_url, 'github.com/webpros-sandbox/koan-bot')}"
+    )
     print()
 
     total = len(STEPS)

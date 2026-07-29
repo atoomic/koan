@@ -1925,7 +1925,7 @@ def resolve_pr_location(
     """Resolve the actual GitHub owner/repo where a PR lives.
 
     When a user provides a PR URL from a different fork (e.g.,
-    ``sukria/koan/pull/171`` instead of ``Anantys-oss/koan/pull/171``),
+    ``sukria/koan/pull/171`` instead of ``webpros-sandbox/koan-bot/pull/171``),
     the PR may not exist at the given owner/repo.  This helper verifies
     the PR exists, and if not, tries all git remotes of the local project
     to find the repository that actually hosts the PR.

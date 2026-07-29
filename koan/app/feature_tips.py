@@ -44,7 +44,7 @@ _ONE_TIME_NOTICES = (
         "for koan-only guidance your team's CLAUDE.md never sees — steer autonomous "
         "work without touching the shared instructions everyone else loads.\n"
         "\n"
-        "Learn more: https://github.com/Anantys-oss/koan/blob/main/docs/users/koan-md.md",
+        "Learn more: https://github.com/webpros-sandbox/koan-bot/blob/main/docs/users/koan-md.md",
     ),
 )
 

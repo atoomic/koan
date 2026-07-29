@@ -2,36 +2,29 @@
 
 ## Release channels
 
-Kōan has two branches you can track:
-
-- **`main`** (default) — bleeding edge. Every merged change lands here.
-- **`stable`** — contains only tagged releases, fast-forwarded at each release. Recommended for a predictable, vetted experience.
-
-Track stable:
+Track **`main`** — every merged change lands here, and it is the only channel
+published on this repository today:
 
 ```bash
-git clone -b stable https://github.com/Anantys-oss/koan.git
+git clone https://github.com/webpros-sandbox/koan-bot.git koan
 cd koan
 # update later with:
-git pull origin stable
+git pull origin main
 ```
 
-Switch an existing checkout from `main` to `stable`:
+The `incubating` and `stable` channels described in
+[docs/operations/maint.md](docs/operations/maint.md) are produced by the release
+workflow; they become available here once the first release is cut.
 
-```bash
-git fetch origin
-git checkout stable
-git pull origin stable
-```
-
-See [docs/maint.md](docs/maint.md) for the release procedure and cadence philosophy.
+See [docs/operations/maint.md](docs/operations/maint.md) for the release procedure
+and cadence philosophy.
 
 ## Quick Start (Wizard)
 
 The easiest way to set up Kōan is with the interactive wizard:
 
 ```bash
-git clone https://github.com/Anantys-oss/koan.git
+git clone https://github.com/webpros-sandbox/koan-bot.git koan
 cd koan
 make setup
 make install
@@ -48,7 +41,7 @@ Prefer to run Koan in a container (server deployment or local isolation)? The
 easiest path is the **prebuilt image** on GitHub Container Registry — no local build:
 
 ```bash
-git clone https://github.com/Anantys-oss/koan.git && cd koan
+git clone https://github.com/webpros-sandbox/koan-bot.git koan && cd koan
 cp -r instance.example instance && cp env.example .env   # fill in messaging + auth creds
 ./setup-docker.sh        # detect host paths, generate volume mounts
 make docker-auth         # subscription users: extract a Claude OAuth token from the host
@@ -96,7 +89,7 @@ per-project configuration via `projects.yaml`.
 ### 1. Clone and create your instance
 
 ```bash
-git clone https://github.com/Anantys-oss/koan.git
+git clone https://github.com/webpros-sandbox/koan-bot.git koan
 cd koan
 cp -r instance.example instance
 ```

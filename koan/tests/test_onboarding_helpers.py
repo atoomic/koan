@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 def test_onboarding_needed_when_instance_missing(tmp_path):
     from app.onboarding_helpers import onboarding_needed
@@ -72,6 +74,52 @@ def test_setup_workspace_koan_blocks_conflicting_directory(tmp_path):
 
     assert ok is False
     assert "does not point" in message
+
+
+@pytest.mark.parametrize(
+    "remote_output,expected",
+    [
+        pytest.param(
+            "origin\thttps://github.com/webpros-sandbox/koan-bot.git (fetch)\n",
+            True,
+            id="https",
+        ),
+        pytest.param(
+            "origin\tgit@github.com:webpros-sandbox/koan-bot.git (fetch)\n",
+            True,
+            id="ssh",
+        ),
+        pytest.param(
+            "origin\thttps://github.com/WebPros-Sandbox/Koan-Bot.git (fetch)\n",
+            True,
+            id="mixed-case",
+        ),
+        pytest.param(
+            "origin\thttps://github.com/Anantys-oss/koan.git (fetch)\n",
+            True,
+            id="legacy-slug-before-repo-moved",
+        ),
+        pytest.param(
+            "origin\thttps://github.com/someone/unrelated.git (fetch)\n",
+            False,
+            id="unrelated-repo",
+        ),
+    ],
+)
+def test_has_koan_remote_recognises_known_remotes(tmp_path, remote_output, expected):
+    from app.onboarding_helpers import _has_koan_remote
+
+    proc = MagicMock(returncode=0, stdout=remote_output, stderr="")
+    with patch("app.onboarding_helpers.subprocess.run", return_value=proc):
+        assert _has_koan_remote(tmp_path) is expected
+
+
+def test_has_koan_remote_false_when_git_fails(tmp_path):
+    from app.onboarding_helpers import _has_koan_remote
+
+    proc = MagicMock(returncode=128, stdout="", stderr="not a git repository")
+    with patch("app.onboarding_helpers.subprocess.run", return_value=proc):
+        assert _has_koan_remote(tmp_path) is False
 
 
 def test_create_instance_and_env_with_explicit_root(tmp_path):
