@@ -4,7 +4,7 @@ title: "REST API"
 description: "Documents Kōan's optional, token-authenticated HTTP control layer (missions, projects, pause/resume, config, admin, usage/metrics/logs endpoints), its generated OpenAPI spec + drift guard, and its security model."
 tags: [operations]
 created: 2026-05-31
-updated: 2026-07-10
+updated: 2026-07-29
 ---
 
 # REST API
@@ -79,28 +79,24 @@ The API ships a machine-readable **OpenAPI 3.1 document** at
 table** — it can only describe endpoints that actually exist, so it never drifts from the
 code. Point any OpenAPI tool at it to preview docs, generate a client, or validate requests.
 
-### View & render the spec online
+### View & render the spec
 
-The raw YAML is not fun to read by hand. To render it as browsable, interactive API docs
-in your browser — no install, no running server — open it in **Swagger Editor**:
-
-> **[▶ Open `koan/openapi.yaml` in Swagger Editor](https://editor.swagger.io/?url=https://raw.githubusercontent.com/Anantys-oss/koan/main/koan/openapi.yaml)**
-
-That link tells [editor.swagger.io](https://editor.swagger.io/) to fetch the spec from
-`main` and render it. The editor loads the file client-side (GitHub's raw host allows
-cross-origin reads), so nothing is uploaded anywhere. To preview a spec from a branch or a
-fork, swap the raw URL — the pattern is:
-
-```
-https://editor.swagger.io/?url=https://raw.githubusercontent.com/<owner>/<repo>/<ref>/koan/openapi.yaml
-```
-
-Prefer to render **local, uncommitted** changes (e.g. right after `make openapi`)? Any
-offline viewer works on the file directly:
+The raw YAML is not fun to read by hand. Render it as browsable, interactive API docs
+straight from your checkout — this also covers **local, uncommitted** changes, e.g. right
+after `make openapi`:
 
 ```bash
 npx @redocly/cli preview-docs koan/openapi.yaml   # Redoc, live-reloading, http://localhost:8080
 # or drag-and-drop koan/openapi.yaml into https://editor.swagger.io/
+```
+
+There is no hosted-editor deep link for this repo: it is **internal**, so
+`editor.swagger.io` cannot fetch its `raw.githubusercontent.com` URL (that needs a token
+the editor cannot supply). For a **public** fork the hosted editor does work — it loads
+the file client-side, so nothing is uploaded anywhere. The URL pattern is:
+
+```
+https://editor.swagger.io/?url=https://raw.githubusercontent.com/<owner>/<repo>/<ref>/koan/openapi.yaml
 ```
 
 ### Regenerate after any API change
@@ -532,4 +528,4 @@ Tokens are never written to the log.
 
 - [`docs/operations/dashboard.md`](dashboard.md) — web dashboard (separate process, same config pattern)
 - [`instance.example/config.yaml`](../../instance.example/config.yaml) — documented `api:` section
-- [`koan/openapi.yaml`](../../koan/openapi.yaml) — generated OpenAPI 3.1 document (`make openapi`) · [render in Swagger Editor](https://editor.swagger.io/?url=https://raw.githubusercontent.com/Anantys-oss/koan/main/koan/openapi.yaml)
+- [`koan/openapi.yaml`](../../koan/openapi.yaml) — generated OpenAPI 3.1 document (`make openapi`) · render it locally with `npx @redocly/cli preview-docs koan/openapi.yaml`

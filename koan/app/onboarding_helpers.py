@@ -12,7 +12,14 @@ INSTANCE_DIR = KOAN_ROOT / "instance"
 INSTANCE_EXAMPLE = KOAN_ROOT / "instance.example"
 ENV_FILE = KOAN_ROOT / ".env"
 ENV_EXAMPLE = KOAN_ROOT / "env.example"
-KOAN_REPO_URL = "https://github.com/Anantys-oss/koan.git"
+KOAN_REPO_URL = "https://github.com/webpros-sandbox/koan-bot.git"
+# Lowercase, HTTPS-path form: what _has_koan_remote() matches a checkout against.
+# The legacy slug stays so a checkout cloned before the repo moved is still
+# recognised as Kōan instead of being rejected as an unrelated directory.
+_KNOWN_KOAN_REMOTES = (
+    "github.com/webpros-sandbox/koan-bot",
+    "github.com/anantys-oss/koan",
+)
 
 
 def paths_for_root(koan_root: Path) -> dict[str, Path]:
@@ -215,4 +222,4 @@ def _has_koan_remote(path: Path) -> bool:
     # Normalize SSH form (git@github.com:owner/repo) to the HTTPS path form
     # so both remote styles match the expected repository.
     remotes = result.stdout.lower().replace("github.com:", "github.com/")
-    return "github.com/anantys-oss/koan" in remotes
+    return any(slug in remotes for slug in _KNOWN_KOAN_REMOTES)

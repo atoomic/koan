@@ -56,7 +56,7 @@ Run Kōan natively on your machine, or in a container — both are fully support
 ### Native
 
 ```bash
-git clone https://github.com/Anantys-oss/koan.git
+git clone https://github.com/webpros-sandbox/koan-bot.git koan
 cd koan
 make setup
 make install    # Interactive CLI onboarding wizard — sets up everything
@@ -84,7 +84,7 @@ Prefer containers (VPS/server hosting or a sandboxed local run)? Pull the
 prebuilt image from GitHub Container Registry — no local build:
 
 ```bash
-git clone https://github.com/Anantys-oss/koan.git && cd koan
+git clone https://github.com/webpros-sandbox/koan-bot.git koan && cd koan
 cp -r instance.example instance && cp env.example .env   # then fill in messaging + auth creds
 ./setup-docker.sh        # detect host paths, generate mounts
 make docker-pull-up      # pull & run prebuilt image (or: make docker-up to build from source)

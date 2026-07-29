@@ -1538,11 +1538,11 @@ class TestReviewLocationLinks:
 class TestBuildReviewFooter:
     def test_no_provider_no_model(self):
         result = _build_review_footer()
-        assert result == "_Automated review by [Kōan](https://koan.anantys.com)_"
+        assert result == "_Automated review by [Kōan](https://github.com/webpros-sandbox/koan-bot)_"
 
     def test_provider_only(self):
         result = _build_review_footer(provider_name="claude")
-        assert "[Kōan](https://koan.anantys.com)" in result
+        assert "[Kōan](https://github.com/webpros-sandbox/koan-bot)" in result
         assert "Claude" in result
 
     def test_model_only(self):
@@ -1551,7 +1551,7 @@ class TestBuildReviewFooter:
 
     def test_provider_and_model(self):
         result = _build_review_footer(provider_name="claude", model="claude-sonnet-4-6")
-        assert "[Kōan](https://koan.anantys.com)" in result
+        assert "[Kōan](https://github.com/webpros-sandbox/koan-bot)" in result
         assert "Claude" in result
         assert "model claude-sonnet-4-6" in result
         assert " · " in result
@@ -1712,7 +1712,7 @@ class TestPostReviewComment:
             provider_name="claude", model="claude-opus-4-6",
         )
         body = [a for a in mock_gh.call_args[0] if isinstance(a, str) and "LGTM" in a][0]
-        assert "[Kōan](https://koan.anantys.com)" in body
+        assert "[Kōan](https://github.com/webpros-sandbox/koan-bot)" in body
         assert "Claude" in body
         assert "model claude-opus-4-6" in body
 

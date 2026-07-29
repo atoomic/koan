@@ -5,7 +5,7 @@ Thanks for contributing! This guide covers how to set up your environment, make 
 ## Development Setup
 
 ```bash
-git clone https://github.com/Anantys-oss/koan.git
+git clone https://github.com/webpros-sandbox/koan-bot.git koan
 cd koan
 make setup          # Create venv, install dependencies
 ```

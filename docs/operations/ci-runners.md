@@ -1,15 +1,15 @@
 ---
 type: doc
 title: "CI runners (webpros-sandbox self-hosted)"
-description: "Why every GitHub Actions job in this fork pins runs-on to the self-hosted `webpros-sandbox` runner group instead of a GitHub-hosted label, the exact YAML form to use, the exemptions, and the runner-image gotchas to watch for."
+description: "Why every GitHub Actions job in this repository pins runs-on to the self-hosted `webpros-sandbox` runner group instead of a GitHub-hosted label, the exact YAML form to use, the exemptions, and the runner-image gotchas to watch for."
 tags: [operations, ci]
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-07-29
 ---
 
 # CI runners (webpros-sandbox self-hosted)
 
-This fork of Kōan is hosted at `webpros-sandbox/koan-bot`, an internal repository
+Kōan is hosted at `webpros-sandbox/koan-bot`, an internal repository
 in the `webpros-sandbox` GitHub organization. That org supplies its own
 self-hosted runner fleet, and **GitHub-hosted runners are not the default there** —
 org policy is that CI runs on the org's own capacity.
