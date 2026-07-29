@@ -897,6 +897,51 @@ def _try_intent_promotion(
     return skill, match.command, match.context
 
 
+def _generate_reply_text(
+    owner: str,
+    repo: str,
+    issue_number: str,
+    bot_username: str,
+    comment_author: str,
+    project_path: str,
+    project_name: str,
+    question_text: str,
+    comment_id: str,
+) -> Optional[str]:
+    """Fetch thread context and generate the reply text, containing failures.
+
+    Reply generation is best-effort, and its failures must stay local: this runs
+    inside the GitHub notification worker *before* the comment is reacted to and
+    recorded in the processed-comment tracker, so an escaping exception aborts
+    the whole notification and leaves the comment untracked — the next poll
+    rediscovers it and fails again, every cycle, forever. Returning None instead
+    lets the caller fall back to the help message and mark the comment handled.
+    """
+    from app.github_reply import fetch_thread_context, generate_reply_compat
+
+    try:
+        # Exclude the bot's own comments from the context to avoid self-reply
+        thread_context = fetch_thread_context(
+            owner, repo, issue_number, bot_username=bot_username,
+        )
+        return generate_reply_compat(
+            question=question_text,
+            thread_context=thread_context,
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
+            comment_author=comment_author,
+            project_path=project_path,
+            project_name=project_name,
+        )
+    except Exception as exc:  # noqa: BLE001 — must not escape the worker, see docstring
+        log.warning(
+            "GitHub reply: generation failed for comment %s on %s/%s#%s: %s",
+            comment_id, owner, repo, issue_number, exc, exc_info=True,
+        )
+        return None
+
+
 def _try_reply(
     notification: dict,
     comment: dict,
@@ -985,23 +1030,11 @@ def _try_reply(
         comment_author, owner, repo, issue_number, question_text,
     )
 
-    from app.github_reply import (
-        fetch_thread_context,
-        generate_reply,
-        post_threaded_reply,
-    )
+    from app.github_reply import post_threaded_reply
 
-    # Fetch context and generate reply (exclude bot's own comments to avoid self-reply)
-    thread_context = fetch_thread_context(owner, repo, issue_number, bot_username=bot_username)
-    reply_text = generate_reply(
-        question=question_text,
-        thread_context=thread_context,
-        owner=owner,
-        repo=repo,
-        issue_number=issue_number,
-        comment_author=comment_author,
-        project_path=project_path,
-        project_name=project_name,
+    reply_text = _generate_reply_text(
+        owner, repo, issue_number, bot_username, comment_author,
+        project_path, project_name, question_text, comment_id,
     )
 
     if not reply_text:

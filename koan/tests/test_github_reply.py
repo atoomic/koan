@@ -11,6 +11,7 @@ from app.github_reply import (
     extract_mention_text,
     fetch_thread_context,
     generate_reply,
+    generate_reply_compat,
     post_reply,
     post_threaded_reply,
 )
@@ -573,6 +574,88 @@ class TestGenerateReplyEdgeCases:
         )
         assert result == "Good reply"
         assert "max turns" not in result
+
+
+# ---------------------------------------------------------------------------
+# generate_reply_compat — tolerating wrappers with an older signature
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateReplyCompat:
+    """generate_reply_compat() must survive an instance wrapper's stale signature.
+
+    Instance-level handlers run in-process and may wrap
+    ``app.github_reply.generate_reply``. A wrapper written before an optional
+    kwarg existed raises TypeError at the call boundary — the crash reported in
+    webpros-sandbox/koan-bot#1.
+    """
+
+    REPLY_KWARGS = {
+        "question": "what do you think?",
+        "thread_context": {"title": "T", "body": "", "comments": [],
+                           "is_pr": False, "diff_summary": ""},
+        "owner": "sukria",
+        "repo": "koan",
+        "issue_number": "42",
+        "comment_author": "alice",
+        "project_path": "/tmp/koan",
+        "project_name": "koan",
+    }
+
+    def test_passes_every_kwarg_when_supported(self):
+        received = {}
+
+        def full_signature(**kwargs):
+            received.update(kwargs)
+            return "reply from current signature"
+
+        with patch("app.github_reply.generate_reply", full_signature):
+            result = generate_reply_compat(**self.REPLY_KWARGS)
+
+        assert result == "reply from current signature"
+        assert received == self.REPLY_KWARGS
+
+    def test_drops_optional_kwarg_rejected_by_stale_wrapper(self):
+        """A wrapper predating project_name still produces a reply."""
+        received = {}
+
+        def stale_wrapper(
+            question, thread_context, owner, repo, issue_number,
+            comment_author, project_path,
+        ):
+            received.update(
+                question=question, thread_context=thread_context, owner=owner,
+                repo=repo, issue_number=issue_number,
+                comment_author=comment_author, project_path=project_path,
+            )
+            return "reply from stale wrapper"
+
+        with patch("app.github_reply.generate_reply", stale_wrapper):
+            result = generate_reply_compat(**self.REPLY_KWARGS)
+
+        assert result == "reply from stale wrapper"
+        assert "project_name" not in received
+        assert received["project_path"] == "/tmp/koan"
+
+    def test_unrelated_type_error_propagates(self):
+        """A genuine TypeError from inside the callee is not swallowed."""
+        def broken(**kwargs):
+            raise TypeError("unsupported operand type(s) for +: 'int' and 'str'")
+
+        with patch("app.github_reply.generate_reply", broken), \
+             pytest.raises(TypeError, match="unsupported operand"):
+            generate_reply_compat(**self.REPLY_KWARGS)
+
+    def test_unexpected_required_kwarg_propagates(self):
+        """Only known-optional kwargs are droppable; anything else is a bug."""
+        def rejects_required(**kwargs):
+            raise TypeError(
+                "generate_reply() got an unexpected keyword argument 'question'"
+            )
+
+        with patch("app.github_reply.generate_reply", rejects_required), \
+             pytest.raises(TypeError, match="'question'"):
+            generate_reply_compat(**self.REPLY_KWARGS)
 
 
 # ---------------------------------------------------------------------------

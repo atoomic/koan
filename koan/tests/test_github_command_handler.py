@@ -1280,6 +1280,71 @@ class TestTryReply:
         )
         assert result is False
 
+    @patch("app.github_command_handler._notify_github_reply")
+    @patch("app.github_command_handler._notify_github_question")
+    @patch("app.github_command_handler.mark_notification_read")
+    @patch("app.github_command_handler.add_reaction", return_value=True)
+    @patch("app.github_command_handler.check_user_permission", return_value=True)
+    @patch("app.github_reply.post_threaded_reply", return_value=True)
+    @patch("app.github_reply.fetch_thread_context", return_value={
+        "title": "T", "body": "B", "comments": [], "is_pr": False, "diff_summary": "",
+    })
+    @patch("app.utils.resolve_project_path", return_value="/tmp/koan")
+    def test_reply_still_posted_when_wrapper_signature_is_stale(
+        self, mock_resolve, mock_ctx, mock_post,
+        mock_perm, mock_react, mock_read,
+        mock_notify_q, mock_notify_r,
+        reply_notification, reply_comment, reply_config,
+    ):
+        """An instance wrapper predating a kwarg must not break the reply.
+
+        Reproduces webpros-sandbox/koan-bot#1: the wrapper installed around
+        ``generate_reply`` accepted ``project_path`` but not ``project_name``,
+        so the call raised TypeError before the function body ran.
+        """
+        def stale_wrapper(
+            question, thread_context, owner, repo, issue_number,
+            comment_author, project_path,
+        ):
+            return "reply from stale wrapper"
+
+        with patch("app.github_reply.generate_reply", stale_wrapper):
+            result = _try_reply(
+                reply_notification, reply_comment, reply_config, None,
+                "bot", "sukria", "koan", "koan", "what do you think?",
+            )
+
+        assert result is True
+        mock_post.assert_called_once()
+        mock_notify_r.assert_called_once_with(
+            "sukria", "koan", "42", "reply from stale wrapper",
+        )
+
+    @patch("app.github_command_handler._notify_github_reply")
+    @patch("app.github_command_handler._notify_github_question")
+    @patch("app.github_command_handler.check_user_permission", return_value=True)
+    @patch("app.github_reply.post_threaded_reply")
+    @patch("app.github_reply.fetch_thread_context", return_value={
+        "title": "T", "body": "B", "comments": [], "is_pr": False, "diff_summary": "",
+    })
+    @patch("app.utils.resolve_project_path", return_value="/tmp/koan")
+    def test_generation_crash_returns_false_instead_of_raising(
+        self, mock_resolve, mock_ctx, mock_post, mock_perm,
+        mock_notify_q, mock_notify_r,
+        reply_notification, reply_comment, reply_config,
+    ):
+        """A crash in reply generation must stay local to the reply attempt."""
+        with patch("app.github_reply.generate_reply",
+                   side_effect=RuntimeError("boom")):
+            result = _try_reply(
+                reply_notification, reply_comment, reply_config, None,
+                "bot", "sukria", "koan", "koan", "question",
+            )
+
+        assert result is False
+        mock_post.assert_not_called()
+        mock_notify_r.assert_not_called()
+
 
 class TestProcessNotificationWithReply:
     """Tests for reply integration in process_single_notification."""
@@ -1330,6 +1395,63 @@ class TestProcessNotificationWithReply:
         assert error is None
         mock_gen.assert_called_once()
         mock_post.assert_called_once()
+
+    @patch("app.github_command_handler._notify_github_question")
+    @patch("app.github_command_handler.mark_notification_read")
+    @patch("app.github_command_handler.add_reaction", return_value=True)
+    @patch("app.github_command_handler.check_user_permission", return_value=True)
+    @patch("app.github_command_handler.check_already_processed", return_value=False)
+    @patch("app.github_command_handler._find_all_thread_mentions")
+    @patch("app.github_command_handler.resolve_project_from_notification")
+    @patch("app.github_reply.post_threaded_reply", return_value=True)
+    @patch("app.github_reply.fetch_thread_context", return_value={
+        "title": "T", "body": "B", "comments": [], "is_pr": False, "diff_summary": "",
+    })
+    @patch("app.utils.resolve_project_path", return_value="/tmp/koan")
+    def test_reply_crash_still_marks_comment_processed(
+        self, mock_resolve_path, mock_ctx, mock_post,
+        mock_resolve, mock_mentions,
+        mock_processed, mock_perm, mock_react, mock_read, mock_notify_q,
+        registry, sample_notification, tmp_path,
+    ):
+        """A crashing reply must not strand the comment as unprocessed.
+
+        The processed-comment tracker is written *after* the per-comment
+        handler returns, so an exception escaping the reply path leaves the
+        comment untracked — the next poll rediscovers it and crashes again,
+        every cycle (webpros-sandbox/koan-bot#1).
+        """
+        mock_resolve.return_value = ("koan", "sukria", "koan")
+        mock_mentions.return_value = [{
+            "id": "99999",
+            "url": "https://api.github.com/repos/sukria/koan/issues/comments/99999",
+            "body": "@testbot what do you think about this PR?",
+            "user": {"login": "alice"},
+        }]
+        config = {
+            "github": {
+                "nickname": "testbot",
+                "reply_enabled": True,
+                "authorized_users": ["*"],
+            }
+        }
+        instance_dir = tmp_path / "instance"
+        instance_dir.mkdir()
+
+        with patch.dict("os.environ", {"KOAN_ROOT": str(tmp_path)}), \
+             patch("app.github_reply.generate_reply",
+                   side_effect=RuntimeError("boom")):
+            success, error = process_single_notification(
+                sample_notification, registry, config, None, "testbot",
+            )
+
+        # No reply posted — falls back to the help message for the caller.
+        assert success is False
+        assert error is not None
+        mock_post.assert_not_called()
+        # Durably marked processed, so the next poll won't re-crash on it.
+        from app.github_notification_tracker import is_comment_tracked
+        assert is_comment_tracked(str(instance_dir), "99999")
 
     @patch("app.github_command_handler.post_error_reply")
     @patch("app.github_command_handler.mark_notification_read")

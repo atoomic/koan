@@ -4,7 +4,7 @@ title: "GitHub Notification-Driven Commands"
 description: "Full reference for triggering Kōan via `@mention` commands in GitHub PR/issue comments, including config, dedup, security, and fallback scanning."
 tags: [messaging]
 created: 2026-05-28
-updated: 2026-07-13
+updated: 2026-07-28
 ---
 
 # GitHub Notification-Driven Commands
@@ -178,6 +178,10 @@ github:
 
 - **`reply_authorized_users`**: Separate from command `authorized_users` — allows a broader audience for read-only replies without granting command execution. `["*"]` means anyone can trigger replies (no permission check at all, unlike command wildcard which still checks GitHub write access). Omit to fall back to `authorized_users`. Set `[]` to disable replies entirely.
 - **`reply_rate_limit`**: Prevents API quota abuse when replies are open broadly. Tracks per-user reply counts over a rolling 1-hour window. Default: 5, minimum: 1.
+
+Reply generation is **best-effort and failure-isolated**: any crash while fetching thread context or generating the text (CLI error, a broken in-process wrapper around `generate_reply`, an unexpected exception) is logged and downgraded to "no reply" — the comment then falls back to the help message and is recorded in the processed-comment tracker like any other handled comment. This isolation is load-bearing: the tracker is written *after* the per-comment handler returns, so an escaping exception would leave the comment unprocessed and the notification unread, making every subsequent poll rediscover it and fail again indefinitely. If replies stop working, look for `GitHub reply: generation failed` in the logs rather than a silent queue.
+
+Optional keyword arguments added to `generate_reply()` are also dropped-and-retried when the resolved callable rejects them (`generate_reply() rejected optional kwarg …` in the logs). Instance-level handlers are imported in-process and may wrap that function; a wrapper written against an older signature would otherwise raise `TypeError` at the call boundary, before any of the function's own error handling could run.
 
 #### Command acknowledgment
 
