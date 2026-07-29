@@ -5,7 +5,7 @@ Extra must-checks for `/review` on this repository. Append-only: do not ignore t
 ## Always flag when present
 
 - **Undeclared durable-contract change** — edits under `specs/components/**` or `specs/skills/**` without the PR declaring an architectural change.
-- **Privacy leak on added lines** — private slash-command names, bot handles, Jira key prefixes, customer project names, concrete private case numbers. Placeholders only in public artifacts.
+- **Hardcoded secrets on added lines** — tokens, API keys, passwords, credentials, URLs with embedded auth. Identifier/privacy leaks are **not** a finding in this repo (see `repo.md`).
 - **Tests that call real boundaries** — Claude/Telegram/provider subprocesses, or unmocked `gh` that would sleep on retry. Prefer mocks at `run_gh` / `api` / `format_and_send`.
 - **Missing `KOAN_ROOT`** in new tests that import app modules which require it.
 - **Inline LLM prompts** in Python — prompts belong in `.md` files (`load_prompt` / `load_skill_prompt`).
@@ -15,7 +15,7 @@ Extra must-checks for `/review` on this repository. Append-only: do not ignore t
 
 ## Severity calibration (this repo)
 
-- Undeclared durable-spec edits, privacy leaks, and real external calls in tests → **critical** or **warning**, never suggestion-only.
+- Undeclared durable-spec edits, hardcoded secrets, and real external calls in tests → **critical** or **warning**, never suggestion-only.
 - Do not set `lgtm: false` on suggestion-only findings.
 
 ## Verify before asserting

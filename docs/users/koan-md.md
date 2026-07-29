@@ -4,7 +4,7 @@ title: "KOAN.md — koan-only project instructions"
 description: "Documents the optional project-root KOAN.md file and the .koan/ directory (a second .koan/KOAN.md, per-skill .koan/skills/<skill>/*.md hooks, and a structured .koan/config.yaml with review.always_check): koan-only steering injected into the autonomous agent's system prompt but never loaded by interactive Claude Code sessions, with precedence rules, the 16k-char cap, and this repo's dogfood layout."
 tags: [users]
 created: 2026-07-09
-updated: 2026-07-22
+updated: 2026-07-29
 ---
 
 # KOAN.md — koan-only project instructions
@@ -172,6 +172,7 @@ itself apply repo-specific quality gates:
 KOAN.md                              # thin always-on priorities
 .koan/skills/
   review/quality-gates.md
+  review/repo.md                     # repo identity + what is out of review scope
   fix/quality-gates.md
   implement/quality-gates.md
   rebase/quality-gates.md
@@ -180,9 +181,18 @@ KOAN.md                              # thin always-on priorities
 ```
 
 Content is intentionally short: unique failure modes (specs discipline,
-privacy, `KOAN_ROOT` / mock boundaries, OpenAPI, skill docs) — not a copy of
+secrets, `KOAN_ROOT` / mock boundaries, OpenAPI, skill docs) — not a copy of
 `CLAUDE.md`. Keep fragments under the 16k per-skill cap; prefer one
 `quality-gates.md` per skill.
+
+The one deliberate exception is `review/repo.md`: facts about *what a repo is*
+(visibility, whether it is the definitive home or a fork staged for a public
+upstream) and the finding categories that therefore do not apply. Those are not
+must-checks, so mixing them into a quality-gate checklist reads as a
+contradiction — a sibling file states them once and says which generic wording
+it supersedes. Files are injected sorted by filename, so `quality-gates.md`
+lands before `repo.md`; keep any cross-reference explicit rather than relying on
+that order.
 
 **Gitignore note:** runtime signal files (`.koan-status`, `.koan-stop`, …)
 stay ignored via `.koan-*`. The project directory `.koan/` is **not** ignored
