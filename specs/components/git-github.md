@@ -4,7 +4,7 @@ title: "Component Spec — Git & GitHub"
 description: "Design contract for everything touching git history or the GitHub API: branch/PR creation, sync, webhook/notification handling, and rebase/recreate/CI-fix workflows."
 tags: [git-github]
 created: 2026-06-27
-updated: 2026-07-16
+updated: 2026-07-28
 ---
 
 # Component Spec — Git & GitHub
@@ -123,6 +123,28 @@ before any free-form fallback:
   shared by the bridge and `/gh_request`; the URL-type guard lives only in
   `github_intent._url_type_ok` (never duplicated in the skill handler).
 - Missing/invalid model `confidence` fails closed to `0.0` (→ free-form).
+
+### @mention AI reply (failure isolation)
+
+A non-command @mention with `reply_enabled` produces an AI reply
+(`github_command_handler._try_reply` → `github_reply.generate_reply_compat`).
+
+**Invariants**
+
+- **Reply generation never raises into the notification worker.** Context fetch and
+  text generation are contained (`_generate_reply_text`); any exception is logged and
+  degrades to "no reply", falling through to the help-message path. Load-bearing
+  because the durable processed-comment tracker and `mark_notification_read` run
+  *after* the per-comment handler returns: an escaping exception strands the comment
+  as unprocessed, so every later poll rediscovers it and fails identically, forever
+  (webpros-sandbox/koan-bot#1).
+- **Optional `generate_reply()` kwargs are non-breaking at the call boundary.**
+  `generate_reply` is resolved from the module namespace per call, so in-process
+  instance handlers may wrap it; a kwarg in
+  `github_reply._OPTIONAL_GENERATE_REPLY_KWARGS` that the resolved callable rejects is
+  dropped and the call retried. Any other `TypeError` propagates — that is a bug, not a
+  compatibility gap. Adding a *required* parameter to `generate_reply()` is therefore a
+  breaking change for wrappers; add optional ones and register them in that set.
 
 ## Integration points
 

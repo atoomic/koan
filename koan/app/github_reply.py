@@ -314,6 +314,56 @@ def generate_reply(
         return None
 
 
+# Kwargs added to generate_reply() after its original signature. Instance-level
+# handlers are imported in-process (see external_skill_dispatch) and may wrap
+# app.github_reply.generate_reply at import time; a wrapper written against an
+# older signature rejects a newer kwarg at the *call boundary*, before any of
+# generate_reply()'s own error handling can run. These kwargs only enrich the
+# reply, so dropping one costs a little configuration — never the whole reply.
+_OPTIONAL_GENERATE_REPLY_KWARGS = frozenset({"project_name"})
+
+_UNEXPECTED_KWARG_RE = re.compile(r"unexpected keyword argument '([^']+)'")
+
+
+def _rejected_optional_kwarg(exc: TypeError, kwargs: dict) -> Optional[str]:
+    """Return the optional kwarg name ``exc`` rejected, or None.
+
+    Only names in ``_OPTIONAL_GENERATE_REPLY_KWARGS`` that were actually passed
+    qualify, so a TypeError raised *inside* the callee is never mistaken for a
+    signature mismatch.
+    """
+    match = _UNEXPECTED_KWARG_RE.search(str(exc))
+    if not match:
+        return None
+    name = match.group(1)
+    return name if name in _OPTIONAL_GENERATE_REPLY_KWARGS and name in kwargs else None
+
+
+def generate_reply_compat(**kwargs) -> Optional[str]:
+    """Call ``generate_reply`` tolerating callables with an older signature.
+
+    Resolves ``generate_reply`` from the module namespace on every call so an
+    instance-level wrapper is honoured. When the resolved callable rejects one
+    of the optional kwargs, retry without it instead of letting the TypeError
+    escape into the notification worker. Any other TypeError propagates — it is
+    a real bug, not a compatibility gap.
+    """
+    call_kwargs = dict(kwargs)
+    while True:
+        try:
+            return generate_reply(**call_kwargs)
+        except TypeError as exc:
+            rejected = _rejected_optional_kwarg(exc, call_kwargs)
+            if rejected is None:
+                raise
+            log.warning(
+                "GitHub reply: generate_reply() rejected optional kwarg %r "
+                "(wrapper with an older signature?) — retrying without it: %s",
+                rejected, exc,
+            )
+            call_kwargs.pop(rejected)
+
+
 def post_reply(
     owner: str,
     repo: str,
