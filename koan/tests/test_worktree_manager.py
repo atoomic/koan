@@ -399,7 +399,10 @@ class TestReapForeignWorktrees:
         )
         if age_days:
             old = time.time() - (age_days * 86400)
-            os.utime(str(path), (old, old))
+            for root, directories, files in os.walk(path):
+                for name in directories + files:
+                    os.utime(os.path.join(root, name), (old, old))
+            os.utime(path, (old, old))
         return str(path)
 
     def test_reaps_stale_foreign_worktree(self, git_repo, tmp_path):
@@ -447,6 +450,23 @@ class TestReapForeignWorktrees:
             cwd=foreign, capture_output=True, check=True,
         )
         old = time.time() - (5 * 86400)
+        os.utime(Path(foreign) / "new.txt", (old, old))
+        os.utime(foreign, (old, old))
+
+        assert reap_foreign_worktrees(git_repo) == []
+        assert Path(foreign).is_dir()
+
+    def test_spares_detached_worktree_with_unique_commit(self, git_repo, tmp_path):
+        """A detached commit with no other ref must survive."""
+        foreign = self._add_foreign(git_repo, tmp_path / "review-detached", age_days=5)
+        (Path(foreign) / "detached.txt").write_text("unique commit\n")
+        subprocess.run(["git", "add", "."], cwd=foreign, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "detached work"],
+            cwd=foreign, capture_output=True, check=True,
+        )
+        old = time.time() - (5 * 86400)
+        os.utime(Path(foreign) / "detached.txt", (old, old))
         os.utime(foreign, (old, old))
 
         assert reap_foreign_worktrees(git_repo) == []
@@ -493,10 +513,24 @@ class TestReapForeignWorktrees:
     def test_reaps_incidentally_dirty_worktree(self, git_repo, tmp_path):
         """Reviews leave edits behind (a regenerated lockfile); that must not block reap."""
         foreign = self._add_foreign(git_repo, tmp_path / "review-dirty", age_days=5)
-        (Path(foreign) / "README.md").write_text("touched by review\n")
+        readme = Path(foreign) / "README.md"
+        readme.write_text("touched by review\n")
+        old = time.time() - (5 * 86400)
+        os.utime(readme, (old, old))
+        os.utime(foreign, (old, old))
 
         assert reap_foreign_worktrees(git_repo) == [foreign]
         assert not Path(foreign).exists()
+
+    def test_spares_recent_tracked_file_edit(self, git_repo, tmp_path):
+        """Editing an existing file does not update root mtime, but remains live work."""
+        foreign = self._add_foreign(git_repo, tmp_path / "review-active", age_days=5)
+        root_mtime = os.path.getmtime(foreign)
+        (Path(foreign) / "README.md").write_text("active review edit\n")
+
+        assert os.path.getmtime(foreign) == root_mtime
+        assert reap_foreign_worktrees(git_repo) == []
+        assert Path(foreign).is_dir()
 
     def test_age_threshold_is_configurable(self, git_repo, tmp_path):
         foreign = self._add_foreign(git_repo, tmp_path / "review-age", age_days=1)

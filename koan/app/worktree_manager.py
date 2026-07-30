@@ -388,9 +388,9 @@ def reap_foreign_worktrees(
         cleanup_stale_worktrees() or by another harness (e.g. `.claude/worktrees/`)
       * never the main worktree
       * never a `locked` worktree — that is someone's live workspace
-      * never one modified within max_age_days — a review that started minutes ago is
-        still running, and removing its tree kills the job
-      * never one holding commits absent from its upstream
+      * never one with tracked or untracked file activity within max_age_days — a review
+        that started minutes ago is still running, and removing its tree kills the job
+      * never one holding commits absent from its upstream or from every durable ref
 
     Returns the list of paths removed (or, with dry_run, the paths that would be).
     """
@@ -421,11 +421,8 @@ def reap_foreign_worktrees(
         if not os.path.isdir(wt_real):
             continue  # already gone — prune_worktrees() drops the registration
 
-        try:
-            if os.path.getmtime(wt_real) > cutoff:
-                continue  # possibly a live review; leave it alone
-        except OSError:
-            continue
+        if _has_recent_worktree_activity(wt_real, cutoff):
+            continue  # possibly a live review, or activity could not be verified
 
         if _has_unpushed_commits(wt_real):
             print(
@@ -453,24 +450,131 @@ def reap_foreign_worktrees(
     return removed
 
 
-def _has_unpushed_commits(worktree_path: str) -> bool:
-    """True when the worktree holds commits its upstream does not have.
+def _has_recent_worktree_activity(worktree_path: str, cutoff: float) -> bool:
+    """Return True when non-ignored worktree content changed after ``cutoff``.
 
-    A detached-HEAD review checkout has no upstream, so git fails here — that means there
-    is nothing to lose, not that there is risk, hence False.
+    Root directory mtime alone misses edits to existing files. Ask git for tracked and
+    non-ignored untracked files, then inspect those files and their parent directories
+    (the latter catches recent deletions). Ignored dependency trees stay outside the scan.
+    Any inspection failure keeps the worktree.
     """
     try:
         result = subprocess.run(
-            ["git", "log", "--oneline", "@{u}..HEAD"],
+            ["git", "ls-files", "-co", "--exclude-standard", "-z"],
             cwd=worktree_path,
             capture_output=True,
             text=True,
         )
     except (OSError, subprocess.SubprocessError):
-        return False
+        return True
     if result.returncode != 0:
-        return False
-    return bool(result.stdout.strip())
+        return True
+
+    root = os.path.realpath(worktree_path)
+    directories = {root}
+    for relative_path in result.stdout.split("\0"):
+        if not relative_path:
+            continue
+        path = os.path.join(root, relative_path)
+        try:
+            if os.lstat(path).st_mtime > cutoff:
+                return True
+        except FileNotFoundError:
+            pass  # A tracked deletion updates its parent directory mtime.
+        except OSError:
+            return True
+
+        parent = os.path.dirname(path)
+        while parent != root:
+            directories.add(parent)
+            parent = os.path.dirname(parent)
+
+    try:
+        return any(os.lstat(path).st_mtime > cutoff for path in directories)
+    except OSError:
+        return True
+
+
+def _has_unpushed_commits(worktree_path: str) -> bool:
+    """Return True when removing the worktree could make commits unreachable.
+
+    Tracking branches are unsafe when HEAD exceeds their upstream. A detached HEAD
+    without an upstream is safe only when another durable branch, remote, or tag reaches
+    it. Local branches without upstreams remain durable after path-based removal. Any git
+    or verification failure keeps the worktree.
+    """
+    try:
+        branch = subprocess.run(
+            ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+
+    if branch.returncode == 0:
+        branch_name = branch.stdout.strip()
+        try:
+            remote = subprocess.run(
+                ["git", "config", "--get", f"branch.{branch_name}.remote"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+            )
+            merge = subprocess.run(
+                ["git", "config", "--get", f"branch.{branch_name}.merge"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True
+
+        if remote.returncode == 1 and merge.returncode == 1:
+            return False  # The local branch itself keeps HEAD reachable.
+        if remote.returncode != 0 or merge.returncode != 0:
+            return True
+
+        try:
+            result = subprocess.run(
+                ["git", "rev-list", "--count", "@{u}..HEAD"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True
+        if result.returncode != 0:
+            return True
+        try:
+            return int(result.stdout.strip()) > 0
+        except ValueError:
+            return True
+
+    if branch.returncode != 1:
+        return True
+
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "for-each-ref",
+                "--contains=HEAD",
+                "--format=%(refname)",
+                "refs/heads",
+                "refs/remotes",
+                "refs/tags",
+            ],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if result.returncode != 0:
+        return True
+    return not bool(result.stdout.strip())
 
 
 def prune_worktrees(project_path: str):
