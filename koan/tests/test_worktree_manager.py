@@ -4,6 +4,7 @@ Uses real git repos in temp directories (not mocks) per the plan's testing strat
 """
 
 import os
+import shutil
 import subprocess
 import time
 import pytest
@@ -459,6 +460,29 @@ class TestReapForeignWorktrees:
 
         assert reap_foreign_worktrees(git_repo) == []
         assert Path(wt.path).is_dir()
+
+    def test_clears_phantom_registrations(self, git_repo, tmp_path):
+        """A worktree whose directory vanished must not keep its registration.
+
+        This is the state the 10d /tmp sweep leaves behind; a fleet survey found ~20 of
+        them, 10 on a single repo.
+        """
+        foreign = self._add_foreign(git_repo, tmp_path / "review-gone", age_days=5)
+        shutil.rmtree(foreign)  # simulate tmpfiles deleting it behind git's back
+        assert foreign in [w.path for w in list_worktrees(git_repo)]
+
+        reap_foreign_worktrees(git_repo)
+
+        assert foreign not in [w.path for w in list_worktrees(git_repo)]
+
+    def test_dry_run_leaves_phantom_registrations(self, git_repo, tmp_path):
+        """Dry run must not mutate anything, phantoms included."""
+        foreign = self._add_foreign(git_repo, tmp_path / "review-gone-dry", age_days=5)
+        shutil.rmtree(foreign)
+
+        reap_foreign_worktrees(git_repo, dry_run=True)
+
+        assert foreign in [w.path for w in list_worktrees(git_repo)]
 
     def test_dry_run_reports_without_removing(self, git_repo, tmp_path):
         foreign = self._add_foreign(git_repo, tmp_path / "review-dry", age_days=5)

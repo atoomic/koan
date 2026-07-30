@@ -398,6 +398,13 @@ def reap_foreign_worktrees(
     removed: List[str] = []
     cutoff = time.time() - (max_age_days * 86400)
 
+    # Drop registrations whose directory is already gone before looking at what remains.
+    # These accumulate whenever something deletes a worktree without telling git — the 10d
+    # systemd-tmpfiles sweep of /tmp does exactly that — and nothing else clears them. A
+    # fleet survey on 2026-07-30 found ~20 across six hosts, including 10 on one repo.
+    if not dry_run:
+        prune_worktrees(project_path)
+
     for wt in list_worktrees(project_path):
         if wt.is_main or not wt.path:
             continue
