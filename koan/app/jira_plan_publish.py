@@ -370,15 +370,23 @@ def _retire_superseded_parts(issue_key: str, revision: str, part_count: int) -> 
     """
     try:
         comments = jira_list_comments_checked(issue_key)
-    except Exception:
+    except Exception as exc:
+        _audit(issue_key, "retire", "failure", 1, error=str(exc)[:180])
         return
 
     for comment, rev, part, _count in _find_plan_comments(comments):
         if rev == revision and part <= part_count:
             continue
-        with suppress(Exception):
-            if jira_edit_comment(issue_key, str(comment.get("id", "")), _SUPERSEDED_BODY):
-                _audit(issue_key, "retire", "success", 1, comment_id=comment.get("id", ""))
+        comment_id = str(comment.get("id", ""))
+        try:
+            retired = jira_edit_comment(issue_key, comment_id, _SUPERSEDED_BODY)
+        except Exception as exc:
+            _audit(issue_key, "retire", "failure", 1, comment_id=comment_id, error=str(exc)[:180])
+            continue
+        _audit(
+            issue_key, "retire", "success" if retired else "failure", 1,
+            comment_id=comment_id,
+        )
 
 
 def publish_staged_plan(
