@@ -230,14 +230,60 @@ def _verify_part(comments, revision: str, part_number: int) -> Optional[dict]:
     return None
 
 
-def _read_stage(issue_url: str, instance_dir: str) -> Optional[dict]:
+def _quarantine_stage(issue_url: str, path: Path, reason: str) -> None:
+    """Set a damaged stage aside instead of letting a regenerate erase it.
+
+    The plan itself is already unrecoverable, but the file is the only evidence
+    that a publish was ever pending. Failing the mission here would wedge the
+    issue for good, so recovery is still "regenerate" — just not silently.
+    """
+    target = path.with_suffix(".corrupt")
+    moved: Optional[str] = None
+    quarantine_error: Optional[str] = None
     try:
-        data = json.loads(stage_path_for(issue_url, instance_dir).read_text())
-    except (OSError, ValueError, TypeError):
+        path.replace(target)
+        moved = str(target)
+    except OSError as exc:
+        quarantine_error = str(exc)[:180]
+
+    # The stage filename is a digest of the URL, so the issue key is the only
+    # thing that makes this record actionable for whoever reads the audit log.
+    issue_key = ""
+    with suppress(Exception):
+        issue_key = parse_jira_url(issue_url)
+    log_event(
+        TRACKER_COMMENT_MUTATION,
+        result="failure",
+        details={
+            "provider": "jira", "issue_key": issue_key,
+            "action": "stage_unreadable", "reason": reason[:180],
+            "stage_path": str(path), "quarantined_to": moved,
+            "quarantine_error": quarantine_error,
+        },
+    )
+
+
+def _read_stage(issue_url: str, instance_dir: str) -> Optional[dict]:
+    path = stage_path_for(issue_url, instance_dir)
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return None  # nothing staged — the ordinary case, not a problem
+    except OSError as exc:
+        _quarantine_stage(issue_url, path, f"unreadable: {exc}")
         return None
+
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        _quarantine_stage(issue_url, path, f"invalid JSON: {exc}")
+        return None
+
     if not isinstance(data, dict):
+        _quarantine_stage(issue_url, path, "payload is not an object")
         return None
     if data.get("issue_url") != issue_url or not isinstance(data.get("comment_body"), str):
+        _quarantine_stage(issue_url, path, "missing or mismatched fields")
         return None
     return data
 

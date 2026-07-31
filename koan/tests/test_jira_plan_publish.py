@@ -450,3 +450,44 @@ def test_plan_parts_splits_and_balances_together():
     assert len(parts) > 1
     for part in parts:
         assert part.count("```") % 2 == 0, "every published part must be fence-balanced"
+
+
+def test_missing_stage_is_silent_not_a_problem(tmp_path):
+    with patch("app.jira_plan_publish.log_event") as log_event:
+        assert load_staged_plan(URL, str(tmp_path)) is None
+
+    log_event.assert_not_called()
+
+
+def test_corrupt_stage_is_quarantined_and_audited(tmp_path):
+    """A damaged stage must not vanish into a silent regenerate.
+
+    The plan is unrecoverable either way, but the file is the only evidence a
+    publish was pending — keep it, and say so.
+    """
+    stage_plan(URL, "plan", str(tmp_path))
+    path = stage_path_for(URL, str(tmp_path))
+    path.write_text("{not json")
+
+    with patch("app.jira_plan_publish.log_event") as log_event:
+        assert load_staged_plan(URL, str(tmp_path)) is None
+
+    assert not path.exists()
+    assert path.with_suffix(".corrupt").read_text() == "{not json"
+    details = log_event.call_args.kwargs["details"]
+    assert details["action"] == "stage_unreadable"
+    assert "invalid JSON" in details["reason"]
+    # The filename is a digest, so the key is what makes the record actionable.
+    assert details["issue_key"] == "PROJ-9"
+
+
+def test_stage_for_a_different_issue_is_quarantined(tmp_path):
+    stage_plan(URL, "plan", str(tmp_path))
+    path = stage_path_for(URL, str(tmp_path))
+    path.write_text(json.dumps({"issue_url": "https://other/browse/X-1", "comment_body": "x"}))
+
+    with patch("app.jira_plan_publish.log_event") as log_event:
+        assert load_staged_plan(URL, str(tmp_path)) is None
+
+    assert log_event.call_args.kwargs["details"]["reason"] == "missing or mismatched fields"
+    assert path.with_suffix(".corrupt").exists()
