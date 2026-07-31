@@ -74,6 +74,8 @@ See `docs/users/skills.md` for the end-user `/plan` reference and
   republishes it without spending a model call to regenerate. The stage is dropped once
   it expires or three consecutive runs fail, after which the next `/plan` regenerates —
   a permanently undeliverable plan must not wedge the issue.
+- The critic, quality-review, and assumptions-audit subagents use the configured
+  `review_mode` model; initial generation and regeneration use `mission`.
 
 ## Evaluation
 

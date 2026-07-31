@@ -1223,10 +1223,11 @@ class TestReviewPlan:
         return Path(__file__).resolve().parent.parent / "skills" / "core" / "plan"
 
     def test_approved_on_approved_output(self):
-        with patch("app.cli_provider.run_command", return_value="APPROVED\n"):
+        with patch("app.cli_provider.run_command", return_value="APPROVED\n") as command:
             approved, issues = review_plan("## Plan\nStep 1", "/project", self._skill_dir())
         assert approved
         assert issues == ""
+        assert command.call_args.kwargs["model_key"] == "review_mode"
 
     def test_issues_found_returns_false_and_issues(self):
         reviewer_output = "ISSUES_FOUND\n- Phase 1: no file path\n- Phase 2: missing tests"
@@ -1410,6 +1411,7 @@ class TestCriticLoop:
             skill_dir=self._skill_dir(), iterations=3,
         )
         assert mock_critic.call_count == 2
+        assert mock_critic.call_args.kwargs["model_key"] == "review_mode"
         assert mock_regen.call_count == 2
         assert result == "plan v3"
 
@@ -1536,10 +1538,11 @@ class TestReviewPlanAssumptions:
 
     def test_assumptions_ok(self):
         output = "ASSUMPTIONS_OK\n1. [VERIFIED] Function exists in module"
-        with patch("app.cli_provider.run_command", return_value=output):
+        with patch("app.cli_provider.run_command", return_value=output) as command:
             status, reason = review_plan_assumptions("plan text", "/project", self._PLAN_DIR)
             assert status == ASSUMPTIONS_OK
             assert reason == ""
+        assert command.call_args.kwargs["model_key"] == "review_mode"
 
     def test_critical_assumption_unverified(self):
         output = (

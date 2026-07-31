@@ -404,7 +404,7 @@ def review_plan(plan_text: str, project_path: str, skill_dir) -> Tuple[bool, str
         output = run_command(
             prompt, project_path,
             allowed_tools=["Read", "Glob", "Grep"],
-            model_key="lightweight",
+            model_key="review_mode",
             max_turns=3,
             timeout=120,
             max_turns_source=None,
@@ -474,7 +474,7 @@ def review_plan_assumptions(
         output = run_command(
             prompt, project_path,
             allowed_tools=["Read", "Glob", "Grep"],
-            model_key="lightweight",
+            model_key="review_mode",
             max_turns=3,
             timeout=120,
             max_turns_source=None,
@@ -670,7 +670,7 @@ def _critic_loop(
             critique = run_command(
                 critic_prompt, project_path,
                 allowed_tools=["Read", "Glob", "Grep"],
-                model_key="lightweight",
+                model_key="review_mode",
                 max_turns=3,
                 timeout=min(120, get_skill_timeout()),
             )
