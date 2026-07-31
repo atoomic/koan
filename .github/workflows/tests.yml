@@ -54,7 +54,7 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           pip install -r koan/requirements.txt
-          pip install pytest pytest-split pytest-cov pytest-xdist
+          pip install pytest pytest-split pytest-cov pytest-xdist pytest-timeout
 
       # Parts of the suite exercise code paths that shell out to `gh`. The
       # self-hosted runner image does not ship it (ubuntu-latest did), which
@@ -65,6 +65,13 @@ jobs:
 
       - name: ▶️ Run tests (${{ matrix.group.name }})
         if: ${{ !inputs.group || matrix.group.name == inputs.group }}
+        # Something reclaims this step at ~11m with no uploaded logs, so the
+        # failure has been undiagnosable. Cut it ourselves just under that mark:
+        # a step GitHub times out still finishes the job and uploads its output.
+        # The full suite runs in ~100s locally with this exact invocation, so 10
+        # minutes is ~6x headroom — if a run legitimately needs more, the log
+        # will now show where it went.
+        timeout-minutes: 10
         working-directory: koan
         env:
           KOAN_ROOT: ${{ github.workspace }}/koan
@@ -72,15 +79,23 @@ jobs:
           KOAN_TELEGRAM_TOKEN: "fake-token-for-ci"
           KOAN_TELEGRAM_CHAT_ID: "123456789"
         run: |
+          # --timeout is load-bearing, not belt-and-braces: without it a single
+          # blocked test runs until the runner is reclaimed, and because the
+          # step never finishes its logs are never uploaded — the failure shows
+          # up as an unexplained kill with nothing to read. A per-test timeout
+          # turns that into an ordinary failure with a traceback.
+          # --durations surfaces the near-misses before they become hangs.
+          pytest_args=(
+            tests/ -m "${{ matrix.group.marker }}" -v
+            -n auto --dist loadfile
+            --timeout=120 --timeout-method=thread
+            --durations=15
+            --cov=app --cov-report=term-missing
+          )
           if [ -n "${{ matrix.group.split_group }}" ]; then
-            pytest tests/ -m "${{ matrix.group.marker }}" --splits 3 --group ${{ matrix.group.split_group }} -v \
-              -n auto --dist loadfile \
-              --cov=app --cov-report=term-missing
-          else
-            pytest tests/ -m "${{ matrix.group.marker }}" -v \
-              -n auto --dist loadfile \
-              --cov=app --cov-report=term-missing
+            pytest_args+=(--splits 3 --group ${{ matrix.group.split_group }})
           fi
+          pytest "${pytest_args[@]}"
 
       - name: ⬆️ Upload coverage data
         if: ${{ !inputs.group || matrix.group.name == inputs.group }}
