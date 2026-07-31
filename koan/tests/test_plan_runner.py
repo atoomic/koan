@@ -1221,11 +1221,12 @@ class TestReviewPlan:
         return Path(__file__).resolve().parent.parent / "skills" / "core" / "plan"
 
     def test_approved_on_approved_output(self):
-        with patch("app.cli_provider.run_command", return_value="APPROVED\n") as command:
+        with patch("app.config.get_model_config", return_value={"review_mode": ""}), \
+             patch("app.cli_provider.run_command", return_value="APPROVED\n") as command:
             approved, issues = review_plan("## Plan\nStep 1", "/project", self._skill_dir())
         assert approved
         assert issues == ""
-        assert command.call_args.kwargs["model_key"] == "review_mode"
+        assert command.call_args.kwargs["model_key"] == "lightweight"
 
     def test_issues_found_returns_false_and_issues(self):
         reviewer_output = "ISSUES_FOUND\n- Phase 1: no file path\n- Phase 2: missing tests"
@@ -1404,12 +1405,13 @@ class TestCriticLoop:
     @patch("app.plan_runner._run_claude_plan")
     def test_iterations_3_runs_two_critic_rounds(self, mock_regen, mock_critic, mock_load):
         mock_regen.side_effect = ["plan v2", "plan v3"]
-        result = _critic_loop(
-            "initial plan", "/project", idea="Add feature", context="",
-            skill_dir=self._skill_dir(), iterations=3,
-        )
+        with patch("app.config.get_model_config", return_value={"review_mode": ""}):
+            result = _critic_loop(
+                "initial plan", "/project", idea="Add feature", context="",
+                skill_dir=self._skill_dir(), iterations=3,
+            )
         assert mock_critic.call_count == 2
-        assert mock_critic.call_args.kwargs["model_key"] == "review_mode"
+        assert mock_critic.call_args.kwargs["model_key"] == "lightweight"
         assert mock_regen.call_count == 2
         assert result == "plan v3"
 
@@ -1536,11 +1538,12 @@ class TestReviewPlanAssumptions:
 
     def test_assumptions_ok(self):
         output = "ASSUMPTIONS_OK\n1. [VERIFIED] Function exists in module"
-        with patch("app.cli_provider.run_command", return_value=output) as command:
+        with patch("app.config.get_model_config", return_value={"review_mode": ""}), \
+             patch("app.cli_provider.run_command", return_value=output) as command:
             status, reason = review_plan_assumptions("plan text", "/project", self._PLAN_DIR)
             assert status == ASSUMPTIONS_OK
             assert reason == ""
-        assert command.call_args.kwargs["model_key"] == "review_mode"
+        assert command.call_args.kwargs["model_key"] == "lightweight"
 
     def test_critical_assumption_unverified(self):
         output = (
@@ -1717,3 +1720,78 @@ def test_run_claude_plan_passes_gated_mcp_configs():
         pr._run_claude_plan("prompt", "/proj", project_name="proj")
     gate.assert_called_once_with("plan", "proj")
     assert rcs.call_args.kwargs["mcp_configs"] == ["/mcp.json"]
+
+
+class TestPlanReviewModelKey:
+    """`/plan`'s review subagents must not silently change model."""
+
+    def test_falls_back_to_lightweight_when_review_mode_is_unset(self):
+        from app.plan_runner import _plan_review_model_key
+
+        with patch("app.config.get_model_config", return_value={"review_mode": ""}):
+            assert _plan_review_model_key() == "lightweight"
+
+    def test_uses_review_mode_once_configured(self):
+        from app.plan_runner import _plan_review_model_key
+
+        with patch("app.config.get_model_config", return_value={"review_mode": "opus"}):
+            assert _plan_review_model_key() == "review_mode"
+
+    def test_falls_back_to_lightweight_when_config_probe_raises(self):
+        from app.plan_runner import _plan_review_model_key
+
+        with patch("app.config.get_model_config", side_effect=RuntimeError("boom")):
+            assert _plan_review_model_key() == "lightweight"
+
+    def test_configured_review_mode_reaches_the_review_subagent(self):
+        from pathlib import Path
+
+        from app.plan_runner import review_plan
+
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "core" / "plan"
+        with patch("app.config.get_model_config", return_value={"review_mode": "opus"}), \
+             patch("app.cli_provider.run_command", return_value="APPROVED\n") as command:
+            review_plan("## Plan\nStep 1", "/project", skill_dir)
+
+        assert command.call_args.kwargs["model_key"] == "review_mode"
+
+    def test_configured_review_mode_reaches_the_critic_loop(self):
+        """The critic fires once per iteration, so it is the costliest site."""
+        from pathlib import Path
+
+        from app.plan_runner import _critic_loop
+
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "core" / "plan"
+        with patch("app.config.get_model_config", return_value={"review_mode": "opus"}), \
+             patch("app.plan_runner.load_prompt_or_skill", return_value="critic prompt"), \
+             patch("app.plan_runner._run_claude_plan", return_value="plan v2"), \
+             patch("app.cli_provider.run_command", return_value="GAP: something") as command:
+            _critic_loop(
+                "initial plan", "/project", idea="Add feature", context="",
+                skill_dir=skill_dir, iterations=2,
+            )
+
+        assert command.call_args.kwargs["model_key"] == "review_mode"
+
+    def test_review_mode_probe_reads_the_review_role_provider_section(self):
+        """`cli:` can route review to a different provider than the global one.
+
+        Probing the global provider's block would miss a configured review_mode
+        and quietly downgrade the very operators who opted in.
+        """
+        from types import SimpleNamespace
+
+        from app.plan_runner import _plan_review_model_key
+
+        seen = {}
+
+        def fake_get_model_config(project_name="", role_providers=None):
+            seen["role_providers"] = role_providers
+            return {"review_mode": "opus" if role_providers else ""}
+
+        with patch("app.config.get_model_config", side_effect=fake_get_model_config), \
+             patch("app.provider.resolve_role_provider") as resolve:
+            resolve.return_value = SimpleNamespace(name="claude")
+            assert _plan_review_model_key() == "review_mode"
+
+        assert seen["role_providers"] == {"review_mode": "claude"}

@@ -370,6 +370,36 @@ def is_simple_plan(plan_text: str) -> bool:
     return line_count < _REVIEW_SKIP_LINES
 
 
+def _plan_review_model_key(project_name: str = "") -> str:
+    """Role key for `/plan`'s critic, quality-review, and assumptions subagents.
+
+    These want the stronger `review_mode` reviewer — but that role is empty by
+    default, and the provider omits `--model` entirely for an empty value.
+    Routing there unconditionally would silently promote every unconfigured
+    install from `lightweight` (haiku) to the CLI's default model, spending more
+    quota for a setting nobody chose. Use `review_mode` only once an operator
+    has actually set it, and otherwise keep the cheaper role these calls have
+    always used.
+    """
+    try:
+        from app.config import get_model_config
+        from app.provider import resolve_role_provider
+
+        # Mirror _resolve_role_provider_and_models: the role's model lives in
+        # *its own* provider's section, which differs from the global provider
+        # whenever `cli:` routes review elsewhere. Probing the global section
+        # would miss a configured review_mode and quietly downgrade the model.
+        provider = resolve_role_provider("review_mode", project_name)
+        models = get_model_config(
+            project_name, role_providers={"review_mode": provider.name},
+        )
+        if str(models.get("review_mode") or "").strip():
+            return "review_mode"
+    except Exception as e:
+        print(f"[plan_runner] review_mode probe failed: {e}", file=sys.stderr)
+    return "lightweight"
+
+
 def review_plan(plan_text: str, project_path: str, skill_dir) -> Tuple[bool, str]:
     """Run a lightweight subagent to review plan quality.
 
@@ -398,7 +428,7 @@ def review_plan(plan_text: str, project_path: str, skill_dir) -> Tuple[bool, str
         output = run_command(
             prompt, project_path,
             allowed_tools=["Read", "Glob", "Grep"],
-            model_key="review_mode",
+            model_key=_plan_review_model_key(),
             max_turns=3,
             timeout=120,
             max_turns_source=None,
@@ -468,7 +498,7 @@ def review_plan_assumptions(
         output = run_command(
             prompt, project_path,
             allowed_tools=["Read", "Glob", "Grep"],
-            model_key="review_mode",
+            model_key=_plan_review_model_key(),
             max_turns=3,
             timeout=120,
             max_turns_source=None,
@@ -664,7 +694,7 @@ def _critic_loop(
             critique = run_command(
                 critic_prompt, project_path,
                 allowed_tools=["Read", "Glob", "Grep"],
-                model_key="review_mode",
+                model_key=_plan_review_model_key(),
                 max_turns=3,
                 timeout=min(120, get_skill_timeout()),
             )

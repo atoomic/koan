@@ -44,10 +44,12 @@ models:
 - Provider names may use hyphens or underscores as literal keys
   (`ollama-launch` or `ollama_launch` both work).
 
-`/plan` uses `mission` for plan generation and `review_mode` for its critic,
-quality-review, and assumptions-audit subagents. This lets expensive plan
-checks use a stronger reviewer without changing the model for unrelated
-`lightweight` helpers.
+`/plan` uses `mission` for plan generation, and for its critic, quality-review,
+and assumptions-audit subagents it uses `review_mode` **once you set it** —
+falling back to `lightweight` while it is unset. This lets expensive plan checks
+use a stronger reviewer without changing the model for unrelated `lightweight`
+helpers, and without silently promoting them to the CLI's default model on
+instances that never opted in.
 
 ## Resolution order
 

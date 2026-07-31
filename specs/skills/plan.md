@@ -82,8 +82,11 @@ See `docs/users/skills.md` for the end-user `/plan` reference and
   reply-to-comment operation, so parts carry `?focusedCommentId=` previous/next links
   rather than being threaded — those links are attached in a second pass, once every
   part has an id.
-- The critic, quality-review, and assumptions-audit subagents use the configured
-  `review_mode` model; initial generation and regeneration use `mission`.
+- The critic, quality-review, and assumptions-audit subagents use `review_mode`
+  **when an operator has configured it**, and `lightweight` otherwise; initial
+  generation and regeneration use `mission`. The fallback is load-bearing: an
+  unset role resolves to an empty model and the provider then omits `--model`
+  entirely, which would silently promote these calls to the CLI's default model.
 
 ## Evaluation
 
