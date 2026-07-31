@@ -491,3 +491,21 @@ def test_stage_for_a_different_issue_is_quarantined(tmp_path):
 
     assert log_event.call_args.kwargs["details"]["reason"] == "missing or mismatched fields"
     assert path.with_suffix(".corrupt").exists()
+
+
+def test_split_does_not_emit_a_runt_first_part():
+    """A File Map is a long blank-line-free run.
+
+    Preferring the coarsest separator outright would cut at the last "\n\n"
+    before it — near the very start — emitting an absurd Part 1 and an extra
+    publish round trip.
+    """
+    body = "## Plan\n\nIntro.\n\n### Phase 1\n\nprose.\n\n" + "\n".join(
+        f"| file{i}.py | modify | yes |" for i in range(4000)
+    )
+    parts = _plan_parts(body)
+
+    assert "".join(_split_comment_body(body)) == body
+    assert all(len(part) > _PART_BODY_CHARS // 2 for part in parts[:-1]), (
+        f"runt part in {[len(p) for p in parts]}"
+    )
