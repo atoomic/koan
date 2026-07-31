@@ -381,26 +381,31 @@ def _plan_review_model_key(project_name: str = "") -> str:
     has actually set it, and otherwise keep the cheaper role these calls have
     always used.
     """
-    try:
-        from app.config import get_model_config
-        from app.provider import resolve_role_provider
+    from app.config import get_model_config
+    from app.provider import resolve_role_provider
 
-        # Mirror _resolve_role_provider_and_models: the role's model lives in
-        # *its own* provider's section, which differs from the global provider
-        # whenever `cli:` routes review elsewhere. Probing the global section
-        # would miss a configured review_mode and quietly downgrade the model.
-        provider = resolve_role_provider("review_mode", project_name)
-        models = get_model_config(
-            project_name, role_providers={"review_mode": provider.name},
-        )
-        if str(models.get("review_mode") or "").strip():
-            return "review_mode"
-    except Exception as e:
-        print(f"[plan_runner] review_mode probe failed: {e}", file=sys.stderr)
+    # Mirror _resolve_role_provider_and_models: the role's model lives in
+    # *its own* provider's section, which differs from the global provider
+    # whenever `cli:` routes review elsewhere. Probing the global section
+    # would miss a configured review_mode and quietly downgrade the model.
+    #
+    # Deliberately not wrapped in a try/except: swallowing a config or
+    # provider-resolution error here would silently ignore an explicitly
+    # configured review_mode. Every caller already runs this inside its own
+    # fail-open handler, which logs and skips the subagent — a visible skip
+    # beats an invisible downgrade.
+    provider = resolve_role_provider("review_mode", project_name)
+    models = get_model_config(
+        project_name, role_providers={"review_mode": provider.name},
+    )
+    if str(models.get("review_mode") or "").strip():
+        return "review_mode"
     return "lightweight"
 
 
-def review_plan(plan_text: str, project_path: str, skill_dir) -> Tuple[bool, str]:
+def review_plan(
+    plan_text: str, project_path: str, skill_dir, project_name: str = "",
+) -> Tuple[bool, str]:
     """Run a lightweight subagent to review plan quality.
 
     Args:
@@ -428,7 +433,8 @@ def review_plan(plan_text: str, project_path: str, skill_dir) -> Tuple[bool, str
         output = run_command(
             prompt, project_path,
             allowed_tools=["Read", "Glob", "Grep"],
-            model_key=_plan_review_model_key(),
+            model_key=_plan_review_model_key(project_name),
+            project_name=project_name,
             max_turns=3,
             timeout=120,
             max_turns_source=None,
@@ -465,7 +471,7 @@ ASSUMPTIONS_REVIEWER_ERROR = "reviewer_error"
 
 
 def review_plan_assumptions(
-    plan_text: str, project_path: str, skill_dir,
+    plan_text: str, project_path: str, skill_dir, project_name: str = "",
 ) -> Tuple[str, str]:
     """Run a lightweight subagent to pressure-test plan assumptions.
 
@@ -498,7 +504,8 @@ def review_plan_assumptions(
         output = run_command(
             prompt, project_path,
             allowed_tools=["Read", "Glob", "Grep"],
-            model_key=_plan_review_model_key(),
+            model_key=_plan_review_model_key(project_name),
+            project_name=project_name,
             max_turns=3,
             timeout=120,
             max_turns_source=None,
@@ -583,7 +590,9 @@ def _apply_assumptions_audit(
     if not get_plan_review_config().get("assumptions_check", True):
         return plan_text
 
-    status, reason = review_plan_assumptions(plan_text, project_path, skill_dir)
+    status, reason = review_plan_assumptions(
+        plan_text, project_path, skill_dir, project_name=project_name,
+    )
     if status == ASSUMPTIONS_CRITICAL:
         logger.info("Assumptions audit flagged unverified assumptions — adding to Open Questions")
         if notify_fn:
@@ -694,7 +703,8 @@ def _critic_loop(
             critique = run_command(
                 critic_prompt, project_path,
                 allowed_tools=["Read", "Glob", "Grep"],
-                model_key=_plan_review_model_key(),
+                model_key=_plan_review_model_key(project_name),
+            project_name=project_name,
                 max_turns=3,
                 timeout=min(120, get_skill_timeout()),
             )
@@ -792,7 +802,9 @@ def _review_loop(
     final_round = 0
 
     for round_num in range(1, max_rounds + 1):
-        approved, issues = review_plan(current_plan, project_path, skill_dir)
+        approved, issues = review_plan(
+            current_plan, project_path, skill_dir, project_name=project_name,
+        )
         final_round = round_num
 
         if approved:

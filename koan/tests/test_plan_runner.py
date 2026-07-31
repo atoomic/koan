@@ -1737,11 +1737,27 @@ class TestPlanReviewModelKey:
         with patch("app.config.get_model_config", return_value={"review_mode": "opus"}):
             assert _plan_review_model_key() == "review_mode"
 
-    def test_falls_back_to_lightweight_when_config_probe_raises(self):
+    def test_probe_failure_propagates_instead_of_masking_the_config(self):
+        """Swallowing here would silently ignore a configured review_mode."""
         from app.plan_runner import _plan_review_model_key
 
-        with patch("app.config.get_model_config", side_effect=RuntimeError("boom")):
-            assert _plan_review_model_key() == "lightweight"
+        with patch("app.config.get_model_config", side_effect=RuntimeError("boom")), \
+             pytest.raises(RuntimeError, match="boom"):
+            _plan_review_model_key()
+
+    def test_probe_failure_still_fails_open_at_the_caller(self):
+        """A broken config skips the review — visibly — rather than crashing."""
+        from pathlib import Path
+
+        from app.plan_runner import review_plan
+
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "core" / "plan"
+        with patch("app.config.get_model_config", side_effect=RuntimeError("boom")), \
+             patch("app.cli_provider.run_command") as command:
+            approved, issues = review_plan("## Plan\nStep 1", "/project", skill_dir)
+
+        assert approved is True and issues == ""
+        command.assert_not_called()
 
     def test_configured_review_mode_reaches_the_review_subagent(self):
         from pathlib import Path
@@ -1795,3 +1811,34 @@ class TestPlanReviewModelKey:
             assert _plan_review_model_key() == "review_mode"
 
         assert seen["role_providers"] == {"review_mode": "claude"}
+
+    def test_project_override_reaches_the_review_subagent(self):
+        """Per-project models/cli overrides must not be resolved globally.
+
+        The callers all know the active project; resolving without it silently
+        runs the global lightweight/provider for a project that configured its
+        own review_mode.
+        """
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from app.plan_runner import review_plan
+
+        seen = {}
+
+        def fake_get_model_config(project_name="", role_providers=None):
+            seen["project_name"] = project_name
+            # Only this project configures review_mode.
+            return {"review_mode": "opus" if project_name == "myproj" else ""}
+
+        skill_dir = Path(__file__).resolve().parent.parent / "skills" / "core" / "plan"
+        with patch("app.config.get_model_config", side_effect=fake_get_model_config), \
+             patch("app.provider.resolve_role_provider") as resolve, \
+             patch("app.cli_provider.run_command", return_value="APPROVED\n") as command:
+            resolve.return_value = SimpleNamespace(name="claude")
+            review_plan("## Plan\nStep 1", "/project", skill_dir, project_name="myproj")
+
+        assert seen["project_name"] == "myproj"
+        assert command.call_args.kwargs["model_key"] == "review_mode"
+        assert command.call_args.kwargs["project_name"] == "myproj"
+
