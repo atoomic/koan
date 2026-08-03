@@ -96,7 +96,7 @@ jobs:
             pytest_args+=(--splits 3 --group ${{ matrix.group.split_group }})
           fi
           # Cover collection and xdist shutdown too; per-test timeouts cannot.
-          timeout --signal=INT --kill-after=60s 7m pytest "${pytest_args[@]}"
+          timeout --signal=INT --kill-after=30s 7m pytest "${pytest_args[@]}"
 
       - name: ⬆️ Upload coverage data
         if: ${{ !inputs.group || matrix.group.name == inputs.group }}
