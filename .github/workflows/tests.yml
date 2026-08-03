@@ -68,9 +68,9 @@ jobs:
         # Something reclaims each job at ~11m with no uploaded logs, so the
         # failure has been undiagnosable. Leave enough time for runner cleanup:
         # a step GitHub times out still finishes the job and uploads its output.
-        # The full suite runs in ~100s locally with this exact invocation, so 8
-        # minutes is ~5x headroom — if a run legitimately needs more, the log
-        # will now show where it went.
+        # These shards normally finish in a few minutes, so 8 minutes leaves
+        # substantial headroom while still ensuring the log shows where a run
+        # stopped.
         timeout-minutes: 8
         working-directory: koan
         env:
@@ -87,7 +87,11 @@ jobs:
           # --durations surfaces the near-misses before they become hangs.
           pytest_args=(
             tests/ -m "${{ matrix.group.marker }}" -v
-            -n auto --dist loadfile
+            # The self-hosted runner advertises 16 CPUs, but starting 16
+            # collection workers can stall before any test is scheduled.
+            # The matrix already runs four shards concurrently, so cap each
+            # shard's local fan-out instead of multiplying it by every host CPU.
+            -n 4 --dist loadfile
             --timeout=120 --timeout-method=thread
             --durations=15
             --cov=app --cov-report=term-missing
