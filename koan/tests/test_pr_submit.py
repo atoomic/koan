@@ -507,6 +507,29 @@ class TestSubmitDraftPr:
             mock_tracker.assert_not_called()
             assert mock_gh.call_count == 1
 
+    def test_jira_comment_failure_notifies_without_failing_created_pr(self):
+        notify = MagicMock()
+        with patch(f"{_M}.get_current_branch", return_value="feat"), \
+             patch(f"{_M}.resolve_base_branch", return_value="main"), \
+             patch(f"{_M}.run_gh", return_value=""), \
+             patch(f"{_M}.get_commit_subjects", return_value=["c1"]), \
+             patch(f"{_M}.run_git_strict"), \
+             patch(f"{_M}.resolve_submit_target",
+                   return_value={"repo": "o/r", "is_fork": False}), \
+             patch(f"{_M}.pr_create", return_value="https://pr/1"), \
+             patch("app.jira_outcome_publish.upsert_jira_comment",
+                   return_value=(False, "lookup_failed")):
+            result = submit_draft_pr(
+                "/p", "proj", "o", "r", "PROJ-42", "T", "B",
+                issue_url="https://org.atlassian.net/browse/PROJ-42",
+                notify_fn=notify,
+                skill_name="fix",
+            )
+
+        assert result == "https://pr/1"
+        notify.assert_called_once()
+        assert "Jira status comment failed" in notify.call_args.args[0]
+
     def test_jira_success_comment_includes_mission_and_pr_link(self):
         with patch(f"{_M}.get_current_branch", return_value="feat"), \
              patch(f"{_M}.resolve_base_branch", return_value="main"), \

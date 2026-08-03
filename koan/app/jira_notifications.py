@@ -1081,7 +1081,18 @@ def fetch_jira_issue(
             )
 
         batch = cdata["comments"]
+        total = cdata.get("total")
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            raise RuntimeError(
+                f"Failed to fetch comments for Jira issue {issue_key} "
+                f"(invalid total at startAt={start_at})"
+            )
         if not batch:
+            if start_at < total:
+                raise RuntimeError(
+                    f"Failed to fetch comments for Jira issue {issue_key} "
+                    f"(empty page at startAt={start_at}, total={total})"
+                )
             break
 
         for comment in batch:
@@ -1102,9 +1113,8 @@ def fetch_jira_issue(
                     entry["updated"] = str(comment["updated"])
                 all_comments.append(entry)
 
-        total = cdata.get("total", 0)
         start_at += len(batch)
-        if start_at >= total or len(batch) < max_results:
+        if start_at >= total:
             break
 
     return title, body, all_comments
@@ -1219,7 +1229,12 @@ def _list_comments_result(issue_key: str) -> Tuple[bool, List[dict]]:
             return False, all_comments
 
         batch = data["comments"]
+        total = data.get("total")
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            return False, all_comments
         if not batch:
+            if start_at < total:
+                return False, all_comments
             break
 
         for comment in batch:
@@ -1230,9 +1245,8 @@ def _list_comments_result(issue_key: str) -> Tuple[bool, List[dict]]:
             body_text = _adf_to_text(body_node) if body_node else ""
             all_comments.append({"id": comment_id, "body": body_text})
 
-        total = data.get("total", 0)
         start_at += len(batch)
-        if start_at >= total or len(batch) < max_results:
+        if start_at >= total:
             break
 
     return True, all_comments

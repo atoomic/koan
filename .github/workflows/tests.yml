@@ -65,13 +65,13 @@ jobs:
 
       - name: ▶️ Run tests (${{ matrix.group.name }})
         if: ${{ !inputs.group || matrix.group.name == inputs.group }}
-        # Something reclaims this step at ~11m with no uploaded logs, so the
-        # failure has been undiagnosable. Cut it ourselves just under that mark:
+        # Something reclaims each job at ~11m with no uploaded logs, so the
+        # failure has been undiagnosable. Leave enough time for runner cleanup:
         # a step GitHub times out still finishes the job and uploads its output.
-        # The full suite runs in ~100s locally with this exact invocation, so 10
-        # minutes is ~6x headroom — if a run legitimately needs more, the log
+        # The full suite runs in ~100s locally with this exact invocation, so 8
+        # minutes is ~5x headroom — if a run legitimately needs more, the log
         # will now show where it went.
-        timeout-minutes: 10
+        timeout-minutes: 8
         working-directory: koan
         env:
           KOAN_ROOT: ${{ github.workspace }}/koan
@@ -95,7 +95,8 @@ jobs:
           if [ -n "${{ matrix.group.split_group }}" ]; then
             pytest_args+=(--splits 3 --group ${{ matrix.group.split_group }})
           fi
-          pytest "${pytest_args[@]}"
+          # Cover collection and xdist shutdown too; per-test timeouts cannot.
+          timeout --signal=INT --kill-after=60s 7m pytest "${pytest_args[@]}"
 
       - name: ⬆️ Upload coverage data
         if: ${{ !inputs.group || matrix.group.name == inputs.group }}

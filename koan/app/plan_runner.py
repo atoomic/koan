@@ -418,7 +418,7 @@ def _plan_review_model_key(project_name: str = "") -> str:
 
 def review_plan(
     plan_text: str, project_path: str, skill_dir, project_name: str = "",
-) -> Tuple[bool, str]:
+) -> Tuple[Optional[bool], str]:
     """Run a lightweight subagent to review plan quality.
 
     Args:
@@ -430,7 +430,7 @@ def review_plan(
         (approved, issues) tuple:
           - approved=True, issues="" when APPROVED
           - approved=False, issues=<bullet list> when ISSUES_FOUND
-          - approved=True, issues="" on reviewer error (fail open)
+          - approved=None, issues=<reason> on reviewer error (fail open)
     """
     from app.cli_provider import run_command
 
@@ -440,7 +440,7 @@ def review_plan(
         )
     except Exception as e:
         print(f"[plan_runner] Review prompt load failed: {e}", file=sys.stderr)
-        return True, ""
+        return None, f"review prompt failed: {e}"
 
     try:
         output = run_command(
@@ -454,10 +454,10 @@ def review_plan(
         )
     except Exception as e:
         print(f"[plan_runner] Review subagent failed: {e} — skipping review", file=sys.stderr)
-        return True, ""
+        return None, f"review subagent failed: {e}"
 
     if not output:
-        return True, ""
+        return None, "review subagent returned no result"
 
     first_line = output.strip().splitlines()[0].strip() if output.strip() else ""
 
@@ -469,13 +469,13 @@ def review_plan(
         rest = "\n".join(output.strip().splitlines()[1:]).strip()
         return False, rest
 
-    # Malformed reviewer output — fail open rather than block
+    # Malformed reviewer output — fail open, but never label it approval.
     print(
-        f"[plan_runner] Review returned unexpected output (treating as approved): "
+        f"[plan_runner] Review returned unexpected output: "
         f"{first_line!r}",
         file=sys.stderr,
     )
-    return True, ""
+    return None, f"review subagent returned an unexpected result: {first_line}"
 
 
 ASSUMPTIONS_OK = "ok"
@@ -717,7 +717,7 @@ def _critic_loop(
                 critic_prompt, project_path,
                 allowed_tools=["Read", "Glob", "Grep"],
                 model_key=_plan_review_model_key(project_name),
-            project_name=project_name,
+                project_name=project_name,
                 max_turns=3,
                 timeout=min(120, get_skill_timeout()),
             )
@@ -825,6 +825,16 @@ def _review_loop(
             _record_plan_metric(project_path, True, round_num, "", project_name)
             return current_plan
 
+        if approved is None:
+            print(
+                f"[plan_runner] Review round {round_num}: REVIEWER_ERROR: {issues}",
+                file=sys.stderr,
+            )
+            _record_plan_metric(
+                project_path, False, round_num, issues, project_name,
+            )
+            return current_plan + _reviewer_error_note(issues)
+
         print(f"[plan_runner] Review round {round_num}: ISSUES_FOUND", file=sys.stderr)
         if issues:
             print(f"[plan_runner] Issues:\n{issues}", file=sys.stderr)
@@ -930,6 +940,15 @@ def _review_warning_note(issues: str, max_rounds: int) -> str:
         f"\n\n> ⚠️ Plan review flagged unresolved items after {max_rounds} rounds "
         f"— human review recommended.\n>\n"
         + "\n".join(f"> - {line.removeprefix('- ')}" for line in issues.splitlines() if line.strip())
+    )
+
+
+def _reviewer_error_note(reason: str) -> str:
+    """Build a visible fail-open warning when automated review cannot run."""
+    summary = " ".join(str(reason).split())[:300] or "unknown reviewer error"
+    return (
+        "\n\n> ⚠️ Automated plan review unavailable "
+        f"({summary}) — human review recommended."
     )
 
 

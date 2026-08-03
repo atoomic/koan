@@ -1235,20 +1235,23 @@ class TestReviewPlan:
         assert not approved
         assert "no file path" in issues
 
-    def test_malformed_output_treated_as_approved(self):
+    def test_malformed_output_reports_reviewer_error(self):
         with patch("app.cli_provider.run_command", return_value="Maybe looks ok"):
             approved, issues = review_plan("## Plan\nStep 1", "/project", self._skill_dir())
-        assert approved
+        assert approved is None
+        assert "unexpected result" in issues
 
-    def test_run_command_exception_fails_open(self):
+    def test_run_command_exception_reports_reviewer_error(self):
         with patch("app.cli_provider.run_command", side_effect=RuntimeError("timeout")):
             approved, issues = review_plan("## Plan", "/project", self._skill_dir())
-        assert approved
+        assert approved is None
+        assert "timeout" in issues
 
-    def test_empty_output_treated_as_approved(self):
+    def test_empty_output_reports_reviewer_error(self):
         with patch("app.cli_provider.run_command", return_value=""):
             approved, issues = review_plan("## Plan", "/project", self._skill_dir())
-        assert approved
+        assert approved is None
+        assert "no result" in issues
 
     def test_review_pass_honors_dot_koan_skill(self, tmp_path):
         """Sibling sub-pass (plan-review) must also inject .koan/skills/plan/*.md."""
@@ -1307,6 +1310,20 @@ class TestReviewLoop:
                 skill_dir=self._skill_dir(), max_rounds=3,
             )
         assert "⚠️" in result
+        assert "human review recommended" in result
+
+    def test_reviewer_error_returns_plan_with_visible_warning(self):
+        with patch(
+            "app.plan_runner.review_plan",
+            return_value=(None, "review provider configuration failed"),
+        ):
+            result = _review_loop(
+                "initial plan", "/project", idea="idea", context="",
+                skill_dir=self._skill_dir(), max_rounds=3,
+            )
+
+        assert "initial plan" in result
+        assert "Automated plan review unavailable" in result
         assert "human review recommended" in result
 
     def test_regen_failure_keeps_previous_plan(self):
@@ -1745,8 +1762,8 @@ class TestPlanReviewModelKey:
              pytest.raises(RuntimeError, match="boom"):
             _plan_review_model_key()
 
-    def test_probe_failure_still_fails_open_at_the_caller(self):
-        """A broken config skips the review — visibly — rather than crashing."""
+    def test_probe_failure_reports_reviewer_error_at_the_caller(self):
+        """A broken config skips review without masquerading as approval."""
         from pathlib import Path
 
         from app.plan_runner import review_plan
@@ -1756,7 +1773,8 @@ class TestPlanReviewModelKey:
              patch("app.cli_provider.run_command") as command:
             approved, issues = review_plan("## Plan\nStep 1", "/project", skill_dir)
 
-        assert approved is True and issues == ""
+        assert approved is None
+        assert "boom" in issues
         command.assert_not_called()
 
     def test_configured_review_mode_reaches_the_review_subagent(self):
@@ -1841,4 +1859,3 @@ class TestPlanReviewModelKey:
         assert seen["project_name"] == "myproj"
         assert command.call_args.kwargs["model_key"] == "review_mode"
         assert command.call_args.kwargs["project_name"] == "myproj"
-

@@ -928,6 +928,46 @@ def test_list_comments_accepts_a_genuinely_empty_page():
     assert comments == []
 
 
+@pytest.mark.parametrize("payload", [
+    {"comments": []},
+    {"comments": [], "total": 1},
+    {"comments": [], "total": -1},
+])
+def test_list_comments_rejects_incomplete_pagination(payload):
+    """Malformed pagination must not authorize duplicate-creating writes."""
+    from app.jira_notifications import _list_comments_result
+
+    with (
+        patch("app.jira_notifications._jira_auth_from_config",
+              return_value=("https://test", "Basic token")),
+        patch("app.jira_notifications._jira_get", return_value=payload),
+    ):
+        ok, comments = _list_comments_result("FOO-1")
+
+    assert ok is False
+    assert comments == []
+
+
+def test_list_comments_continues_after_a_short_page():
+    """Jira may return fewer rows than requested before its final page."""
+    from app.jira_notifications import _list_comments_result
+
+    pages = [
+        {"comments": [{"id": "1"}], "total": 2},
+        {"comments": [{"id": "2"}], "total": 2},
+    ]
+    with (
+        patch("app.jira_notifications._jira_auth_from_config",
+              return_value=("https://test", "Basic token")),
+        patch("app.jira_notifications._jira_get", side_effect=pages) as get,
+    ):
+        ok, comments = _list_comments_result("FOO-1")
+
+    assert ok is True
+    assert [comment["id"] for comment in comments] == ["1", "2"]
+    assert get.call_count == 2
+
+
 def test_fetch_jira_issue_raises_on_a_shapeless_comment_page():
     """A JSON-valid `{}` page must not read as "this issue has no comments".
 
@@ -973,3 +1013,26 @@ def test_fetch_jira_issue_accepts_a_genuinely_empty_comment_page():
 
     assert comments == []
 
+
+@pytest.mark.parametrize("page", [
+    {"comments": []},
+    {"comments": [], "total": 1},
+])
+def test_fetch_jira_issue_rejects_incomplete_comment_pagination(page):
+    from contextlib import ExitStack
+
+    from app.jira_notifications import fetch_jira_issue
+
+    issue = {"fields": {"summary": "Plan", "description": None}}
+
+    def get_side_effect(_base_url, _auth_header, path, _params=None):
+        return issue if path.endswith("/FOO-1") else page
+
+    with ExitStack() as stack:
+        for cm in TestJiraIssueHelpers()._patch_enabled_config():
+            stack.enter_context(cm)
+        stack.enter_context(
+            patch("app.jira_notifications._jira_get", side_effect=get_side_effect)
+        )
+        with pytest.raises(RuntimeError, match="Failed to fetch comments"):
+            fetch_jira_issue("FOO-1")

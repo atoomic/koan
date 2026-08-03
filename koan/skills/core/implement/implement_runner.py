@@ -559,7 +559,7 @@ def _run_plan_review_gate(
     if review_cfg.get("assumptions_check", True):
         logger.info("Plan-review gate: running assumptions check...")
         assumptions_status, assumptions_reason = review_plan_assumptions(
-            plan, project_path, _PLAN_SKILL_DIR,
+            plan, project_path, _PLAN_SKILL_DIR, project_name=project_name,
         )
         if assumptions_status == ASSUMPTIONS_CRITICAL:
             assumptions_advisory = assumptions_reason
@@ -595,7 +595,10 @@ def _run_plan_review_gate(
 
     for round_num in range(1, max_rounds + 1):
         logger.info("Plan-review gate: round %d/%d...", round_num, max_rounds)
-        approved, issues = review_plan(current_plan, project_path, _PLAN_SKILL_DIR)
+        approved, issues = review_plan(
+            current_plan, project_path, _PLAN_SKILL_DIR,
+            project_name=project_name,
+        )
 
         if approved:
             logger.info("Plan-review gate: APPROVED (round %d)", round_num)
@@ -606,6 +609,25 @@ def _run_plan_review_gate(
                 return _GateImproved(
                     current_plan, "\n".join(all_issues), assumptions_advisory,
                 )
+            if assumptions_advisory:
+                return _GateImproved(current_plan, "", assumptions_advisory)
+            return None
+
+        if approved is None:
+            logger.warning(
+                "Plan-review gate: reviewer error — failing open: %s", issues,
+            )
+            if notify_fn:
+                try:
+                    notify_fn(
+                        "⚠️ Plan quality review skipped — reviewer error "
+                        f"(proceeding without it):\n{issues}"
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to send plan-review fail-open notification",
+                        exc_info=True,
+                    )
             if assumptions_advisory:
                 return _GateImproved(current_plan, "", assumptions_advisory)
             return None

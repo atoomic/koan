@@ -259,6 +259,11 @@ def submit_draft_pr(
                         logger.warning(
                             "Jira comment upsert failed for %s: %s", issue_key, reason,
                         )
+                        if notify_fn:
+                            notify_fn(
+                                "⚠️ PR created, but Jira status comment failed: "
+                                f"{reason}"
+                            )
                     return
                 except Exception as e:
                     logger.debug("Failed to upsert Jira comment: %s", e)

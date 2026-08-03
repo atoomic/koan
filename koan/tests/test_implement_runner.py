@@ -458,16 +458,39 @@ class TestPlanReviewGate:
             mock_review.assert_not_called()
 
     def test_reviewer_error_fails_open(self):
-        """When review_plan fails open (returns approved=True on error), proceed."""
+        """Reviewer failure proceeds with a visible operator warning."""
+        notify = MagicMock()
         with patch("app.config.get_plan_review_config",
                     return_value={"implement_gate": True}), \
              patch("app.plan_runner.is_simple_plan", return_value=False), \
              patch("app.plan_runner.review_plan_assumptions", return_value=(ASSUMPTIONS_OK, "")), \
-             patch("app.plan_runner.review_plan", return_value=(True, "")), \
+             patch("app.plan_runner.review_plan",
+                   return_value=(None, "provider unavailable")), \
              patch(f"{_IMPL_MODULE}._is_plan_cache_fresh", return_value=False), \
              patch(f"{_IMPL_MODULE}._write_plan_cache"):
-            result = _run_plan_review_gate("## Phase 1\nDo stuff\n" * 10, "/project")
+            result = _run_plan_review_gate(
+                "## Phase 1\nDo stuff\n" * 10, "/project", notify_fn=notify,
+            )
             assert result is None
+            notify.assert_called_once()
+            assert "quality review skipped" in notify.call_args.args[0]
+
+    def test_reviewers_receive_active_project_name(self):
+        with patch("app.config.get_plan_review_config",
+                   return_value={"implement_gate": True}), \
+             patch("app.plan_runner.is_simple_plan", return_value=False), \
+             patch("app.plan_runner.review_plan_assumptions",
+                   return_value=(ASSUMPTIONS_OK, "")) as assumptions, \
+             patch("app.plan_runner.review_plan", return_value=(True, "")) as review, \
+             patch(f"{_IMPL_MODULE}._is_plan_cache_fresh", return_value=False), \
+             patch(f"{_IMPL_MODULE}._write_plan_cache"):
+            _run_plan_review_gate(
+                "## Phase 1\nDo stuff\n" * 10, "/project",
+                project_name="my-toolkit",
+            )
+
+        assert assumptions.call_args.kwargs["project_name"] == "my-toolkit"
+        assert review.call_args.kwargs["project_name"] == "my-toolkit"
 
     def test_gate_improved_plan_used_for_implementation(self):
         """Integration: run_implement uses improved plan and context from gate."""
