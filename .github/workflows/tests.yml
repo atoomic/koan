@@ -23,6 +23,10 @@ jobs:
     timeout-minutes: 50
     strategy:
       fail-fast: true
+      # Jobs in this runner group share constrained compute capacity. Running
+      # all four shards together makes their xdist workers contend so heavily
+      # that the fast shard reaches only 13% before its step timeout.
+      max-parallel: 1
       matrix:
         python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.14"]') || fromJSON('["3.11", "3.14"]') }}
         group:
@@ -89,8 +93,7 @@ jobs:
             tests/ -m "${{ matrix.group.marker }}" -v
             # The self-hosted runner advertises 16 CPUs, but starting 16
             # collection workers can stall before any test is scheduled.
-            # The matrix already runs four shards concurrently, so cap each
-            # shard's local fan-out instead of multiplying it by every host CPU.
+            # Give each serialized shard four local workers instead.
             -n 4 --dist loadfile
             --timeout=120 --timeout-method=thread
             --durations=15
