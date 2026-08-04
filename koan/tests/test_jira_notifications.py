@@ -694,6 +694,42 @@ class TestJiraIssueHelpers:
         assert "Details" in body
         assert fetched_comments == [{"author": "Reviewer", "body": "Please fix"}]
 
+    def test_fetch_jira_issue_preserves_rich_adf_and_updated_metadata(self):
+        from contextlib import ExitStack
+
+        from app.jira_notifications import fetch_jira_issue
+
+        issue = {"fields": {"summary": "Plan", "description": None}}
+        comments = {
+            "comments": [{
+                "author": {"displayName": "Koan"},
+                "updated": "2026-07-31T12:00:00.000+0000",
+                "body": {
+                    "type": "doc",
+                    "content": [
+                        {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Summary"}]},
+                        {"type": "codeBlock", "attrs": {"language": "python"}, "content": [{"type": "text", "text": "print('ok')"}]},
+                    ],
+                },
+            }],
+            "total": 1,
+        }
+
+        def get_side_effect(_base_url, _auth_header, path, _params=None):
+            return issue if path.endswith("/FOO-1") else comments
+
+        with ExitStack() as stack:
+            for cm in self._patch_enabled_config():
+                stack.enter_context(cm)
+            stack.enter_context(patch("app.jira_notifications._jira_get", side_effect=get_side_effect))
+            _title, _body, fetched_comments = fetch_jira_issue("FOO-1")
+
+        assert fetched_comments == [{
+            "author": "Koan",
+            "body": "## Summary\n\n```python\nprint('ok')\n```",
+            "updated": "2026-07-31T12:00:00.000+0000",
+        }]
+
     def test_fetch_jira_issue_api_failure_raises(self):
         from contextlib import ExitStack
 
@@ -705,6 +741,30 @@ class TestJiraIssueHelpers:
             stack.enter_context(patch("app.jira_notifications._jira_get", return_value=None))
             with pytest.raises(RuntimeError, match="Failed to fetch"):
                 fetch_jira_issue("FOO-404")
+
+    def test_fetch_jira_issue_raises_when_comment_pagination_fails(self):
+        """A failed page must not masquerade as the end of the comment list.
+
+        `/implement` locates a (possibly multipart) plan in these comments; a
+        silently truncated list sends it back to stale issue-body content.
+        """
+        from contextlib import ExitStack
+
+        from app.jira_notifications import fetch_jira_issue
+
+        issue = {"fields": {"summary": "Plan", "description": None}}
+
+        def get_side_effect(_base_url, _auth_header, path, _params=None):
+            return issue if path.endswith("/FOO-1") else None
+
+        with ExitStack() as stack:
+            for cm in self._patch_enabled_config():
+                stack.enter_context(cm)
+            stack.enter_context(
+                patch("app.jira_notifications._jira_get", side_effect=get_side_effect)
+            )
+            with pytest.raises(RuntimeError, match="Failed to fetch comments"):
+                fetch_jira_issue("FOO-1")
 
     def test_jira_add_comment_posts_adf(self):
         from app.jira_notifications import jira_add_comment
@@ -732,34 +792,6 @@ class TestJiraIssueHelpers:
         assert payload["body"]["type"] == "doc"
         assert "/rest/api/3/issue/FOO-1/comment/123" in mock_put.call_args.args[2]
 
-    def test_jira_list_comments_returns_id_and_body(self):
-        from app.jira_notifications import jira_list_comments
-
-        payload = {
-            "comments": [
-                {
-                    "id": "100",
-                    "body": {
-                        "type": "doc",
-                        "content": [
-                            {
-                                "type": "paragraph",
-                                "content": [{"type": "text", "text": "hello marker"}],
-                            },
-                        ],
-                    },
-                },
-            ],
-            "total": 1,
-        }
-
-        with (
-            patch("app.jira_notifications._jira_auth_from_config", return_value=("https://test", "Basic token")),
-            patch("app.jira_notifications._jira_get", return_value=payload),
-        ):
-            comments = jira_list_comments("FOO-1")
-
-        assert comments == [{"id": "100", "body": "hello marker"}]
 
     def test_jira_create_issue_rejects_invalid_project_key(self):
         from app.jira_notifications import jira_create_issue
@@ -805,8 +837,8 @@ class TestJiraIssueHelpers:
         ]
         assert "strong" in marks
 
-    def test_jira_add_comment_stays_plain_text_adf(self):
-        """Comments must NOT be restructured by the rich converter (FR-009)."""
+    def test_jira_add_comment_uses_rich_markdown_adf(self):
+        """Comments retain their Markdown structure in Jira."""
         from app.jira_notifications import jira_add_comment
 
         body = "## Heading-looking line\n\n- bullet-looking line"
@@ -817,8 +849,7 @@ class TestJiraIssueHelpers:
             jira_add_comment("FOO-1", body)
 
         adf = mock_post.call_args.args[3]["body"]
-        # plain converter → only paragraph blocks, no heading/bulletList
-        assert {n["type"] for n in adf["content"]} == {"paragraph"}
+        assert {n["type"] for n in adf["content"]} == {"heading", "bulletList"}
 
     def test_jira_search_issues_rejects_unsafe_project_key(self):
         from app.jira_notifications import jira_search_issues
@@ -862,3 +893,146 @@ class TestJiraIssueHelpers:
 
         assert result == []
         mock_post.assert_not_called()
+
+
+def test_list_comments_rejects_a_shapeless_response():
+    """A JSON-valid `{}` must not read as "successfully fetched nothing".
+
+    That is the exact signal upsert callers use to decide it is safe to create.
+    """
+    from app.jira_notifications import _list_comments_result
+
+    with (
+        patch("app.jira_notifications._jira_auth_from_config",
+              return_value=("https://test", "Basic token")),
+        patch("app.jira_notifications._jira_get", return_value={}),
+    ):
+        ok, comments = _list_comments_result("FOO-1")
+
+    assert ok is False
+    assert comments == []
+
+
+def test_list_comments_accepts_a_genuinely_empty_page():
+    from app.jira_notifications import _list_comments_result
+
+    with (
+        patch("app.jira_notifications._jira_auth_from_config",
+              return_value=("https://test", "Basic token")),
+        patch("app.jira_notifications._jira_get",
+              return_value={"comments": [], "total": 0}),
+    ):
+        ok, comments = _list_comments_result("FOO-1")
+
+    assert ok is True
+    assert comments == []
+
+
+@pytest.mark.parametrize("payload", [
+    {"comments": []},
+    {"comments": [], "total": 1},
+    {"comments": [], "total": -1},
+])
+def test_list_comments_rejects_incomplete_pagination(payload):
+    """Malformed pagination must not authorize duplicate-creating writes."""
+    from app.jira_notifications import _list_comments_result
+
+    with (
+        patch("app.jira_notifications._jira_auth_from_config",
+              return_value=("https://test", "Basic token")),
+        patch("app.jira_notifications._jira_get", return_value=payload),
+    ):
+        ok, comments = _list_comments_result("FOO-1")
+
+    assert ok is False
+    assert comments == []
+
+
+def test_list_comments_continues_after_a_short_page():
+    """Jira may return fewer rows than requested before its final page."""
+    from app.jira_notifications import _list_comments_result
+
+    pages = [
+        {"comments": [{"id": "1"}], "total": 2},
+        {"comments": [{"id": "2"}], "total": 2},
+    ]
+    with (
+        patch("app.jira_notifications._jira_auth_from_config",
+              return_value=("https://test", "Basic token")),
+        patch("app.jira_notifications._jira_get", side_effect=pages) as get,
+    ):
+        ok, comments = _list_comments_result("FOO-1")
+
+    assert ok is True
+    assert [comment["id"] for comment in comments] == ["1", "2"]
+    assert get.call_count == 2
+
+
+def test_fetch_jira_issue_raises_on_a_shapeless_comment_page():
+    """A JSON-valid `{}` page must not read as "this issue has no comments".
+
+    /implement locates the plan here; silently dropping every comment sends it
+    back to stale issue-body content.
+    """
+    from contextlib import ExitStack
+
+    from app.jira_notifications import fetch_jira_issue
+
+    issue = {"fields": {"summary": "Plan", "description": None}}
+
+    def get_side_effect(_base_url, _auth_header, path, _params=None):
+        return issue if path.endswith("/FOO-1") else {}
+
+    with ExitStack() as stack:
+        for cm in TestJiraIssueHelpers()._patch_enabled_config():
+            stack.enter_context(cm)
+        stack.enter_context(
+            patch("app.jira_notifications._jira_get", side_effect=get_side_effect)
+        )
+        with pytest.raises(RuntimeError, match="Failed to fetch comments"):
+            fetch_jira_issue("FOO-1")
+
+
+def test_fetch_jira_issue_accepts_a_genuinely_empty_comment_page():
+    from contextlib import ExitStack
+
+    from app.jira_notifications import fetch_jira_issue
+
+    issue = {"fields": {"summary": "Plan", "description": None}}
+
+    def get_side_effect(_base_url, _auth_header, path, _params=None):
+        return issue if path.endswith("/FOO-1") else {"comments": [], "total": 0}
+
+    with ExitStack() as stack:
+        for cm in TestJiraIssueHelpers()._patch_enabled_config():
+            stack.enter_context(cm)
+        stack.enter_context(
+            patch("app.jira_notifications._jira_get", side_effect=get_side_effect)
+        )
+        _title, _body, comments = fetch_jira_issue("FOO-1")
+
+    assert comments == []
+
+
+@pytest.mark.parametrize("page", [
+    {"comments": []},
+    {"comments": [], "total": 1},
+])
+def test_fetch_jira_issue_rejects_incomplete_comment_pagination(page):
+    from contextlib import ExitStack
+
+    from app.jira_notifications import fetch_jira_issue
+
+    issue = {"fields": {"summary": "Plan", "description": None}}
+
+    def get_side_effect(_base_url, _auth_header, path, _params=None):
+        return issue if path.endswith("/FOO-1") else page
+
+    with ExitStack() as stack:
+        for cm in TestJiraIssueHelpers()._patch_enabled_config():
+            stack.enter_context(cm)
+        stack.enter_context(
+            patch("app.jira_notifications._jira_get", side_effect=get_side_effect)
+        )
+        with pytest.raises(RuntimeError, match="Failed to fetch comments"):
+            fetch_jira_issue("FOO-1")

@@ -31,6 +31,29 @@ if _xdist_worker and _xdist_worker != "master":
 
 
 @pytest.fixture(autouse=True)
+def _no_oauth_usage_network():
+    """Keep the authoritative-usage poll off the network during tests.
+
+    ``oauth_usage.read_access_token()`` reads the Claude CLI's token from the
+    user's home directory or the macOS keychain, so it escapes the per-worker
+    ``KOAN_ROOT`` isolation above. On any machine (or CI runner) that happens to
+    be authenticated, every write through ``usage_estimator._write_usage_md``
+    performs a real HTTP request — and a rate-limited endpoint makes
+    ``fetch_usage`` sleep up to ``_MAX_BACKOFF_SECONDS`` per 429, three times
+    over, which hangs the suite rather than failing it.
+
+    Report "no token available", which is the documented graceful no-op for
+    API-key users and non-Claude providers. Tests that exercise the OAuth path
+    itself patch these symbols directly and are unaffected.
+    """
+    try:
+        with patch("app.oauth_usage.read_access_token", return_value=None):
+            yield
+    except (ImportError, AttributeError):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_run_module_state():
     """Reset module-level mission flags in `app.run` before each test.
 

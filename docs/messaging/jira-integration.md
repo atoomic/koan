@@ -4,7 +4,7 @@ title: "Jira Integration"
 description: "Full reference for controlling Kōan via `@mention` commands in Jira issue comments, including project mapping, ADF parsing, and coexistence with GitHub."
 tags: [messaging]
 created: 2026-05-28
-updated: 2026-07-18
+updated: 2026-07-31
 ---
 
 # Jira Integration
@@ -280,19 +280,21 @@ code block is preserved verbatim (it is example text, not an alert), and
 back-to-back alert blocks with no separating blank line are degraded
 independently rather than merged.
 
-### Rich issue descriptions
+### Rich Jira messages
 
-Whereas Jira *comments* are rendered from a deliberately plain markdown subset
-(so human blockquotes survive intact), issue *descriptions* created on Jira are
-rendered as **rich ADF**. `markdown_to_adf()` in `jira_notifications.py` converts
-the markdown that skills like `/brainstorm` and `/plan` produce — headings
-(`#`–`####`), unordered and ordered lists (including `- [ ]` / `- [x]`
-checklists), horizontal rules (`---`), blockquotes, fenced code blocks, and
-inline `**bold**` / `*em*` / `` `code` `` — into native ADF nodes so the Jira
-issue reads as a properly formatted document rather than raw markdown. Lines that
-don't match a known structure degrade to a plain paragraph, and empty input
-yields a single empty paragraph. This applies to `jira_create_issue` and
-`jira_update_issue_description`; comments are unaffected.
+Koan renders both Jira issue descriptions and comments as **rich ADF**. Its
+Markdown converter preserves headings, unordered and ordered lists (including
+`- [ ]` / `- [x]` checklists), rules, blockquotes, fenced or indented code blocks, inline
+`**bold**` / `*em*` / `` `code` ``, links, and simple GitHub-style tables as
+native Jira nodes. This applies to every comment posted or updated by Koan, as
+well as `jira_create_issue` and `jira_update_issue_description`.
+
+Jira has no collapsible-section equivalent. Koan therefore removes GitHub
+`<details>` wrappers, renders their `<summary>` as a visible label, and keeps
+the contained code block expanded. `<details>` markup inside a fenced code
+block is preserved verbatim (it is example text, not a wrapper). Unsupported or
+malformed Markdown degrades to readable paragraph text rather than being
+discarded.
 
 ### Brainstorm on Jira
 
@@ -362,7 +364,7 @@ For PR outcomes, the Jira status comment includes:
 - target branch (if set)
 - concise What/How/Why/Validation summary (when available from the generated PR body)
 
-For Jira `/plan` updates, Koan posts human-readable plan comments (plain text adapted for Jira rendering) and posts an explicit failure status comment when plan generation fails.
+For Jira `/plan` updates, Koan maintains one human-readable **current plan** comment (plain text adapted for Jira rendering), identified by a trailing `Koan current plan (rev <digest>)` footer. A plan too large for one Jira comment (over 29,000 characters) is published as consecutive `Part N of M` comments, each independently verified and footered `(rev <digest>, part N/M)`; because Jira's public REST API cannot create a reply under an existing comment, the parts are linked with `?focusedCommentId=` previous/next URLs instead of being threaded. Shrinking a plan retires the now-orphaned trailing parts rather than stranding them. Koan stages the plan on disk, retries the Jira write three times, and reports success only after reading back a comment carrying that revision — Jira's write endpoints return success for writes that never produce a visible comment, so an unverified write is treated as a failure. Because a failed comment *lookup* is indistinguishable from an empty issue, Koan never creates a comment on a lookup error; a flaky read path therefore cannot stack duplicates. A publish failure keeps the staged plan for a later retry instead of regenerating it, and the stage is dropped after three consecutive failed runs so a permanently undeliverable plan does not wedge the issue. Koan posts an explicit failure status comment when plan generation itself fails.
 
 ## Security Model
 

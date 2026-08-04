@@ -23,6 +23,10 @@ jobs:
     timeout-minutes: 50
     strategy:
       fail-fast: true
+      # Jobs in this runner group share constrained compute capacity. Running
+      # all four shards together makes their xdist workers contend so heavily
+      # that the fast shard reaches only 13% before its step timeout.
+      max-parallel: 1
       matrix:
         python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.14"]') || fromJSON('["3.11", "3.14"]') }}
         group:
@@ -54,7 +58,7 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           pip install -r koan/requirements.txt
-          pip install pytest pytest-split pytest-cov pytest-xdist
+          pip install pytest pytest-split pytest-cov pytest-xdist pytest-timeout
 
       # Parts of the suite exercise code paths that shell out to `gh`. The
       # self-hosted runner image does not ship it (ubuntu-latest did), which
@@ -65,6 +69,13 @@ jobs:
 
       - name: ▶️ Run tests (${{ matrix.group.name }})
         if: ${{ !inputs.group || matrix.group.name == inputs.group }}
+        # Something reclaims each job at ~11m with no uploaded logs, so the
+        # failure has been undiagnosable. Leave enough time for runner cleanup:
+        # a step GitHub times out still finishes the job and uploads its output.
+        # Collection alone can take several minutes on this runner, so leave
+        # enough time for the shard to finish while keeping cleanup inside the
+        # job-level timeout.
+        timeout-minutes: 48
         working-directory: koan
         env:
           KOAN_ROOT: ${{ github.workspace }}/koan
@@ -72,15 +83,27 @@ jobs:
           KOAN_TELEGRAM_TOKEN: "fake-token-for-ci"
           KOAN_TELEGRAM_CHAT_ID: "123456789"
         run: |
+          # --timeout is load-bearing, not belt-and-braces: without it a single
+          # blocked test runs until the runner is reclaimed, and because the
+          # step never finishes its logs are never uploaded — the failure shows
+          # up as an unexplained kill with nothing to read. A per-test timeout
+          # turns that into an ordinary failure with a traceback.
+          # --durations surfaces the near-misses before they become hangs.
+          pytest_args=(
+            tests/ -m "${{ matrix.group.marker }}" -v
+            # The self-hosted runner advertises 16 CPUs, but starting 16
+            # collection workers can stall before any test is scheduled.
+            # Give each serialized shard four local workers instead.
+            -n 4 --dist loadfile
+            --timeout=120 --timeout-method=thread
+            --durations=15
+            --cov=app --cov-report=term-missing
+          )
           if [ -n "${{ matrix.group.split_group }}" ]; then
-            pytest tests/ -m "${{ matrix.group.marker }}" --splits 3 --group ${{ matrix.group.split_group }} -v \
-              -n auto --dist loadfile \
-              --cov=app --cov-report=term-missing
-          else
-            pytest tests/ -m "${{ matrix.group.marker }}" -v \
-              -n auto --dist loadfile \
-              --cov=app --cov-report=term-missing
+            pytest_args+=(--splits 3 --group ${{ matrix.group.split_group }})
           fi
+          # Cover collection and xdist shutdown too; per-test timeouts cannot.
+          timeout --signal=INT --kill-after=30s 45m pytest "${pytest_args[@]}"
 
       - name: ⬆️ Upload coverage data
         if: ${{ !inputs.group || matrix.group.name == inputs.group }}

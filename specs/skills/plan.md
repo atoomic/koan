@@ -4,7 +4,7 @@ title: "Skill Spec — plan"
 description: "Documents the `/plan` skill that deep-thinks an idea (or iterates an existing issue) into a structured tracker-issue plan via a critic→regenerate loop, covered by the deterministic eval harness."
 tags: [skill]
 created: 2026-06-27
-updated: 2026-07-12
+updated: 2026-07-31
 ---
 
 # Skill Spec — `plan`
@@ -59,6 +59,35 @@ See `docs/users/skills.md` for the end-user `/plan` reference and
   into the plan's `### Open Questions` section so humans can resolve them on the
   tracker before `/implement`. The audit is **advisory and fail-open** — auditor
   errors leave the plan unchanged; it never blocks or suppresses posting.
+- Jira issue plans keep a single **current-plan** comment, identified by a trailing
+  `Koan current plan (rev <digest>)` footer whose revision is a digest of the plan
+  body. Jira renders ADF text literally, so the footer is deliberately human-readable
+  rather than an HTML comment. The body is staged on disk before posting and the write
+  is retried three times; it counts as posted only once a read-back returns a comment
+  carrying that revision — Jira's write endpoints report success for writes that never
+  became a visible comment.
+- A failed comment **lookup** must never trigger a write. An empty comment list is
+  indistinguishable from a failed read, so every upsert path reads through
+  `jira_list_comments_checked`, which raises instead of degrading to `[]`. There is
+  deliberately no lenient variant — a broken read path must not be able to stack
+  duplicate plan comments.
+- An unverified publish fails the mission and retains the staged plan, so a later run
+  republishes it without spending a model call to regenerate. The stage is dropped once
+  it expires or three consecutive runs fail, after which the next `/plan` regenerates —
+  a permanently undeliverable plan must not wedge the issue.
+- A plan exceeding one Jira comment is split at paragraph (then line, then word)
+  boundaries into sequential parts, each footered `(rev <digest>, part N/M)` and
+  verified independently. Parts are located by **part number, not revision**, so a new
+  revision updates the comments in place instead of posting a second set; parts left
+  over when a plan shrinks are retired. Jira's public REST API exposes no
+  reply-to-comment operation, so parts carry `?focusedCommentId=` previous/next links
+  rather than being threaded — those links are attached in a second pass, once every
+  part has an id.
+- The critic, quality-review, and assumptions-audit subagents use `review_mode`
+  **when an operator has configured it**, and `lightweight` otherwise; initial
+  generation and regeneration use `mission`. The fallback is load-bearing: an
+  unset role resolves to an empty model and the provider then omits `--model`
+  entirely, which would silently promote these calls to the CLI's default model.
 
 ## Evaluation
 

@@ -69,9 +69,36 @@ class TestMarkdownToAdfBlocks:
         assert block["type"] == "codeBlock"
         assert "attrs" not in block
 
+    def test_indented_code_block(self):
+        doc = markdown_to_adf("Repository implementation:\n\n      return value();")
+        assert _types(doc) == ["paragraph", "codeBlock"]
+        assert doc["content"][1]["content"][0]["text"] == "return value();"
+
     def test_paragraph_fallback_for_plain_text(self):
         doc = markdown_to_adf("just a sentence with no structure")
         assert _types(doc) == ["paragraph"]
+
+    def test_gfm_table_becomes_native_adf_table(self):
+        doc = markdown_to_adf(
+            "| Action | File |\n| --- | --- |\n| Modify | `app.py` |"
+        )
+        table = doc["content"][0]
+        assert table["type"] == "table"
+        assert table["content"][0]["content"][0]["type"] == "tableHeader"
+        assert table["content"][1]["content"][1]["type"] == "tableCell"
+
+    def test_github_details_are_expanded_without_html(self):
+        doc = markdown_to_adf(
+            "<details><summary>Test code</summary>\n\n```python\nassert True\n```\n</details>"
+        )
+        assert "codeBlock" in _types(doc)
+        text = " ".join(
+            child.get("text", "")
+            for node in doc["content"]
+            for child in node.get("content", [])
+        )
+        assert "Test code" in text
+        assert "<details>" not in text
 
 
 class TestMarkdownToAdfInline:
@@ -120,6 +147,12 @@ class TestMarkdownToAdfInline:
         doc = markdown_to_adf("this is _emphasized_ text")
         assert "em" in _marks(doc["content"][0])
 
+    def test_link_mark(self):
+        doc = markdown_to_adf("Read [the docs](https://example.com/docs).")
+        link = next(node for node in doc["content"][0]["content"] if node.get("marks"))
+        assert link["text"] == "the docs"
+        assert link["marks"] == [{"type": "link", "attrs": {"href": "https://example.com/docs"}}]
+
 
 class TestMarkdownToAdfEdgeCases:
     def test_empty_input_yields_empty_paragraph(self):
@@ -164,3 +197,46 @@ class TestMarkdownToAdfEdgeCases:
         assert "rule" in types
         # no exception, valid doc envelope
         assert doc["type"] == "doc"
+
+
+class TestJiraNormalisationPreservesCode:
+    """The Jira comment path must not rewrite markup that *is* the content."""
+
+    def test_details_markup_in_a_fence_reaches_adf_verbatim(self):
+        # markdown_to_adf normalises internally, so this is the real entry point
+        # every production caller uses — no pre-flattening.
+        source = "Example:\n\n```html\n<details><summary>x</summary>body</details>\n```"
+        doc = markdown_to_adf(source)
+
+        code = [n for n in doc["content"] if n.get("type") == "codeBlock"]
+        assert len(code) == 1
+        text = "".join(c.get("text", "") for c in code[0].get("content", []))
+        assert text == "<details><summary>x</summary>body</details>"
+
+
+class TestIndentedCodeDoesNotSwallowProse:
+    """Indented code must not interrupt a paragraph or a list continuation.
+
+    Every Jira comment Koan posts now renders through markdown_to_adf, so a
+    greedy indented-code rule turns ordinary wrapped prose into code blocks.
+    """
+
+    def test_indented_continuation_of_a_paragraph_stays_prose(self):
+        doc = markdown_to_adf("Some intro sentence that wraps\n    and continues here.")
+
+        assert _types(doc) == ["paragraph"]
+
+    def test_indented_paragraph_under_a_list_item_is_not_code(self):
+        doc = markdown_to_adf("1. Do the thing\n\n    Explanation for step 1.\n\n2. Next")
+
+        assert "codeBlock" not in _types(doc)
+
+    def test_indented_nested_bullet_stays_a_list(self):
+        doc = markdown_to_adf("- Parent item\n\n    - Child item")
+
+        assert "codeBlock" not in _types(doc)
+
+    def test_a_genuine_indented_code_block_still_renders_as_code(self):
+        doc = markdown_to_adf("Example:\n\n    def f():\n        return 1")
+
+        assert "codeBlock" in _types(doc)

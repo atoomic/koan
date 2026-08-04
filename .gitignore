@@ -83,6 +83,8 @@ projects.docker.yaml
 
 # Process log files (root only, not koan/skills/core/logs/)
 /logs/
+# Written when KOAN_ROOT points at the package dir, as the CI test job does
+/koan/logs/
 
 # Runtime state files
 .branch-cleanup-tracker.json

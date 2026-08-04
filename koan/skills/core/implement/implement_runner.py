@@ -58,6 +58,7 @@ _PLAN_MARKER_RE = re.compile(
     r"^#{2,}\s+(?:Implementation Phases|Phase \d+|Summary|Changes in this iteration)",
     re.MULTILINE | re.IGNORECASE,
 )
+from app.jira_plan_publish import parse_plan_comment, strip_plan_envelope
 
 
 def _build_footer() -> str:
@@ -374,9 +375,8 @@ def _is_plan_content(text: str) -> bool:
 def _extract_latest_plan(body: Optional[str], comments: List[dict]) -> str:
     """Extract the most recent plan from issue body and comments.
 
-    Strategy: scan comments from newest to oldest. The first comment
-    that contains plan markers is the latest plan iteration. If no
-    comment has a plan, fall back to the issue body.
+    Multipart Jira plan comments are assembled first.  Other trackers retain
+    the existing newest-plan-comment behavior.
 
     Args:
         body: Issue body text.
@@ -385,9 +385,17 @@ def _extract_latest_plan(body: Optional[str], comments: List[dict]) -> str:
     Returns:
         The plan text, or empty string if no plan found.
     """
-    # Check comments from newest to oldest
+    multipart_plan = _extract_jira_multipart_plan(comments)
+    if multipart_plan:
+        return multipart_plan
+
+    # Check comments from newest to oldest. Never treat an individual Jira
+    # multipart fragment as a standalone plan when no group was assembled.
     for comment in reversed(comments):
         comment_body = comment.get("body", "")
+        parsed = parse_plan_comment(comment_body or "")
+        if parsed is not None and parsed[2] > 1:
+            continue
         if _is_plan_content(comment_body):
             return comment_body
 
@@ -399,6 +407,61 @@ def _extract_latest_plan(body: Optional[str], comments: List[dict]) -> str:
     # (allows non-standard plan formats). Body may be None for issues
     # with an empty body — GitHub returns body=null in that case.
     return (body or "").strip()
+
+
+def _extract_jira_multipart_plan(comments: List[dict]) -> str:
+    """Return the newest split Jira plan, if the comments contain one.
+
+    Every part of one plan carries the same ``rev`` in its footer, so parts are
+    grouped by revision rather than inferred from ordering — the publisher
+    updates parts in place, which makes Jira's creation order meaningless as a
+    generation order. ``updated`` then picks the newest revision, falling back
+    to received order when Jira omits it.
+
+    An incomplete group still yields the parts that are present — a partial plan
+    beats refusing to work — but never silently: the footer carries the expected
+    count, so a gap is announced in the returned text and the log rather than
+    letting the agent implement a truncated plan believing it is whole.
+    """
+    groups: dict[str, dict[int, str]] = {}
+    group_counts: dict[str, int] = {}
+    group_scores: dict[str, tuple[str, int]] = {}
+    for index, comment in enumerate(comments):
+        comment_body = str(comment.get("body", "") or "")
+        parsed = parse_plan_comment(comment_body)
+        if parsed is None:
+            continue
+        revision, number, count = parsed
+        if count < 2 or not 1 <= number <= count:
+            continue
+        score = (str(comment.get("updated", "")), index)
+        groups.setdefault(revision, {})[number] = comment_body
+        group_counts[revision] = max(group_counts.get(revision, 0), count)
+        group_scores[revision] = max(group_scores.get(revision, ("", -1)), score)
+
+    if not group_scores:
+        return ""
+
+    newest = max(group_scores, key=lambda rev: group_scores[rev])
+    parts = groups[newest]
+    assembled = "\n\n".join(
+        strip_plan_envelope(parts[number]).strip() for number in sorted(parts)
+    ).strip()
+
+    expected = group_counts[newest]
+    missing = [n for n in range(1, expected + 1) if n not in parts]
+    if missing:
+        gap = ", ".join(str(n) for n in missing)
+        logger.warning(
+            "Jira plan rev %s is missing part(s) %s of %d — implementing a partial plan",
+            newest, gap, expected,
+        )
+        assembled = (
+            f"> **Warning — this plan is incomplete.** Part(s) {gap} of {expected} "
+            f"were not found on the issue; the sections below are what is available.\n\n"
+            f"{assembled}"
+        )
+    return assembled
 
 
 def _plan_hash(plan: str) -> str:
@@ -496,7 +559,7 @@ def _run_plan_review_gate(
     if review_cfg.get("assumptions_check", True):
         logger.info("Plan-review gate: running assumptions check...")
         assumptions_status, assumptions_reason = review_plan_assumptions(
-            plan, project_path, _PLAN_SKILL_DIR,
+            plan, project_path, _PLAN_SKILL_DIR, project_name=project_name,
         )
         if assumptions_status == ASSUMPTIONS_CRITICAL:
             assumptions_advisory = assumptions_reason
@@ -532,7 +595,10 @@ def _run_plan_review_gate(
 
     for round_num in range(1, max_rounds + 1):
         logger.info("Plan-review gate: round %d/%d...", round_num, max_rounds)
-        approved, issues = review_plan(current_plan, project_path, _PLAN_SKILL_DIR)
+        approved, issues = review_plan(
+            current_plan, project_path, _PLAN_SKILL_DIR,
+            project_name=project_name,
+        )
 
         if approved:
             logger.info("Plan-review gate: APPROVED (round %d)", round_num)
@@ -543,6 +609,25 @@ def _run_plan_review_gate(
                 return _GateImproved(
                     current_plan, "\n".join(all_issues), assumptions_advisory,
                 )
+            if assumptions_advisory:
+                return _GateImproved(current_plan, "", assumptions_advisory)
+            return None
+
+        if approved is None:
+            logger.warning(
+                "Plan-review gate: reviewer error — failing open: %s", issues,
+            )
+            if notify_fn:
+                try:
+                    notify_fn(
+                        "⚠️ Plan quality review skipped — reviewer error "
+                        f"(proceeding without it):\n{issues}"
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to send plan-review fail-open notification",
+                        exc_info=True,
+                    )
             if assumptions_advisory:
                 return _GateImproved(current_plan, "", assumptions_advisory)
             return None
