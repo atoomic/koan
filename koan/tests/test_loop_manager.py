@@ -4123,6 +4123,47 @@ class TestProcessJiraNotifications:
         # force=True resets backoff at entry, then an empty result re-increments.
         assert lm._consecutive_jira_empty == 1
 
+    def test_next_watermark_is_scan_start_not_completion(self, monkeypatch, tmp_path):
+        """Comments arriving during a sweep must be included in the next one."""
+        from datetime import datetime, timezone
+        import time
+
+        lm = _reset_jira_globals(monkeypatch)
+        monkeypatch.setattr(lm, "_last_jira_check_iso", "2026-01-01T00:00:00Z")
+        monkeypatch.setattr("app.utils.load_config", lambda: {})
+        monkeypatch.setattr(lm, "_warn_legacy_jira_projects", lambda cfg: None)
+        monkeypatch.setattr("app.jira_config.get_jira_enabled", lambda cfg: True)
+        monkeypatch.setattr("app.jira_config.validate_jira_config", lambda cfg: None)
+        monkeypatch.setattr("app.jira_config.get_jira_nickname", lambda cfg: "bot")
+        monkeypatch.setattr(
+            "app.issue_tracker.config.get_jira_project_map_for_polling",
+            lambda cfg, koan_root=None: {"PROJ": "my-toolkit"},
+        )
+        monkeypatch.setattr(
+            "app.issue_tracker.config.get_jira_branch_map_for_polling",
+            lambda cfg, koan_root=None: {},
+        )
+        monkeypatch.setattr(lm, "_load_processed_jira_tracker",
+                            lambda inst: (set(), str(tmp_path / "tracker.json")))
+        monkeypatch.setattr(lm, "_build_skill_registry", lambda inst: object())
+
+        finished_at = []
+
+        def fetch_after_a_long_scan(cfg, project_map, since_iso=None):
+            assert since_iso == "2026-01-01T00:00:00Z"
+            time.sleep(0.02)
+            finished_at.append(datetime.now(timezone.utc))
+            return _Mentions([])
+
+        monkeypatch.setattr(
+            "app.jira_notifications.fetch_jira_mentions", fetch_after_a_long_scan
+        )
+
+        assert lm.process_jira_notifications(str(tmp_path), str(tmp_path), force=True) == 0
+
+        checkpoint = datetime.fromisoformat(lm._last_jira_check_iso.replace("Z", "+00:00"))
+        assert checkpoint < finished_at[0]
+
     def test_exception_returns_zero(self, monkeypatch, tmp_path):
         lm = _reset_jira_globals(monkeypatch)
 

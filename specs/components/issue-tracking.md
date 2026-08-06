@@ -4,7 +4,7 @@ title: "Component Spec — Issue Tracking"
 description: "Design contract for the provider-neutral issue-tracker abstraction (GitHub/Jira) that routes fetch/comment/create calls through one service layer."
 tags: [issue-tracking]
 created: 2026-06-27
-updated: 2026-07-18
+updated: 2026-08-06
 ---
 
 # Component Spec — Issue Tracking
@@ -89,6 +89,11 @@ issue_cli.py          → CLI entry point (fetch/comment/create) used by prompts
 - `enrichment.py` wired into `review_runner.build_review_prompt()`.
 - Polling cadence resolved via `notification_config.py` (shared GitHub/Jira interval).
 - Project routing from `projects_config` (`tracker:` override).
+- Jira notification polling records the scan-start timestamp as its next
+  watermark. The next poll deliberately overlaps the preceding scan, and the
+  persistent comment-ID tracker absorbs the duplicate reads; this prevents
+  comments posted while a long Jira sweep is in progress from falling into a
+  gap between polling windows.
 
 ## Known debt / watch-outs
 

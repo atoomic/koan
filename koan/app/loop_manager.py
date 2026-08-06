@@ -1716,13 +1716,19 @@ def process_jira_notifications(
 
         from app.jira_notifications import fetch_jira_mentions
 
-        result = fetch_jira_mentions(config, project_map, since_iso=since_value)
-
         from datetime import datetime as _dt
 
-        new_iso = _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Use the start of this scan as the next watermark, rather than its
+        # completion time.  A full Jira sweep can take long enough that a
+        # comment arrives after its issue has already been fetched.  Advancing
+        # the watermark to completion would then skip that comment forever.
+        # Re-reading the small overlap on the next scan is safe: comment-ID
+        # deduplication prevents a duplicate mission.
+        scan_started_iso = _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        result = fetch_jira_mentions(config, project_map, since_iso=since_value)
+
         with _jira_state_lock:
-            _last_jira_check_iso = new_iso
+            _last_jira_check_iso = scan_started_iso
 
         mentions = result.mentions
 

@@ -4,7 +4,7 @@ title: "Jira Integration"
 description: "Full reference for controlling Kōan via `@mention` commands in Jira issue comments, including project mapping, ADF parsing, and coexistence with GitHub."
 tags: [messaging]
 created: 2026-05-28
-updated: 2026-07-31
+updated: 2026-08-06
 ---
 
 # Jira Integration
@@ -239,7 +239,7 @@ Jira notifications are checked in two places:
 
 ```
 1. process_jira_notifications()
-2. Build JQL query (POST /rest/api/3/search/jql): issues updated in projects registered in projects.yaml since last check
+2. Build JQL query (POST /rest/api/3/search/jql): issues updated in projects registered in projects.yaml since last check. The next watermark is the *start* of this sweep, so the following sweep overlaps it; comment-ID deduplication makes that overlap safe and prevents a comment created during a long sweep from being missed.
 3. Paginate results using cursor-based nextPageToken
 4. Fetch recent comments on matching issues
 5. For each comment containing @nickname:
