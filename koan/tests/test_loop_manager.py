@@ -4182,6 +4182,66 @@ class TestProcessJiraNotifications:
         # Jira for 00:06:00 or later and lose the comment permanently.
         assert windows[1] <= comment_arrived_at[0]
 
+    def test_watermark_held_back_when_a_mention_fails(self, monkeypatch, tmp_path):
+        """A mid-loop failure must leave the window open so mentions retry.
+
+        Mention comments predate the scan that found them, so advancing the
+        watermark before they are all handled moves the window past them for
+        good. The tracker still has to be persisted, or the retry would queue
+        a second mission for the mentions that did succeed.
+        """
+        lm = _reset_jira_globals(monkeypatch)
+        monkeypatch.setattr(lm, "_last_jira_check_iso", "2026-01-01T00:00:00Z")
+        monkeypatch.setattr("app.utils.load_config", lambda: {})
+        monkeypatch.setattr(lm, "_warn_legacy_jira_projects", lambda cfg: None)
+        monkeypatch.setattr("app.jira_config.get_jira_enabled", lambda cfg: True)
+        monkeypatch.setattr("app.jira_config.validate_jira_config", lambda cfg: None)
+        monkeypatch.setattr("app.jira_config.get_jira_nickname", lambda cfg: "bot")
+        monkeypatch.setattr(
+            "app.issue_tracker.config.get_jira_project_map_for_polling",
+            lambda cfg, koan_root=None: {"PROJ": "my-toolkit"},
+        )
+        monkeypatch.setattr(
+            "app.issue_tracker.config.get_jira_branch_map_for_polling",
+            lambda cfg, koan_root=None: {},
+        )
+        monkeypatch.setattr(lm, "_load_processed_jira_tracker",
+                            lambda inst: (set(), str(tmp_path / "tracker.json")))
+        monkeypatch.setattr(lm, "_build_skill_registry", lambda inst: object())
+        monkeypatch.setattr(
+            "app.jira_notifications.fetch_jira_mentions",
+            lambda cfg, pm, since_iso=None: _Mentions([
+                {"issue_key": "PROJ-1", "comment_id": "c1"},
+                {"issue_key": "PROJ-2", "comment_id": "c2"},
+            ]),
+        )
+
+        def process_until_the_store_dies(
+            mention, registry, config, processed, branch_map=None
+        ):
+            if mention["comment_id"] == "c2":
+                raise OSError("mission store unavailable")
+            processed.add(mention["comment_id"])
+            return True, None
+
+        monkeypatch.setattr(
+            "app.jira_command_handler.process_jira_mention",
+            process_until_the_store_dies,
+        )
+
+        saved = []
+        monkeypatch.setattr(
+            "app.jira_notifications._save_processed_tracker",
+            lambda path, s: saved.append(set(s)),
+        )
+
+        assert lm.process_jira_notifications(str(tmp_path), str(tmp_path), force=True) == 0
+
+        # The window stays open, so the next poll re-reads it and retries c2...
+        assert lm._last_jira_check_iso == "2026-01-01T00:00:00Z"
+        # ...while c1 is durable, so that retry will not queue it twice.
+        assert saved == [{"c1"}]
+
     def test_exception_returns_zero(self, monkeypatch, tmp_path):
         lm = _reset_jira_globals(monkeypatch)
 

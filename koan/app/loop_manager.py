@@ -1738,9 +1738,6 @@ def process_jira_notifications(
         scan_started_iso = _utc_now_iso()
         result = fetch_jira_mentions(config, project_map, since_iso=since_value)
 
-        with _jira_state_lock:
-            _last_jira_check_iso = scan_started_iso
-
         mentions = result.mentions
 
         if mentions:
@@ -1757,22 +1754,33 @@ def process_jira_notifications(
         from app.jira_command_handler import process_jira_mention
 
         missions_created = 0
-        for mention in mentions:
-            success, error_msg = process_jira_mention(
-                mention, registry, config, processed_set,
-                branch_map=branch_map,
-            )
-            if success:
-                missions_created += 1
-                issue_key = mention.get("issue_key", "?")
-                _jira_log(f"Mission queued from @{nickname} mention on {issue_key}")
-            elif error_msg:
-                log.debug("Jira: mention skipped: %s", error_msg)
+        try:
+            for mention in mentions:
+                success, error_msg = process_jira_mention(
+                    mention, registry, config, processed_set,
+                    branch_map=branch_map,
+                )
+                if success:
+                    missions_created += 1
+                    issue_key = mention.get("issue_key", "?")
+                    _jira_log(f"Mission queued from @{nickname} mention on {issue_key}")
+                elif error_msg:
+                    log.debug("Jira: mention skipped: %s", error_msg)
+        finally:
+            # Persist the tracker even when a mention blew up mid-loop.  The
+            # watermark below is then left untouched, so the next scan re-reads
+            # this window — the comment IDs recorded here are what stop it from
+            # queueing a second mission for the mentions already handled.
+            if mentions:
+                from app.jira_notifications import _save_processed_tracker
+                _save_processed_tracker(tracker_path, processed_set)
 
-        # Persist updated tracker
-        if mentions:
-            from app.jira_notifications import _save_processed_tracker
-            _save_processed_tracker(tracker_path, processed_set)
+        # Advance the watermark only now that every mention has been handled and
+        # the dedup tracker is durable.  Advancing it before this point would
+        # move the window past mentions whose comments predate the scan, so a
+        # failure mid-loop would drop them permanently instead of retrying them.
+        with _jira_state_lock:
+            _last_jira_check_iso = scan_started_iso
 
         # Normal mode: collapse per-mention chatter into one aggregate line.
         _emit_queued_aggregate("Jira", missions_created)
