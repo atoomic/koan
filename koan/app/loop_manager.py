@@ -1517,6 +1517,19 @@ def _jira_log(message: str, level: str = "info") -> None:
         log.info("[jira] %s", message)
 
 
+def _utc_now_iso() -> str:
+    """Return the current UTC time in the Jira watermark format.
+
+    Kept as a named function rather than inlined because *when* the watermark
+    is sampled is contractual (see the scan-start note in
+    ``process_jira_notifications``), and a seam is the only way a test can
+    observe the sampling point instead of just the resulting string.
+    """
+    from datetime import timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _get_effective_jira_interval_locked() -> int:
     """Compute Jira check interval with backoff. Caller must hold _jira_state_lock."""
     if _consecutive_jira_empty <= 0:
@@ -1716,15 +1729,13 @@ def process_jira_notifications(
 
         from app.jira_notifications import fetch_jira_mentions
 
-        from datetime import datetime as _dt
-
         # Use the start of this scan as the next watermark, rather than its
         # completion time.  A full Jira sweep can take long enough that a
         # comment arrives after its issue has already been fetched.  Advancing
         # the watermark to completion would then skip that comment forever.
         # Re-reading the small overlap on the next scan is safe: comment-ID
         # deduplication prevents a duplicate mission.
-        scan_started_iso = _dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        scan_started_iso = _utc_now_iso()
         result = fetch_jira_mentions(config, project_map, since_iso=since_value)
 
         with _jira_state_lock:

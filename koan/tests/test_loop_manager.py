@@ -4124,10 +4124,13 @@ class TestProcessJiraNotifications:
         assert lm._consecutive_jira_empty == 1
 
     def test_next_watermark_is_scan_start_not_completion(self, monkeypatch, tmp_path):
-        """Comments arriving during a sweep must be included in the next one."""
-        from datetime import datetime, timezone
-        import time
+        """A comment arriving mid-sweep must fall inside the next sweep's window.
 
+        The watermark is second-precision, so comparing it against wall-clock
+        timestamps cannot distinguish a scan-start checkpoint from a
+        scan-completion one — both land in the same second. Script the clock
+        instead and assert on the window the *following* poll asks Jira for.
+        """
         lm = _reset_jira_globals(monkeypatch)
         monkeypatch.setattr(lm, "_last_jira_check_iso", "2026-01-01T00:00:00Z")
         monkeypatch.setattr("app.utils.load_config", lambda: {})
@@ -4147,22 +4150,37 @@ class TestProcessJiraNotifications:
                             lambda inst: (set(), str(tmp_path / "tracker.json")))
         monkeypatch.setattr(lm, "_build_skill_registry", lambda inst: object())
 
-        finished_at = []
+        # One tick per _utc_now_iso() call. The fake sweep burns a tick of its
+        # own, so "a minute passed while we were scanning" is observable.
+        ticks = iter([
+            "2026-01-01T00:05:00Z",  # poll 1 begins
+            "2026-01-01T00:06:00Z",  # comment lands while poll 1 is still running
+            "2026-01-01T00:07:00Z",  # poll 2 begins
+        ])
+        monkeypatch.setattr(lm, "_utc_now_iso", lambda: next(ticks))
 
-        def fetch_after_a_long_scan(cfg, project_map, since_iso=None):
-            assert since_iso == "2026-01-01T00:00:00Z"
-            time.sleep(0.02)
-            finished_at.append(datetime.now(timezone.utc))
+        comment_arrived_at = []
+        windows = []
+
+        def fetch_during_a_long_sweep(cfg, project_map, since_iso=None):
+            windows.append(since_iso)
+            if not comment_arrived_at:
+                # Mid-sweep: someone comments on an issue we already fetched.
+                comment_arrived_at.append(lm._utc_now_iso())
             return _Mentions([])
 
         monkeypatch.setattr(
-            "app.jira_notifications.fetch_jira_mentions", fetch_after_a_long_scan
+            "app.jira_notifications.fetch_jira_mentions", fetch_during_a_long_sweep
         )
 
         assert lm.process_jira_notifications(str(tmp_path), str(tmp_path), force=True) == 0
+        assert lm.process_jira_notifications(str(tmp_path), str(tmp_path), force=True) == 0
 
-        checkpoint = datetime.fromisoformat(lm._last_jira_check_iso.replace("Z", "+00:00"))
-        assert checkpoint < finished_at[0]
+        assert windows[0] == "2026-01-01T00:00:00Z"
+        # Poll 2 must reach back to before poll 1 started, so the mid-sweep
+        # comment is inside its window. A completion-time watermark would ask
+        # Jira for 00:06:00 or later and lose the comment permanently.
+        assert windows[1] <= comment_arrived_at[0]
 
     def test_exception_returns_zero(self, monkeypatch, tmp_path):
         lm = _reset_jira_globals(monkeypatch)
