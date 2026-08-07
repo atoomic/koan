@@ -25,7 +25,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from app.constants import (
     CI_QUEUE_SLEEP_INTERVAL as _CI_QUEUE_SLEEP_INTERVAL,
@@ -1503,8 +1503,17 @@ _last_jira_check_due_in: int = 0
 _jira_interval_loaded: bool = False
 _jira_config_logged: bool = False
 _jira_legacy_config_warned: bool = False
+# Consecutive failures per comment ID. Deliberately in-memory: giving up records the ID in
+# the durable tracker, so a restart cannot resurrect a comment we already skipped, and a
+# restart mid-streak costs only a few extra attempts.
+_jira_mention_failures: Dict[str, int] = {}
 # Lock protecting all Jira module-level state.
 _jira_state_lock = threading.Lock()
+
+# How many times a mention may raise before we record it as processed and move on. Without
+# a ceiling, a deterministically-failing comment pins the watermark forever and Jira
+# polling never progresses again.
+_JIRA_MENTION_MAX_ATTEMPTS = 3
 
 
 def _jira_log(message: str, level: str = "info") -> None:
@@ -1528,6 +1537,60 @@ def _utc_now_iso() -> str:
     from datetime import timezone
 
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _notify_jira_mention_skipped(issue_key: str, comment_id: str, attempts: int) -> None:
+    """Tell the human about a mention we gave up on — nothing else will retry it."""
+    koan_root = os.environ.get("KOAN_ROOT", "")
+    if not koan_root:
+        return
+    try:
+        from app.utils import append_to_outbox
+
+        append_to_outbox(
+            Path(koan_root) / "instance" / "outbox.md",
+            f"⚠️ Jira mention on {issue_key} (comment {comment_id}) failed {attempts} "
+            f"times and was skipped so polling could resume. It will not be retried.",
+        )
+    except Exception as e:
+        log.debug("Jira: failed to report skipped mention: %s", e)
+
+
+def _record_jira_mention_failure(mention: dict, error: Exception, processed_set) -> bool:
+    """Count one mention failure; return True when the polling window must be retried.
+
+    Below ``_JIRA_MENTION_MAX_ATTEMPTS`` the caller holds the watermark back so the next
+    scan re-reads this window. At the ceiling the comment is recorded in the durable
+    tracker instead, which is what lets the watermark advance past a comment that fails
+    the same way every time.
+    """
+    comment_id = str(mention.get("comment_id", ""))
+    issue_key = mention.get("issue_key", "?")
+
+    with _jira_state_lock:
+        attempts = _jira_mention_failures.get(comment_id, 0) + 1
+        _jira_mention_failures[comment_id] = attempts
+
+    if attempts < _JIRA_MENTION_MAX_ATTEMPTS:
+        _jira_log(
+            f"Mention on {issue_key} failed (attempt {attempts}/"
+            f"{_JIRA_MENTION_MAX_ATTEMPTS}), holding the window open: {error}",
+            "warning",
+        )
+        return True
+
+    from app.jira_notifications import mark_jira_comment_processed
+
+    mark_jira_comment_processed(comment_id, processed_set)
+    with _jira_state_lock:
+        _jira_mention_failures.pop(comment_id, None)
+    _jira_log(
+        f"Mention on {issue_key} (comment {comment_id}) failed {attempts} times — "
+        f"skipping it so Jira polling can advance: {error}",
+        "warning",
+    )
+    _notify_jira_mention_skipped(issue_key, comment_id, attempts)
+    return False
 
 
 def _get_effective_jira_interval_locked() -> int:
@@ -1754,12 +1817,20 @@ def process_jira_notifications(
         from app.jira_command_handler import process_jira_mention
 
         missions_created = 0
+        deferred = False
         try:
             for mention in mentions:
-                success, error_msg = process_jira_mention(
-                    mention, registry, config, processed_set,
-                    branch_map=branch_map,
-                )
+                try:
+                    success, error_msg = process_jira_mention(
+                        mention, registry, config, processed_set,
+                        branch_map=branch_map,
+                    )
+                except Exception as e:
+                    # Isolate the blast radius: a mention that raises must not cost its
+                    # siblings their turn, and must not pin the watermark indefinitely.
+                    if _record_jira_mention_failure(mention, e, processed_set):
+                        deferred = True
+                    continue
                 if success:
                     missions_created += 1
                     issue_key = mention.get("issue_key", "?")
@@ -1779,8 +1850,13 @@ def process_jira_notifications(
         # the dedup tracker is durable.  Advancing it before this point would
         # move the window past mentions whose comments predate the scan, so a
         # failure mid-loop would drop them permanently instead of retrying them.
-        with _jira_state_lock:
-            _last_jira_check_iso = scan_started_iso
+        # A deferred mention keeps the window open for the next scan; clearing the
+        # failure counts on a clean sweep stops a transient outage from accumulating
+        # toward the give-up ceiling.
+        if not deferred:
+            with _jira_state_lock:
+                _last_jira_check_iso = scan_started_iso
+                _jira_mention_failures.clear()
 
         # Normal mode: collapse per-mention chatter into one aggregate line.
         _emit_queued_aggregate("Jira", missions_created)

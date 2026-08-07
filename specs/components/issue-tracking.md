@@ -94,6 +94,11 @@ issue_cli.py          → CLI entry point (fetch/comment/create) used by prompts
   persistent comment-ID tracker absorbs the duplicate reads; this prevents
   comments posted while a long Jira sweep is in progress from falling into a
   gap between polling windows.
+- The watermark advances only after every mention in the window has been handled, so a
+  failed mention is retried rather than dropped. That retry MUST be bounded: a mention
+  that raises is isolated from its siblings, and after a fixed number of consecutive
+  failures it is recorded in the durable tracker and reported to the human, so a single
+  permanently-broken comment cannot pin the watermark and halt Jira polling for good.
 
 ## Known debt / watch-outs
 

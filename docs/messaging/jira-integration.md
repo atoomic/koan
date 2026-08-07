@@ -254,7 +254,13 @@ Jira notifications are checked in two places:
    i. Mark comment as processed (in-memory + persistent tracker)
    j. Post 👍 acknowledgment reply on the Jira comment
    k. Notify via Telegram (🎫 emoji prefix)
+6. Advance the watermark, but only once every mention has been handled.
 ```
+
+If a mention raises, it is isolated from the rest of the batch and the watermark is held
+back, so the next poll re-reads that window and retries it. After 3 consecutive failures
+the comment is recorded as processed anyway and a warning is sent to the outbox — a single
+permanently-broken comment must not stall Jira polling for everyone else.
 
 ### Multiple instances
 

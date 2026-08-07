@@ -3943,6 +3943,7 @@ def _reset_jira_globals(monkeypatch):
     monkeypatch.setattr(lm, "_last_jira_check_iso", "")
     monkeypatch.setattr(lm, "_consecutive_jira_empty", 0)
     monkeypatch.setattr(lm, "_jira_config_logged", False)
+    monkeypatch.setattr(lm, "_jira_mention_failures", {})
     monkeypatch.setattr(lm, "_jira_interval_loaded", True)
     monkeypatch.setattr(lm, "_JIRA_CHECK_INTERVAL", 60)
     monkeypatch.setattr(lm, "_JIRA_MAX_CHECK_INTERVAL", 600)
@@ -4234,13 +4235,117 @@ class TestProcessJiraNotifications:
             "app.jira_notifications._save_processed_tracker",
             lambda path, s: saved.append(set(s)),
         )
+        monkeypatch.setattr(lm, "_emit_queued_aggregate", lambda label, count: None)
 
-        assert lm.process_jira_notifications(str(tmp_path), str(tmp_path), force=True) == 0
+        # c1's mission really was queued before c2 blew up, so it is counted.
+        assert lm.process_jira_notifications(str(tmp_path), str(tmp_path), force=True) == 1
 
         # The window stays open, so the next poll re-reads it and retries c2...
         assert lm._last_jira_check_iso == "2026-01-01T00:00:00Z"
         # ...while c1 is durable, so that retry will not queue it twice.
         assert saved == [{"c1"}]
+
+    @staticmethod
+    def _stub_jira_polling(lm, monkeypatch, tmp_path, mentions):
+        """Wire up the minimum config/stub surface for a Jira poll."""
+        monkeypatch.setattr("app.utils.load_config", lambda: {})
+        monkeypatch.setattr(lm, "_warn_legacy_jira_projects", lambda cfg: None)
+        monkeypatch.setattr("app.jira_config.get_jira_enabled", lambda cfg: True)
+        monkeypatch.setattr("app.jira_config.validate_jira_config", lambda cfg: None)
+        monkeypatch.setattr("app.jira_config.get_jira_nickname", lambda cfg: "bot")
+        monkeypatch.setattr(
+            "app.issue_tracker.config.get_jira_project_map_for_polling",
+            lambda cfg, koan_root=None: {"PROJ": "my-toolkit"},
+        )
+        monkeypatch.setattr(
+            "app.issue_tracker.config.get_jira_branch_map_for_polling",
+            lambda cfg, koan_root=None: {},
+        )
+        monkeypatch.setattr(lm, "_load_processed_jira_tracker",
+                            lambda inst: (set(), str(tmp_path / "tracker.json")))
+        monkeypatch.setattr(lm, "_build_skill_registry", lambda inst: object())
+        monkeypatch.setattr(lm, "_emit_queued_aggregate", lambda label, count: None)
+        monkeypatch.setattr(
+            "app.jira_notifications.fetch_jira_mentions",
+            lambda cfg, pm, since_iso=None: _Mentions(list(mentions)),
+        )
+
+    def test_comment_that_always_fails_is_skipped_so_polling_resumes(
+        self, monkeypatch, tmp_path
+    ):
+        """A deterministically-broken comment must not stall Jira polling forever.
+
+        Holding the watermark back is right for a transient failure, but with no ceiling
+        a comment that raises the same way every poll pins the window permanently and no
+        later mention is ever seen again.
+        """
+        lm = _reset_jira_globals(monkeypatch)
+        monkeypatch.setattr(lm, "_last_jira_check_iso", "2026-01-01T00:00:00Z")
+        self._stub_jira_polling(
+            lm, monkeypatch, tmp_path, [{"issue_key": "PROJ-1", "comment_id": "c1"}]
+        )
+        monkeypatch.setattr(lm, "_utc_now_iso", lambda: "2026-01-01T00:05:00Z")
+
+        def always_broken(mention, registry, config, processed, branch_map=None):
+            raise ValueError("unparseable comment body")
+
+        monkeypatch.setattr(
+            "app.jira_command_handler.process_jira_mention", always_broken
+        )
+        saved = []
+        monkeypatch.setattr(
+            "app.jira_notifications._save_processed_tracker",
+            lambda path, s: saved.append(set(s)),
+        )
+        (tmp_path / "instance").mkdir()
+        monkeypatch.setenv("KOAN_ROOT", str(tmp_path))
+
+        for _ in range(lm._JIRA_MENTION_MAX_ATTEMPTS - 1):
+            lm.process_jira_notifications(str(tmp_path), str(tmp_path), force=True)
+            assert lm._last_jira_check_iso == "2026-01-01T00:00:00Z"
+        assert saved == [set(), set()]
+
+        # Final attempt: record the comment so the window can finally move on.
+        lm.process_jira_notifications(str(tmp_path), str(tmp_path), force=True)
+
+        assert lm._last_jira_check_iso == "2026-01-01T00:05:00Z"
+        assert saved[-1] == {"c1"}
+        # The human is told, because nothing will retry this mention.
+        outbox = (tmp_path / "instance" / "outbox.md").read_text()
+        assert "PROJ-1" in outbox and "c1" in outbox
+        assert outbox.count("was skipped") == 1
+
+    def test_failing_mention_does_not_cost_its_siblings_their_turn(
+        self, monkeypatch, tmp_path
+    ):
+        """One raising mention must not abort the rest of the batch."""
+        lm = _reset_jira_globals(monkeypatch)
+        monkeypatch.setattr(lm, "_last_jira_check_iso", "2026-01-01T00:00:00Z")
+        self._stub_jira_polling(lm, monkeypatch, tmp_path, [
+            {"issue_key": "PROJ-1", "comment_id": "c1"},
+            {"issue_key": "PROJ-2", "comment_id": "c2"},
+        ])
+
+        def first_one_explodes(mention, registry, config, processed, branch_map=None):
+            if mention["comment_id"] == "c1":
+                raise OSError("mission store unavailable")
+            processed.add(mention["comment_id"])
+            return True, None
+
+        monkeypatch.setattr(
+            "app.jira_command_handler.process_jira_mention", first_one_explodes
+        )
+        saved = []
+        monkeypatch.setattr(
+            "app.jira_notifications._save_processed_tracker",
+            lambda path, s: saved.append(set(s)),
+        )
+
+        # c2 is still queued even though c1 raised first...
+        assert lm.process_jira_notifications(str(tmp_path), str(tmp_path), force=True) == 1
+        assert saved == [{"c2"}]
+        # ...and the window stays open so c1 gets another attempt.
+        assert lm._last_jira_check_iso == "2026-01-01T00:00:00Z"
 
     def test_exception_returns_zero(self, monkeypatch, tmp_path):
         lm = _reset_jira_globals(monkeypatch)
